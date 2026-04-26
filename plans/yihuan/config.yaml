@@ -1,0 +1,22 @@
+runtime:
+  family: windows_desktop
+  provider: windows
+  target:
+    mode: title
+    title_regex: "(异环|Neverness to Everness)"
+    exclude_titles:
+      - AURA控制台
+      - Crash Reporter
+      - Unreal Engine
+    allow_borderless: true
+  capture:
+    backend: gdi
+  input:
+    backend: sendinput
+  window_spec:
+    mode: off
+input:
+  profile: default_pc
+  actions: {}
+fishing:
+  profile_name: default_1280x720_cn

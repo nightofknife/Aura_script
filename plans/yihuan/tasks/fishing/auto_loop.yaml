@@ -1,0 +1,18 @@
+auto_loop:
+  meta:
+    title: 自动循环钓鱼
+    description: 按停止策略持续重复执行钓鱼轮次。
+    inputs:
+      - name: max_rounds
+        type: number
+        default: 0
+      - name: profile_name
+        type: string
+        default: default_1280x720_cn
+  steps:
+    run:
+      action: yihuan_fishing_run_session
+      params:
+        max_rounds: "{{ inputs.max_rounds }}"
+        profile_name: "{{ inputs.profile_name }}"
+  returns: "{{ nodes.run.output }}"

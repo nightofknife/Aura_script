@@ -1,0 +1,15 @@
+plan_ready:
+  meta:
+    title: 异环方案包信息
+    description: 校验异环方案包已加载，并返回方案包脚手架元数据。
+    inputs:
+      - name: scenario_tag
+        type: string
+        default: bootstrap
+  steps:
+    describe:
+      action: yihuan_plan_info
+      params:
+        scenario_tag: "{{ inputs.scenario_tag }}"
+  returns:
+    info: "{{ nodes.describe.output }}"

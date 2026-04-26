@@ -1,0 +1,7 @@
+ultralytics
+onnx
+onnxslim>=0.1.71
+# Export validation reuses whichever ONNX Runtime package is already installed.
+# Install exactly one runtime package alongside this file:
+# - requirements/optional-yolo-cpu.txt
+# - requirements/optional-yolo-cuda.txt

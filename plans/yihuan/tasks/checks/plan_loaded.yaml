@@ -1,0 +1,8 @@
+plan_loaded:
+  meta:
+    title: 异环方案包已加载
+    description: 仅用于确认异环方案包已成功加载的检查任务。
+  steps:
+    check:
+      action: yihuan_plan_loaded
+  returns: "{{ nodes.check.output }}"

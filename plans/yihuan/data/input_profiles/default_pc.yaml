@@ -1,0 +1,24 @@
+# Conservative desktop bindings for early Yihuan plan tasks.
+# Keep this profile small until the live PC keymap is confirmed.
+actions:
+  confirm:
+    type: key
+    key: enter
+  cancel:
+    type: key
+    key: esc
+  open_menu:
+    type: key
+    key: esc
+  open_map:
+    type: key
+    key: m
+  fish_interact:
+    type: key
+    key: f
+  fish_left:
+    type: key
+    key: a
+  fish_right:
+    type: key
+    key: d

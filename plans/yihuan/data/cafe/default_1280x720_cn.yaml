@@ -1,0 +1,127 @@
+profile_name: default_1280x720_cn
+client_size:
+  - 1280
+  - 720
+start_game_point:
+  - 1150
+  - 670
+level_started_region:
+  - 450
+  - 10
+  - 390
+  - 45
+level_started_hsv_lower:
+  - 35
+  - 80
+  - 120
+level_started_hsv_upper:
+  - 65
+  - 255
+  - 255
+level_started_min_area: 800
+level_started_min_width: 120
+level_started_min_aspect_ratio: 6.0
+level_started_stable_frames: 2
+level_started_timeout_sec: 15
+level_started_poll_ms: 150
+level_end_title_region:
+  - 470
+  - 85
+  - 360
+  - 120
+level_end_success_hsv_lower:
+  - 15
+  - 70
+  - 95
+level_end_success_hsv_upper:
+  - 45
+  - 255
+  - 255
+level_end_success_min_area: 8000
+level_end_success_min_width: 120
+level_end_success_min_height: 35
+level_end_failure_hsv_lower_1:
+  - 0
+  - 70
+  - 70
+level_end_failure_hsv_upper_1:
+  - 10
+  - 255
+  - 255
+level_end_failure_hsv_lower_2:
+  - 170
+  - 70
+  - 70
+level_end_failure_hsv_upper_2:
+  - 179
+  - 255
+  - 255
+level_end_failure_min_area: 8000
+level_end_failure_min_width: 120
+level_end_failure_min_height: 35
+level_end_buttons_region:
+  - 370
+  - 500
+  - 570
+  - 95
+level_end_button_hsv_lower:
+  - 0
+  - 0
+  - 160
+level_end_button_hsv_upper:
+  - 179
+  - 85
+  - 255
+level_end_button_min_area: 5000
+level_end_button_min_width: 160
+level_end_button_max_width: 230
+level_end_button_min_height: 30
+level_end_button_max_height: 55
+level_end_button_min_count: 2
+level_end_stable_frames: 2
+level_end_poll_ms: 120
+order_search_region:
+  - 220
+  - 60
+  - 720
+  - 250
+order_templates:
+  latte_coffee: latte_coffee.png
+  cream_coffee: cream_coffee.png
+template_threshold: 0.78
+template_scales:
+  - 0.65
+  - 0.85
+  - 1.0
+  - 1.15
+match_nms_distance_px: 35
+match_peak_window_px: 9
+max_candidates_per_template_scale: 80
+coffee_station_point:
+  - 1035
+  - 665
+coffee_stock_point:
+  - 1190
+  - 665
+glass_point:
+  - 1200
+  - 535
+coffee_cup_point:
+  - 825
+  - 525
+cream_point:
+  - 925
+  - 430
+latte_art_point:
+  - 1030
+  - 430
+coffee_batch_size: 3
+coffee_make_sec: 1.5
+start_game_delay_sec: 1.0
+click_repeat_count: 2
+click_hold_ms: 100
+click_repeat_interval_ms: 100
+step_delay_ms: 100
+craft_delay_ms: 100
+poll_ms: 120
+max_seconds: 130

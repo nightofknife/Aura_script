@@ -1,0 +1,30 @@
+auto_loop:
+  meta:
+    title: Yihuan cafe auto loop
+    description: Run the Yihuan cafe coffee-only mini-game automation loop.
+    inputs:
+      - name: profile_name
+        type: string
+        default: default_1280x720_cn
+      - name: max_seconds
+        type: number
+        default: 0
+      - name: max_orders
+        type: number
+        default: 0
+      - name: start_game
+        type: boolean
+        default: true
+      - name: wait_level_started
+        type: boolean
+        default: true
+  steps:
+    run:
+      action: yihuan_cafe_run_session
+      params:
+        profile_name: "{{ inputs.profile_name }}"
+        max_seconds: "{{ inputs.max_seconds }}"
+        max_orders: "{{ inputs.max_orders }}"
+        start_game: "{{ inputs.start_game }}"
+        wait_level_started: "{{ inputs.wait_level_started }}"
+  returns: "{{ nodes.run.output }}"

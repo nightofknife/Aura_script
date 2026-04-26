@@ -1,0 +1,3 @@
+# PyPI default onnxruntime-gpu wheels use the CUDA 12 runtime line.
+numpy<2.4
+onnxruntime-gpu

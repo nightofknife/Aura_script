@@ -1,0 +1,10 @@
+actions:
+  fish_interact:
+    type: key
+    key: f
+  fish_left:
+    type: key
+    key: a
+  fish_right:
+    type: key
+    key: d

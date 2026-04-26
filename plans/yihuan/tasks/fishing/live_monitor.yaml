@@ -1,0 +1,22 @@
+live_monitor:
+  meta:
+    title: 钓鱼实时监视
+    description: 持续显示钓鱼条原图与处理后的识别画面，紫框标注蓝绿区域，红线标注指示线。
+    inputs:
+      - name: profile_name
+        type: string
+        default: default_1280x720_cn
+      - name: duration_sec
+        type: number
+        default: 0
+      - name: poll_ms
+        type: number
+        default: 0
+  steps:
+    run:
+      action: yihuan_fishing_live_monitor
+      params:
+        profile_name: "{{ inputs.profile_name }}"
+        duration_sec: "{{ inputs.duration_sec }}"
+        poll_ms: "{{ inputs.poll_ms }}"
+  returns: "{{ nodes.run.output }}"

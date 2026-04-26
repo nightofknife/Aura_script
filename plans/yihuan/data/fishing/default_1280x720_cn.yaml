@@ -1,0 +1,93 @@
+profile_name: default_1280x720_cn
+client_size:
+  - 1280
+  - 720
+bite_text_region:
+  - 440
+  - 140
+  - 380
+  - 70
+bite_marker_region:
+  - 1130
+  - 580
+  - 130
+  - 120
+bite_hsv_bounds_standard:
+  - [150, 30, 45]
+  - [220, 100, 100]
+bite_min_pixels: 1200
+bite_min_component_area: 1500
+duel_meter_region:
+  - 405
+  - 44
+  - 485
+  - 11
+zone_meter_region:
+  - 405
+  - 44
+  - 485
+  - 7
+indicator_meter_region:
+  - 405
+  - 44
+  - 485
+  - 11
+zone_hsv_bounds_standard:
+  - [166, 76, 74]
+  - [171, 80, 90]
+zone_min_component_area: 20
+indicator_primary_hsv_bounds_standard:
+  - [30, 31, 71]
+  - [90, 100, 100]
+indicator_secondary_hsv_bounds_standard:
+  - [0, 0, 82]
+  - [110, 55, 100]
+indicator_memory_ms: 150
+result_text_region:
+  - 540
+  - 620
+  - 220
+  - 60
+ready_anchor_region:
+  - 1000
+  - 560
+  - 280
+  - 160
+result_close_point:
+  - 300
+  - 600
+duel_end_missing_sec: 1.0
+post_duel_click_interval_ms: 1000
+ocr_texts:
+  bite_required: []
+  result_required:
+    - 点击空白区域关闭
+poll_ms: 0
+bite_timeout_sec: 15.0
+hook_timeout_sec: 10.0
+hook_press_interval_ms: 1000
+hook_success_min_zone_width: 30
+hook_success_max_zone_width: 120
+hook_success_confirm_frames: 1
+duel_timeout_sec: 20.0
+deadband_px: 6
+tap_press_ms: 35
+tap_cooldown_ms: 70
+control_mode: hold_hybrid
+control_lookahead_sec: 0.08
+control_deadband_px: 6
+control_inside_min_pulse_ms: 10
+control_inside_max_pulse_ms: 25
+control_outside_min_pulse_ms: 25
+control_outside_max_pulse_ms: 65
+control_pulse_gain_ms_per_px: 0.35
+control_min_interval_ms: 0
+control_reverse_gap_ms: 0
+control_hold_margin_px: 10
+control_hold_grace_ms: 150
+control_detection_jump_window_ms: 250
+control_zone_jump_px: 55
+control_indicator_jump_px: 55
+control_zone_width_jump_px: 30
+control_zone_width_min_px: 30
+control_zone_width_max_px: 120

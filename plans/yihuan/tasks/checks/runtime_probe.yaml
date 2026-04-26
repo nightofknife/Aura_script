@@ -1,0 +1,8 @@
+runtime_probe:
+  meta:
+    title: 异环运行时探针
+    description: 检查当前异环桌面客户端的运行时绑定情况。
+  steps:
+    probe:
+      action: yihuan_runtime_probe
+  returns: "{{ nodes.probe.output }}"

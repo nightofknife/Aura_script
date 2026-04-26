@@ -1,0 +1,212 @@
+package:
+  name: '@plans/yihuan'
+  version: 0.1.0
+  description: Yihuan automation plan package
+  license: MIT
+requires:
+  aura: '>=2.0.0'
+dependencies:
+  '@plans/aura_base':
+    version: '>=0.1.0'
+    source: local
+    path: ../aura_base
+pypi-dependencies: {}
+exports:
+  services:
+  - name: yihuan_cafe
+    module: plans.yihuan.src.services.cafe_service
+    class: YihuanCafeService
+    public: true
+    singleton: true
+    replace: null
+    description: Load cafe calibration and detect Yihuan cafe mini-game orders.
+  - name: yihuan_fishing
+    module: plans.yihuan.src.services.fishing_service
+    class: YihuanFishingService
+    public: true
+    singleton: true
+    replace: null
+    description: Provide fishing calibration loading and state detection for the Yihuan
+      plan.
+  - name: yihuan_plan
+    module: plans.yihuan.src.services.yihuan_plan_service
+    class: YihuanPlanService
+    public: true
+    singleton: true
+    replace: null
+    description: 暴露异环方案包的脚手架元数据和约定信息。
+  actions:
+  - name: yihuan_cafe_run_session
+    module: plans.yihuan.src.actions.cafe_actions
+    function: yihuan_cafe_run_session
+    public: false
+    read_only: false
+    timeout: null
+    description: Run the Yihuan cafe mini-game loop for the coffee-only v1 profile.
+    parameters:
+    - name: profile_name
+      type: Any
+      required: false
+      default: default_1280x720_cn
+    - name: max_seconds
+      type: Any
+      required: false
+      default: 0.0
+    - name: max_orders
+      type: Any
+      required: false
+      default: 0
+    - name: start_game
+      type: Any
+      required: false
+      default: true
+    - name: wait_level_started
+      type: Any
+      required: false
+      default: true
+  - name: yihuan_fishing_debug_monitor
+    module: plans.yihuan.src.actions.fishing_actions
+    function: yihuan_fishing_debug_monitor
+    public: true
+    read_only: false
+    timeout: null
+    description: Auto cast and hook once, then show a live fishing debug window for
+      a fixed duration.
+    parameters:
+    - name: profile_name
+      type: Any
+      required: false
+      default: default_1280x720_cn
+    - name: duration_sec
+      type: Any
+      required: false
+      default: 60.0
+    - name: poll_ms
+      type: Any
+      required: false
+      default: 80
+    - name: bite_timeout_sec
+      type: Any
+      required: false
+      default: 0.0
+    - name: screenshot_interval_sec
+      type: Any
+      required: false
+      default: 1.0
+  - name: yihuan_fishing_live_monitor
+    module: plans.yihuan.src.actions.fishing_actions
+    function: yihuan_fishing_live_monitor
+    public: true
+    read_only: false
+    timeout: null
+    description: Continuously show the fishing duel region before and after processing
+      until the monitor window is closed.
+    parameters:
+    - name: profile_name
+      type: Any
+      required: false
+      default: default_1280x720_cn
+    - name: duration_sec
+      type: Any
+      required: false
+      default: 0.0
+    - name: poll_ms
+      type: Any
+      required: false
+      default: 0
+  - name: yihuan_fishing_run_session
+    module: plans.yihuan.src.actions.fishing_actions
+    function: yihuan_fishing_run_session
+    public: false
+    read_only: false
+    timeout: null
+    description: Run multiple fishing rounds until max_rounds is reached.
+    parameters:
+    - name: max_rounds
+      type: Any
+      required: false
+      default: 0
+    - name: profile_name
+      type: Any
+      required: false
+      default: default_1280x720_cn
+  - name: yihuan_plan_info
+    module: plans.yihuan.src.actions.package_actions
+    function: yihuan_plan_info
+    public: true
+    read_only: true
+    timeout: null
+    description: 返回异环方案包的脚手架元数据。
+    parameters:
+    - name: scenario_tag
+      type: Any
+      required: false
+      default: bootstrap
+  - name: yihuan_plan_loaded
+    module: plans.yihuan.src.actions.package_actions
+    function: yihuan_plan_loaded
+    public: true
+    read_only: true
+    timeout: null
+    description: 当异环方案包加载成功时返回 True。
+    parameters: []
+  - name: yihuan_runtime_probe
+    module: plans.yihuan.src.actions.package_actions
+    function: yihuan_runtime_probe
+    public: true
+    read_only: true
+    timeout: null
+    description: 基于当前方案上下文探测异环运行时目标。
+    parameters: []
+  tasks:
+  - id: bootstrap/plan_ready/plan_ready
+    title: 异环方案包信息
+    source: tasks/bootstrap/plan_ready.yaml
+    description: 校验异环方案包已加载，并返回方案包脚手架元数据。
+  - id: bootstrap/plan_ready
+    title: 异环方案包信息
+    source: tasks/bootstrap/plan_ready.yaml
+    description: 校验异环方案包已加载，并返回方案包脚手架元数据。
+  - id: cafe/auto_loop/auto_loop
+    title: Yihuan cafe auto loop
+    source: tasks/cafe/auto_loop.yaml
+    description: Run the Yihuan cafe coffee-only mini-game automation loop.
+  - id: cafe/auto_loop
+    title: Yihuan cafe auto loop
+    source: tasks/cafe/auto_loop.yaml
+    description: Run the Yihuan cafe coffee-only mini-game automation loop.
+  - id: checks/plan_loaded/plan_loaded
+    title: 异环方案包已加载
+    source: tasks/checks/plan_loaded.yaml
+    description: 仅用于确认异环方案包已成功加载的检查任务。
+  - id: checks/plan_loaded
+    title: 异环方案包已加载
+    source: tasks/checks/plan_loaded.yaml
+    description: 仅用于确认异环方案包已成功加载的检查任务。
+  - id: checks/runtime_probe/runtime_probe
+    title: 异环运行时探针
+    source: tasks/checks/runtime_probe.yaml
+    description: 检查当前异环桌面客户端的运行时绑定情况。
+  - id: checks/runtime_probe
+    title: 异环运行时探针
+    source: tasks/checks/runtime_probe.yaml
+    description: 检查当前异环桌面客户端的运行时绑定情况。
+  - id: fishing/auto_loop/auto_loop
+    title: 自动循环钓鱼
+    source: tasks/fishing/auto_loop.yaml
+    description: 按停止策略持续重复执行钓鱼轮次。
+  - id: fishing/auto_loop
+    title: 自动循环钓鱼
+    source: tasks/fishing/auto_loop.yaml
+    description: 按停止策略持续重复执行钓鱼轮次。
+  - id: fishing/live_monitor/live_monitor
+    title: 钓鱼实时监视
+    source: tasks/fishing/live_monitor.yaml
+    description: 持续显示钓鱼条原图与处理后的识别画面，紫框标注蓝绿区域，红线标注指示线。
+  - id: fishing/live_monitor
+    title: 钓鱼实时监视
+    source: tasks/fishing/live_monitor.yaml
+    description: 持续显示钓鱼条原图与处理后的识别画面，紫框标注蓝绿区域，红线标注指示线。
+metadata:
+  generated_by: ManifestGenerator
+  generated_at: '2026-04-26T02:25:57Z'

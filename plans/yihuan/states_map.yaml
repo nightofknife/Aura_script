@@ -1,0 +1,8 @@
+# Scaffold-only state graph for the Yihuan package.
+# Replace this with real in-game scene checks before using gameplay state planning.
+states:
+  plan_loaded:
+    check_task: "tasks:checks:plan_loaded.yaml"
+    can_async: true
+    priority: 100
+transitions: []
