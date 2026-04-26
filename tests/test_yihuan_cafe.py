@@ -95,10 +95,66 @@ class _FakeCafeService:
             "level_end_stable_frames": 2,
             "level_end_poll_ms": 0,
             "order_search_region": (220, 60, 720, 250),
+            "stock_profiles": {
+                "bread": {
+                    "station_point": (75, 665),
+                    "stock_point": (65, 525),
+                    "monitor_region": (20, 500, 120, 80),
+                    "monitor_min_pixels": 120,
+                    "monitor_white_s_max": 90,
+                    "monitor_white_v_min": 170,
+                    "monitor_use_warm": False,
+                    "batch_size": 3,
+                    "make_sec": 1.5,
+                    "enabled": True,
+                },
+                "croissant": {
+                    "station_point": (475, 665),
+                    "stock_point": (425, 525),
+                    "monitor_region": (340, 515, 170, 75),
+                    "monitor_min_pixels": 30,
+                    "monitor_white_s_max": 90,
+                    "monitor_white_v_min": 170,
+                    "monitor_use_warm": False,
+                    "batch_size": 3,
+                    "make_sec": 1.5,
+                    "enabled": True,
+                },
+                "cake": {
+                    "station_point": (690, 665),
+                    "stock_point": (840, 665),
+                    "monitor_region": (770, 635, 190, 80),
+                    "monitor_min_pixels": 150,
+                    "monitor_white_s_max": 90,
+                    "monitor_white_v_min": 170,
+                    "monitor_use_warm": True,
+                    "monitor_warm_h_max": 35,
+                    "monitor_warm_s_min": 60,
+                    "monitor_warm_v_min": 120,
+                    "batch_size": 6,
+                    "make_sec": 1.5,
+                    "enabled": True,
+                },
+                "coffee": {
+                    "station_point": (1035, 665),
+                    "stock_point": (1190, 665),
+                    "monitor_region": (1145, 610, 130, 105),
+                    "monitor_min_pixels": 120,
+                    "monitor_white_s_max": 90,
+                    "monitor_white_v_min": 150,
+                    "monitor_use_warm": False,
+                    "batch_size": 3,
+                    "make_sec": 1.5,
+                    "enabled": True,
+                },
+            },
             "coffee_station_point": (1035, 665),
             "coffee_stock_point": (1190, 665),
             "glass_point": (1200, 535),
             "coffee_cup_point": (825, 525),
+            "bacon_point": (130, 430),
+            "egg_point": (260, 430),
+            "jam_point": (675, 430),
             "cream_point": (925, 430),
             "latte_art_point": (1030, 430),
             "coffee_batch_size": 3,
@@ -134,6 +190,22 @@ class _FakeCafeService:
             "failure_title": {"detected": False, "area": 0, "bbox": None, "pixel_count": 0},
             "buttons_count": 0,
             "button_bboxes": [],
+        }
+
+    def detect_stock_status(self, image, *, profile_name=None):
+        return {
+            "stocks": {
+                stock_id: {
+                    "present": True,
+                    "reason": "present",
+                    "region": list(stock_profile["monitor_region"]),
+                    "product_pixels": int(stock_profile["monitor_min_pixels"]),
+                    "min_pixels": int(stock_profile["monitor_min_pixels"]),
+                    "white_pixels": int(stock_profile["monitor_min_pixels"]),
+                    "warm_pixels": 0,
+                }
+                for stock_id, stock_profile in self.profile["stock_profiles"].items()
+            }
         }
 
     def analyze_orders(self, image, *, profile_name=None):
@@ -207,6 +279,31 @@ class _LevelEndAfterThreeOrdersCafeService(_FakeCafeService):
         }
 
 
+class _VisualBreadEmptyCafeService(_FakeCafeService):
+    def __init__(self):
+        super().__init__(["bacon_bread", "cream_coffee"])
+        self.orders_seen = 0
+        self.reported_empty = False
+
+    def analyze_orders(self, image, *, profile_name=None):
+        self.orders_seen += 1
+        return super().analyze_orders(image, profile_name=profile_name)
+
+    def detect_stock_status(self, image, *, profile_name=None):
+        payload = super().detect_stock_status(image, profile_name=profile_name)
+        if self.orders_seen >= 1 and not self.reported_empty:
+            self.reported_empty = True
+            payload["stocks"]["bread"].update(
+                {
+                    "present": False,
+                    "reason": "empty",
+                    "product_pixels": 0,
+                    "white_pixels": 0,
+                }
+            )
+        return payload
+
+
 class TestYihuanCafeDetection(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -230,6 +327,9 @@ class TestYihuanCafeDetection(unittest.TestCase):
             "cafe_06": {"latte_coffee": 1, "cream_coffee": 2},
             "cafe_07": {"latte_coffee": 1, "cream_coffee": 3},
             "cafe_08": {"cream_coffee": 3},
+            "cafe_bacon_bread": {"bacon_bread": 1},
+            "cafe_egg_croissant": {"egg_croissant": 1},
+            "cafe_jam_cake": {"jam_cake": 1},
         }
 
         for name, minimum_counts in expected.items():
@@ -253,6 +353,32 @@ class TestYihuanCafeDetection(unittest.TestCase):
                 dx = int(first["center_x"]) - int(second["center_x"])
                 dy = int(first["center_y"]) - int(second["center_y"])
                 self.assertGreater(dx * dx + dy * dy, 35 * 35)
+
+    def test_empty_order_fallback_is_throttled(self):
+        service = YihuanCafeService()
+        service.reset_order_scan_state("default_1280x720_cn")
+        blank = np.zeros((720, 1280, 3), dtype=np.uint8)
+        fallback_calls = 0
+        original_full_scan = service._analyze_orders_full_scan
+
+        def fake_full_scan(source_image, *, profile):
+            nonlocal fallback_calls
+            fallback_calls += 1
+            return []
+
+        service._analyze_orders_full_scan = fake_full_scan
+        try:
+            for _ in range(9):
+                self.assertEqual(service.analyze_orders(blank), [])
+            self.assertEqual(fallback_calls, 0)
+            self.assertEqual(service.analyze_orders(blank), [])
+            self.assertEqual(fallback_calls, 1)
+            debug = service.get_last_order_scan_debug()
+            self.assertTrue(debug["fallback_used"])
+            self.assertEqual(debug["two_stage_miss_count"], 10)
+        finally:
+            service._analyze_orders_full_scan = original_full_scan
+            service.reset_order_scan_state("default_1280x720_cn")
 
     def test_level_started_green_bar_detection(self):
         detection = self.service.detect_level_started(self._load_fixture("cafe_started"))
@@ -316,10 +442,21 @@ class TestYihuanCafeActions(unittest.TestCase):
         self.assertEqual(result["orders_completed"], 4)
         self.assertEqual(result["coffee_batches_made"], 2)
         self.assertEqual(result["coffee_stock_remaining"], 2)
-        self.assertEqual(result["recognized_counts"], {"latte_coffee": 3, "cream_coffee": 1})
+        self.assertEqual(
+            result["recognized_counts"],
+            {
+                "latte_coffee": 3,
+                "cream_coffee": 1,
+                "bacon_bread": 0,
+                "egg_croissant": 0,
+                "jam_cake": 0,
+            },
+        )
+        self.assertEqual(result["batches_made"], {"bread": 1, "croissant": 1, "cake": 1, "coffee": 2})
+        self.assertEqual(result["stocks_remaining"], {"bread": 3, "croissant": 3, "cake": 6, "coffee": 2})
         trace_events = [entry["event"] for entry in result["phase_trace"]]
-        depleted_index = trace_events.index("coffee_stock_depleted_after_order")
-        replenish_index = trace_events.index("coffee_batch_started", depleted_index)
+        depleted_index = trace_events.index("stock_depleted_after_order")
+        replenish_index = trace_events.index("stock_batch_started", depleted_index)
         next_order_index = trace_events.index("order_selected", replenish_index)
         self.assertLess(depleted_index, replenish_index)
         self.assertLess(replenish_index, next_order_index)
@@ -328,6 +465,9 @@ class TestYihuanCafeActions(unittest.TestCase):
             _repeat_clicks(
                 [
                     (1150, 670, "left"),
+                    (75, 665, "left"),
+                    (475, 665, "left"),
+                    (690, 665, "left"),
                     (1035, 665, "left"),
                     (1200, 535, "left"),
                     (1190, 665, "left"),
@@ -361,7 +501,7 @@ class TestYihuanCafeActions(unittest.TestCase):
 
         self.assertEqual(result["status"], "success")
         self.assertNotIn((1150, 670, "left"), app.click_calls)
-        self.assertEqual(app.click_calls[0], (1035, 665, "left"))
+        self.assertEqual(app.click_calls[0], (75, 665, "left"))
 
     @patch("plans.yihuan.src.actions.cafe_actions.time.sleep", return_value=None)
     def test_run_session_waits_for_level_start_before_replenishing(self, _sleep):
@@ -387,7 +527,7 @@ class TestYihuanCafeActions(unittest.TestCase):
                 ("detect_level_started", False),
                 ("detect_level_started", True),
                 ("detect_level_started", True),
-                ("click", 1035, 665),
+                ("click", 75, 665),
             ],
         )
 
@@ -407,11 +547,15 @@ class TestYihuanCafeActions(unittest.TestCase):
 
         self.assertEqual(result["status"], "success")
         self.assertEqual(result["coffee_batches_made"], 1)
+        self.assertEqual(result["batches_made"], {"bread": 1, "croissant": 1, "cake": 1, "coffee": 1})
         self.assertEqual(service.scan_count, 2)
         self.assertEqual(
             app.click_calls,
             _repeat_clicks(
                 [
+                    (75, 665, "left"),
+                    (475, 665, "left"),
+                    (690, 665, "left"),
                     (1035, 665, "left"),
                     (825, 525, "left"),
                     (1190, 665, "left"),
@@ -440,10 +584,14 @@ class TestYihuanCafeActions(unittest.TestCase):
         self.assertEqual(result["orders_completed"], 3)
         self.assertEqual(result["coffee_batches_made"], 1)
         self.assertEqual(result["coffee_stock_remaining"], 0)
+        self.assertEqual(result["batches_made"], {"bread": 1, "croissant": 1, "cake": 1, "coffee": 1})
         self.assertEqual(
             app.click_calls,
             _repeat_clicks(
                 [
+                    (75, 665, "left"),
+                    (475, 665, "left"),
+                    (690, 665, "left"),
                     (1035, 665, "left"),
                     (1200, 535, "left"),
                     (1190, 665, "left"),
@@ -454,6 +602,83 @@ class TestYihuanCafeActions(unittest.TestCase):
                     (1200, 535, "left"),
                     (1190, 665, "left"),
                     (1030, 430, "left"),
+                ]
+            ),
+        )
+
+    @patch("plans.yihuan.src.actions.cafe_actions.time.sleep", return_value=None)
+    def test_run_session_executes_non_coffee_recipes(self, _sleep):
+        app = _FakeApp()
+        service = _FakeCafeService(["bacon_bread", "egg_croissant", "jam_cake"])
+
+        result = cafe_actions.yihuan_cafe_run_session(
+            app=app,
+            yihuan_cafe=service,
+            max_seconds=30,
+            max_orders=3,
+            start_game=False,
+            wait_level_started=False,
+        )
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["stopped_reason"], "max_orders")
+        self.assertEqual(result["orders_completed"], 3)
+        self.assertEqual(result["recognized_counts"]["bacon_bread"], 1)
+        self.assertEqual(result["recognized_counts"]["egg_croissant"], 1)
+        self.assertEqual(result["recognized_counts"]["jam_cake"], 1)
+        self.assertEqual(result["batches_made"], {"bread": 1, "croissant": 1, "cake": 1, "coffee": 1})
+        self.assertEqual(result["stocks_remaining"], {"bread": 2, "croissant": 2, "cake": 5, "coffee": 3})
+        self.assertEqual(
+            app.click_calls,
+            _repeat_clicks(
+                [
+                    (75, 665, "left"),
+                    (475, 665, "left"),
+                    (690, 665, "left"),
+                    (1035, 665, "left"),
+                    (65, 525, "left"),
+                    (130, 430, "left"),
+                    (425, 525, "left"),
+                    (260, 430, "left"),
+                    (840, 665, "left"),
+                    (675, 430, "left"),
+                ]
+            ),
+        )
+
+    @patch("plans.yihuan.src.actions.cafe_actions.time.sleep", return_value=None)
+    def test_run_session_replenishes_when_visual_stock_is_empty(self, _sleep):
+        app = _FakeApp()
+        service = _VisualBreadEmptyCafeService()
+
+        result = cafe_actions.yihuan_cafe_run_session(
+            app=app,
+            yihuan_cafe=service,
+            max_seconds=30,
+            max_orders=2,
+            start_game=False,
+            wait_level_started=False,
+        )
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["batches_made"]["bread"], 2)
+        self.assertEqual(result["stocks_remaining"]["bread"], 3)
+        trace_events = [entry["event"] for entry in result["phase_trace"]]
+        self.assertIn("stock_visual_empty_correction", trace_events)
+        self.assertEqual(
+            app.click_calls,
+            _repeat_clicks(
+                [
+                    (75, 665, "left"),
+                    (475, 665, "left"),
+                    (690, 665, "left"),
+                    (1035, 665, "left"),
+                    (65, 525, "left"),
+                    (130, 430, "left"),
+                    (75, 665, "left"),
+                    (825, 525, "left"),
+                    (1190, 665, "left"),
+                    (925, 430, "left"),
                 ]
             ),
         )

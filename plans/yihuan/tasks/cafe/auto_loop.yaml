@@ -1,7 +1,7 @@
 auto_loop:
   meta:
     title: Yihuan cafe auto loop
-    description: Run the Yihuan cafe coffee-only mini-game automation loop.
+    description: Run the Yihuan cafe mini-game automation loop.
     inputs:
       - name: profile_name
         type: string

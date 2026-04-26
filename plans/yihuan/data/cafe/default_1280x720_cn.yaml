@@ -85,9 +85,41 @@ order_search_region:
   - 60
   - 720
   - 250
+order_locator_enabled: true
+order_locator_fallback_full_scan: true
+order_locator_fallback_every_no_order_scans: 10
+order_locator_region:
+  - 160
+  - 75
+  - 820
+  - 190
+order_locator_hough_dp: 1.0
+order_locator_hough_min_dist: 45
+order_locator_hough_param1: 80
+order_locator_hough_param2: 30
+order_locator_min_radius: 18
+order_locator_max_radius: 45
+order_locator_yellow_hsv_lower:
+  - 8
+  - 70
+  - 80
+order_locator_yellow_hsv_upper:
+  - 45
+  - 255
+  - 255
+order_locator_min_yellow_pixels: 80
+order_locator_yellow_inner_pad: 8
+order_locator_yellow_outer_pad: 10
+order_locator_nms_distance_px: 45
+order_classify_region_size:
+  - 130
+  - 120
 order_templates:
   latte_coffee: latte_coffee.png
   cream_coffee: cream_coffee.png
+  bacon_bread: bacon_bread.png
+  egg_croissant: egg_croissant.png
+  jam_cake: jam_cake.png
 template_threshold: 0.78
 template_scales:
   - 0.65
@@ -97,6 +129,86 @@ template_scales:
 match_nms_distance_px: 35
 match_peak_window_px: 9
 max_candidates_per_template_scale: 80
+stock_profiles:
+  bread:
+    station_point:
+      - 75
+      - 665
+    stock_point:
+      - 65
+      - 525
+    monitor_region:
+      - 20
+      - 500
+      - 120
+      - 80
+    monitor_min_pixels: 120
+    monitor_white_s_max: 90
+    monitor_white_v_min: 170
+    monitor_use_warm: false
+    batch_size: 3
+    make_sec: 1.5
+    enabled: true
+  croissant:
+    station_point:
+      - 475
+      - 665
+    stock_point:
+      - 425
+      - 525
+    monitor_region:
+      - 340
+      - 515
+      - 170
+      - 75
+    monitor_min_pixels: 30
+    monitor_white_s_max: 90
+    monitor_white_v_min: 170
+    monitor_use_warm: false
+    batch_size: 3
+    make_sec: 1.5
+    enabled: true
+  cake:
+    station_point:
+      - 690
+      - 665
+    stock_point:
+      - 840
+      - 665
+    monitor_region:
+      - 770
+      - 635
+      - 190
+      - 80
+    monitor_min_pixels: 150
+    monitor_white_s_max: 90
+    monitor_white_v_min: 170
+    monitor_use_warm: true
+    monitor_warm_h_max: 35
+    monitor_warm_s_min: 60
+    monitor_warm_v_min: 120
+    batch_size: 6
+    make_sec: 1.5
+    enabled: true
+  coffee:
+    station_point:
+      - 1035
+      - 665
+    stock_point:
+      - 1190
+      - 665
+    monitor_region:
+      - 1145
+      - 610
+      - 130
+      - 105
+    monitor_min_pixels: 120
+    monitor_white_s_max: 90
+    monitor_white_v_min: 150
+    monitor_use_warm: false
+    batch_size: 3
+    make_sec: 1.5
+    enabled: true
 coffee_station_point:
   - 1035
   - 665
@@ -109,6 +221,15 @@ glass_point:
 coffee_cup_point:
   - 825
   - 525
+bacon_point:
+  - 130
+  - 430
+egg_point:
+  - 260
+  - 430
+jam_point:
+  - 675
+  - 430
 cream_point:
   - 925
   - 430

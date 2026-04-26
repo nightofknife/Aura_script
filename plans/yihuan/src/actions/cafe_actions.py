@@ -11,6 +11,15 @@ from packages.aura_core.observability.logging.core_logger import logger
 from ..services.cafe_service import YihuanCafeService
 
 
+RECIPE_STOCK: dict[str, str] = {
+    "latte_coffee": "coffee",
+    "cream_coffee": "coffee",
+    "bacon_bread": "bread",
+    "egg_croissant": "croissant",
+    "jam_cake": "cake",
+}
+
+
 def _coerce_bool(value: Any) -> bool:
     if isinstance(value, bool):
         return value
@@ -77,40 +86,177 @@ def _append_trace(
     )
 
 
-def _coffee_stock_point(profile: dict[str, Any], coffee_stock: int) -> tuple[int, int]:
-    stock_point = profile.get("coffee_stock_point")
-    if stock_point:
-        return int(stock_point[0]), int(stock_point[1])
-
-    stock_points = list(profile.get("coffee_stock_points") or [])
-    if not stock_points:
-        raise ValueError("Cafe profile requires coffee_stock_point or coffee_stock_points")
-    batch_size = int(profile["coffee_batch_size"])
-    stock_index = max(batch_size - int(coffee_stock), 0)
-    stock_index = min(stock_index, len(stock_points) - 1)
-    return stock_points[stock_index]
+def _perf_time(perf_stats: dict[str, Any], key: str, elapsed_sec: float) -> None:
+    time_sec = perf_stats.setdefault("time_sec", {})
+    time_sec[key] = float(time_sec.get(key, 0.0)) + max(float(elapsed_sec), 0.0)
 
 
-def _ensure_coffee_stock(
+def _perf_count(perf_stats: dict[str, Any], key: str, amount: int = 1) -> None:
+    counts = perf_stats.setdefault("counts", {})
+    counts[key] = int(counts.get(key, 0)) + int(amount)
+
+
+def _perf_observe(perf_stats: dict[str, Any], group: str, key: str, value_sec: float) -> None:
+    value = max(float(value_sec), 0.0)
+    bucket = perf_stats.setdefault(group, {})
+    item = bucket.setdefault(key, {"count": 0, "total_sec": 0.0, "min_sec": None, "max_sec": None})
+    item["count"] = int(item.get("count", 0)) + 1
+    item["total_sec"] = float(item.get("total_sec", 0.0)) + value
+    item["min_sec"] = value if item.get("min_sec") is None else min(float(item["min_sec"]), value)
+    item["max_sec"] = value if item.get("max_sec") is None else max(float(item["max_sec"]), value)
+
+
+def _round_perf_stats(perf_stats: dict[str, Any]) -> dict[str, Any]:
+    rounded: dict[str, Any] = {"time_sec": {}, "counts": dict(perf_stats.get("counts") or {})}
+    for key, value in dict(perf_stats.get("time_sec") or {}).items():
+        rounded["time_sec"][key] = round(float(value), 3)
+
+    for group in ("recipe_elapsed", "order_gap"):
+        rounded[group] = {}
+        for key, raw_item in dict(perf_stats.get(group) or {}).items():
+            item = dict(raw_item)
+            count = int(item.get("count", 0))
+            total = float(item.get("total_sec", 0.0))
+            rounded[group][key] = {
+                "count": count,
+                "total_sec": round(total, 3),
+                "avg_sec": round(total / count, 3) if count else 0.0,
+                "min_sec": round(float(item["min_sec"]), 3) if item.get("min_sec") is not None else None,
+                "max_sec": round(float(item["max_sec"]), 3) if item.get("max_sec") is not None else None,
+            }
+    return rounded
+
+
+def _enabled_stock_profiles(profile: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    profiles = dict(profile.get("stock_profiles") or {})
+    return {
+        str(stock_id): dict(stock_profile)
+        for stock_id, stock_profile in profiles.items()
+        if bool(dict(stock_profile).get("enabled", True))
+    }
+
+
+def _start_stock_batch(
     app: Any,
     profile: dict[str, Any],
     *,
-    coffee_stock: int,
+    stock_id: str,
     phase_trace: list[dict[str, Any]],
     start_time: float,
-) -> tuple[int, bool]:
-    if coffee_stock > 0:
-        return coffee_stock, False
-
-    _click_point(app, profile["coffee_station_point"], note="make_coffee_batch", profile=profile)
+) -> dict[str, Any]:
+    stock_profile = dict(profile["stock_profiles"][stock_id])
+    station_point = tuple(stock_profile["station_point"])
+    batch_size = int(stock_profile["batch_size"])
+    make_sec = float(stock_profile["make_sec"])
+    _click_point(app, station_point, note=f"make_{stock_id}_batch", profile=profile)
     _append_trace(
         phase_trace,
         start_time=start_time,
-        event="coffee_batch_started",
-        payload={"point": list(profile["coffee_station_point"])},
+        event="stock_batch_started",
+        payload={
+            "stock_id": stock_id,
+            "point": list(station_point),
+            "batch_size": batch_size,
+            "make_sec": make_sec,
+        },
     )
-    time.sleep(float(profile["coffee_make_sec"]))
-    return int(profile["coffee_batch_size"]), True
+    logger.info(
+        "Cafe[stock] batch_started stock_id=%s point=%s batch_size=%s make_sec=%.3f",
+        stock_id,
+        list(station_point),
+        batch_size,
+        make_sec,
+    )
+    return {"stock_id": stock_id, "batch_size": batch_size, "make_sec": make_sec}
+
+
+def _ensure_all_depleted_stocks(
+    app: Any,
+    profile: dict[str, Any],
+    *,
+    stocks: dict[str, int],
+    batches_made: dict[str, int],
+    phase_trace: list[dict[str, Any]],
+    start_time: float,
+) -> list[str]:
+    started: list[dict[str, Any]] = []
+    for stock_id in _enabled_stock_profiles(profile):
+        if int(stocks.get(stock_id, 0)) > 0:
+            continue
+        started.append(
+            _start_stock_batch(
+                app,
+                profile,
+                stock_id=stock_id,
+                phase_trace=phase_trace,
+                start_time=start_time,
+            )
+        )
+
+    if not started:
+        return []
+
+    wait_sec = max(float(item["make_sec"]) for item in started)
+    logger.info(
+        "Cafe[stock] parallel_wait stock_ids=%s wait_sec=%.3f",
+        [item["stock_id"] for item in started],
+        wait_sec,
+    )
+    if wait_sec > 0:
+        time.sleep(wait_sec)
+
+    made: list[str] = []
+    for item in started:
+        stock_id = str(item["stock_id"])
+        stocks[stock_id] = int(item["batch_size"])
+        batches_made[stock_id] = int(batches_made.get(stock_id, 0)) + 1
+        made.append(stock_id)
+    return made
+
+
+def _sync_stocks_from_visual(
+    yihuan_cafe: YihuanCafeService,
+    image: Any,
+    *,
+    profile_name: str,
+    stocks: dict[str, int],
+    phase_trace: list[dict[str, Any]],
+    start_time: float,
+) -> dict[str, Any]:
+    detection = yihuan_cafe.detect_stock_status(image, profile_name=profile_name)
+    corrections: list[dict[str, Any]] = []
+    for stock_id, stock_detection in dict(detection.get("stocks") or {}).items():
+        if int(stocks.get(str(stock_id), 0)) <= 0:
+            continue
+        if stock_detection.get("present") is not False:
+            continue
+        previous_stock = int(stocks.get(str(stock_id), 0))
+        stocks[str(stock_id)] = 0
+        correction = {
+            "stock_id": str(stock_id),
+            "previous_stock": previous_stock,
+            "product_pixels": stock_detection.get("product_pixels"),
+            "min_pixels": stock_detection.get("min_pixels"),
+            "region": stock_detection.get("region"),
+        }
+        corrections.append(correction)
+        logger.warning(
+            "Cafe[stock_monitor] visual_empty stock_id=%s previous_stock=%s product_pixels=%s min_pixels=%s region=%s",
+            correction["stock_id"],
+            previous_stock,
+            correction["product_pixels"],
+            correction["min_pixels"],
+            correction["region"],
+        )
+
+    if corrections:
+        _append_trace(
+            phase_trace,
+            start_time=start_time,
+            event="stock_visual_empty_correction",
+            payload={"corrections": corrections},
+        )
+    return {"detection": detection, "corrections": corrections}
 
 
 def _should_keep_stocking(
@@ -173,33 +319,63 @@ def _check_level_end(
     return 0, False, False, detection
 
 
+def _click_stock_item(
+    app: Any,
+    profile: dict[str, Any],
+    *,
+    stock_id: str,
+    note: str,
+) -> None:
+    stock_profile = dict(profile["stock_profiles"][stock_id])
+    _click_point(app, tuple(stock_profile["stock_point"]), note=note, profile=profile)
+
+
 def _execute_recipe(
     app: Any,
     profile: dict[str, Any],
     recipe_id: str,
     *,
-    coffee_stock: int,
-) -> tuple[int, bool]:
+    stocks: dict[str, int],
+) -> str:
+    if recipe_id not in RECIPE_STOCK:
+        raise ValueError(f"Unsupported cafe recipe: {recipe_id}")
+
+    stock_id = RECIPE_STOCK[recipe_id]
+    if stock_id not in _enabled_stock_profiles(profile):
+        raise ValueError(f"Cafe stock disabled for recipe {recipe_id}: {stock_id}")
+    if int(stocks.get(stock_id, 0)) <= 0:
+        raise ValueError(f"Cafe stock depleted before recipe {recipe_id}: {stock_id}")
+
     step_delay_ms = int(profile["step_delay_ms"])
 
     if recipe_id == "latte_coffee":
         _click_point(app, profile["glass_point"], note="latte_glass", profile=profile)
         _sleep_ms(step_delay_ms)
-        _click_point(app, _coffee_stock_point(profile, coffee_stock), note="latte_coffee_stock", profile=profile)
+        _click_stock_item(app, profile, stock_id=stock_id, note="latte_coffee_stock")
         _sleep_ms(step_delay_ms)
         _click_point(app, profile["latte_art_point"], note="latte_art", profile=profile)
     elif recipe_id == "cream_coffee":
         _click_point(app, profile["coffee_cup_point"], note="cream_cup", profile=profile)
         _sleep_ms(step_delay_ms)
-        _click_point(app, _coffee_stock_point(profile, coffee_stock), note="cream_coffee_stock", profile=profile)
+        _click_stock_item(app, profile, stock_id=stock_id, note="cream_coffee_stock")
         _sleep_ms(step_delay_ms)
         _click_point(app, profile["cream_point"], note="cream", profile=profile)
-    else:
-        raise ValueError(f"Unsupported cafe recipe: {recipe_id}")
+    elif recipe_id == "bacon_bread":
+        _click_stock_item(app, profile, stock_id=stock_id, note="bacon_bread_stock")
+        _sleep_ms(step_delay_ms)
+        _click_point(app, profile["bacon_point"], note="bacon", profile=profile)
+    elif recipe_id == "egg_croissant":
+        _click_stock_item(app, profile, stock_id=stock_id, note="egg_croissant_stock")
+        _sleep_ms(step_delay_ms)
+        _click_point(app, profile["egg_point"], note="egg", profile=profile)
+    elif recipe_id == "jam_cake":
+        _click_stock_item(app, profile, stock_id=stock_id, note="jam_cake_stock")
+        _sleep_ms(step_delay_ms)
+        _click_point(app, profile["jam_point"], note="jam", profile=profile)
 
-    coffee_stock = max(int(coffee_stock) - 1, 0)
+    stocks[stock_id] = max(int(stocks.get(stock_id, 0)) - 1, 0)
     _sleep_ms(int(profile["craft_delay_ms"]))
-    return coffee_stock, False
+    return stock_id
 
 
 def _wait_level_started(
@@ -304,7 +480,7 @@ def _wait_level_started(
     name="yihuan_cafe_run_session",
     public=False,
     read_only=False,
-    description="Run the Yihuan cafe mini-game loop for the coffee-only v1 profile.",
+    description="Run the Yihuan cafe mini-game loop with supported stock and recipe automation.",
 )
 @requires_services(app="plans/aura_base/app", yihuan_cafe="yihuan_cafe")
 def yihuan_cafe_run_session(
@@ -328,37 +504,80 @@ def yihuan_cafe_run_session(
     start_time = time.monotonic()
     deadline = start_time + max_seconds_value
     phase_trace: list[dict[str, Any]] = []
-    coffee_stock = 0
-    coffee_batches_made = 0
+    stock_profiles = _enabled_stock_profiles(profile)
+    stocks = {stock_id: 0 for stock_id in stock_profiles}
+    batches_made = {stock_id: 0 for stock_id in stock_profiles}
     orders_completed = 0
     unknown_scan_count = 0
-    recognized_counts = {"latte_coffee": 0, "cream_coffee": 0}
+    recognized_counts = {recipe_id: 0 for recipe_id in RECIPE_STOCK}
     failure_reason: str | None = None
     level_outcome: str | None = None
     level_end_detection: dict[str, Any] | None = None
     level_end_stable_count = 0
+    perf_stats: dict[str, Any] = {
+        "time_sec": {},
+        "counts": {},
+        "recipe_elapsed": {},
+        "order_gap": {},
+    }
+    last_order_completed_at: float | None = None
+
+    def result_payload(
+        *,
+        status: str,
+        stopped_reason: str,
+        failure_reason_value: str | None,
+        extra: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        payload = {
+            "status": status,
+            "stopped_reason": stopped_reason,
+            "failure_reason": failure_reason_value,
+            "orders_completed": orders_completed,
+            "batches_made": dict(batches_made),
+            "stocks_remaining": dict(stocks),
+            "coffee_batches_made": int(batches_made.get("coffee", 0)),
+            "coffee_stock_remaining": int(stocks.get("coffee", 0)),
+            "recognized_counts": dict(recognized_counts),
+            "unknown_scan_count": unknown_scan_count,
+            "level_outcome": level_outcome,
+            "level_end_detection": level_end_detection,
+            "perf_stats": _round_perf_stats(perf_stats),
+            "phase_trace": phase_trace,
+            "elapsed_sec": round(time.monotonic() - start_time, 3),
+            "profile_name": resolved_profile,
+        }
+        payload.update(extra or {})
+        return payload
 
     logger.info(
-        "Cafe[session] start profile=%s max_seconds=%.3f max_orders=%s start_game=%s wait_level_started=%s",
+        "Cafe[session] start profile=%s max_seconds=%.3f max_orders=%s start_game=%s wait_level_started=%s stocks=%s",
         resolved_profile,
         max_seconds_value,
         max_orders_value,
         start_game_value,
         wait_level_started_value,
+        list(stock_profiles),
     )
 
     try:
         if start_game_value:
+            click_start = time.monotonic()
             _click_point(app, profile["start_game_point"], note="start_game", profile=profile)
+            _perf_time(perf_stats, "start_game_click", time.monotonic() - click_start)
+            _perf_count(perf_stats, "start_game_click_count")
             _append_trace(
                 phase_trace,
                 start_time=start_time,
                 event="start_game_clicked",
                 payload={"point": list(profile["start_game_point"])},
             )
+            delay_start = time.monotonic()
             time.sleep(float(profile["start_game_delay_sec"]))
+            _perf_time(perf_stats, "start_game_delay", time.monotonic() - delay_start)
 
         if wait_level_started_value:
+            wait_start = time.monotonic()
             level_started, failure_reason, detection = _wait_level_started(
                 app,
                 yihuan_cafe,
@@ -367,23 +586,14 @@ def yihuan_cafe_run_session(
                 phase_trace=phase_trace,
                 start_time=start_time,
             )
+            _perf_time(perf_stats, "level_start_wait", time.monotonic() - wait_start)
             if not level_started:
-                return {
-                    "status": "failed",
-                    "stopped_reason": "failure",
-                    "failure_reason": failure_reason,
-                    "level_start_detection": detection,
-                    "orders_completed": orders_completed,
-                    "coffee_batches_made": coffee_batches_made,
-                    "coffee_stock_remaining": coffee_stock,
-                    "recognized_counts": recognized_counts,
-                    "unknown_scan_count": unknown_scan_count,
-                    "level_outcome": level_outcome,
-                    "level_end_detection": level_end_detection,
-                    "phase_trace": phase_trace,
-                    "elapsed_sec": round(time.monotonic() - start_time, 3),
-                    "profile_name": resolved_profile,
-                }
+                return result_payload(
+                    status="failed",
+                    stopped_reason="failure",
+                    failure_reason_value=failure_reason,
+                    extra={"level_start_detection": detection},
+                )
 
         while True:
             now = time.monotonic()
@@ -394,26 +604,20 @@ def yihuan_cafe_run_session(
                 stopped_reason = "max_seconds"
                 break
 
+            capture_start = time.monotonic()
             capture = app.capture()
+            _perf_time(perf_stats, "capture_before_stock", time.monotonic() - capture_start)
+            _perf_count(perf_stats, "capture_count")
             if not capture.success or capture.image is None:
                 failure_reason = "capture_failed"
                 logger.error("Cafe[session] capture failed")
-                return {
-                    "status": "failed",
-                    "stopped_reason": "failure",
-                    "failure_reason": failure_reason,
-                    "orders_completed": orders_completed,
-                    "coffee_batches_made": coffee_batches_made,
-                    "coffee_stock_remaining": coffee_stock,
-                    "recognized_counts": recognized_counts,
-                    "unknown_scan_count": unknown_scan_count,
-                    "level_outcome": level_outcome,
-                    "level_end_detection": level_end_detection,
-                    "phase_trace": phase_trace,
-                    "elapsed_sec": round(time.monotonic() - start_time, 3),
-                    "profile_name": resolved_profile,
-                }
+                return result_payload(
+                    status="failed",
+                    stopped_reason="failure",
+                    failure_reason_value=failure_reason,
+                )
 
+            level_end_start = time.monotonic()
             level_end_stable_count, should_stop, pending_level_end, detection = _check_level_end(
                 yihuan_cafe,
                 profile,
@@ -423,45 +627,71 @@ def yihuan_cafe_run_session(
                 phase_trace=phase_trace,
                 start_time=start_time,
             )
+            _perf_time(perf_stats, "level_end_check_before_stock", time.monotonic() - level_end_start)
+            _perf_count(perf_stats, "level_end_check_count")
             level_end_detection = detection
             if should_stop:
                 level_outcome = str(detection.get("outcome") or "unknown")
                 stopped_reason = "level_end"
                 break
             if pending_level_end:
+                sleep_start = time.monotonic()
                 _sleep_ms(int(profile["level_end_poll_ms"]))
+                _perf_time(perf_stats, "level_end_pending_sleep", time.monotonic() - sleep_start)
                 continue
 
-            coffee_stock, made_batch = _ensure_coffee_stock(
+            stock_sync_start = time.monotonic()
+            stock_sync_result = _sync_stocks_from_visual(
+                yihuan_cafe,
+                capture.image,
+                profile_name=resolved_profile,
+                stocks=stocks,
+                phase_trace=phase_trace,
+                start_time=start_time,
+            )
+            _perf_time(perf_stats, "stock_visual_sync_before_scan", time.monotonic() - stock_sync_start)
+            _perf_count(perf_stats, "stock_visual_sync_count")
+            _perf_count(
+                perf_stats,
+                "stock_visual_correction_count",
+                len(list(stock_sync_result.get("corrections") or [])),
+            )
+
+            restock_start = time.monotonic()
+            made_stocks = _ensure_all_depleted_stocks(
                 app,
                 profile,
-                coffee_stock=coffee_stock,
+                stocks=stocks,
+                batches_made=batches_made,
                 phase_trace=phase_trace,
                 start_time=start_time,
             )
-            if made_batch:
-                coffee_batches_made += 1
+            restock_elapsed = time.monotonic() - restock_start
+            _perf_time(perf_stats, "restock_before_scan", restock_elapsed)
+            _perf_count(perf_stats, "restock_before_scan_call_count")
+            _perf_count(perf_stats, "restock_stock_started_count", len(made_stocks))
+            if made_stocks:
+                logger.info(
+                    "Cafe[stock] replenished_before_scan stocks=%s remaining=%s elapsed_sec=%.3f",
+                    made_stocks,
+                    stocks,
+                    restock_elapsed,
+                )
 
+            capture_start = time.monotonic()
             capture = app.capture()
+            _perf_time(perf_stats, "capture_before_scan", time.monotonic() - capture_start)
+            _perf_count(perf_stats, "capture_count")
             if not capture.success or capture.image is None:
                 failure_reason = "capture_failed"
                 logger.error("Cafe[session] capture failed")
-                return {
-                    "status": "failed",
-                    "stopped_reason": "failure",
-                    "failure_reason": failure_reason,
-                    "orders_completed": orders_completed,
-                    "coffee_batches_made": coffee_batches_made,
-                    "coffee_stock_remaining": coffee_stock,
-                    "recognized_counts": recognized_counts,
-                    "unknown_scan_count": unknown_scan_count,
-                    "level_outcome": level_outcome,
-                    "level_end_detection": level_end_detection,
-                    "phase_trace": phase_trace,
-                    "elapsed_sec": round(time.monotonic() - start_time, 3),
-                    "profile_name": resolved_profile,
-                }
+                return result_payload(
+                    status="failed",
+                    stopped_reason="failure",
+                    failure_reason_value=failure_reason,
+                )
 
+            level_end_start = time.monotonic()
             level_end_stable_count, should_stop, pending_level_end, detection = _check_level_end(
                 yihuan_cafe,
                 profile,
@@ -471,27 +701,82 @@ def yihuan_cafe_run_session(
                 phase_trace=phase_trace,
                 start_time=start_time,
             )
+            _perf_time(perf_stats, "level_end_check_before_scan", time.monotonic() - level_end_start)
+            _perf_count(perf_stats, "level_end_check_count")
             level_end_detection = detection
             if should_stop:
                 level_outcome = str(detection.get("outcome") or "unknown")
                 stopped_reason = "level_end"
                 break
             if pending_level_end:
+                sleep_start = time.monotonic()
                 _sleep_ms(int(profile["level_end_poll_ms"]))
+                _perf_time(perf_stats, "level_end_pending_sleep", time.monotonic() - sleep_start)
                 continue
 
+            scan_start = time.monotonic()
             orders = yihuan_cafe.analyze_orders(capture.image, profile_name=resolved_profile)
+            scan_elapsed = time.monotonic() - scan_start
+            scan_debug = {}
+            if hasattr(yihuan_cafe, "get_last_order_scan_debug"):
+                scan_debug = dict(yihuan_cafe.get_last_order_scan_debug() or {})
+            _perf_time(perf_stats, "order_scan", scan_elapsed)
+            _perf_count(perf_stats, "order_scan_count")
+            _perf_time(perf_stats, "order_scan_locator", float(scan_debug.get("locator_sec", 0.0) or 0.0))
+            _perf_time(perf_stats, "order_scan_classify", float(scan_debug.get("classification_sec", 0.0) or 0.0))
+            _perf_time(perf_stats, "order_scan_fallback", float(scan_debug.get("fallback_sec", 0.0) or 0.0))
+            if bool(scan_debug.get("fallback_used")):
+                _perf_count(perf_stats, "order_scan_fallback_count")
+            if scan_debug.get("fallback_skipped_reason"):
+                _perf_count(perf_stats, "order_scan_fallback_skipped_count")
+            logger.info(
+                "Cafe[perf] scan elapsed_sec=%.3f orders=%s unknown_scan_count=%s stocks=%s",
+                scan_elapsed,
+                len(orders),
+                unknown_scan_count,
+                dict(stocks),
+            )
+            if scan_debug:
+                logger.info(
+                    "Cafe[scan_debug] strategy=%s locators=%s classified=%s fallback_used=%s fallback_allowed=%s "
+                    "fallback_reason=%s fallback_skipped_reason=%s miss_count=%s locator_ms=%.1f classify_ms=%.1f "
+                    "fallback_ms=%.1f total_ms=%.1f",
+                    scan_debug.get("strategy"),
+                    scan_debug.get("locator_count"),
+                    scan_debug.get("classified_count"),
+                    bool(scan_debug.get("fallback_used")),
+                    bool(scan_debug.get("fallback_allowed")),
+                    scan_debug.get("fallback_reason"),
+                    scan_debug.get("fallback_skipped_reason"),
+                    scan_debug.get("two_stage_miss_count"),
+                    float(scan_debug.get("locator_sec", 0.0) or 0.0) * 1000.0,
+                    float(scan_debug.get("classification_sec", 0.0) or 0.0) * 1000.0,
+                    float(scan_debug.get("fallback_sec", 0.0) or 0.0) * 1000.0,
+                    float(scan_debug.get("total_sec", 0.0) or 0.0) * 1000.0,
+                )
             if not orders:
                 unknown_scan_count += 1
+                _perf_count(perf_stats, "no_order_scan_count")
                 if unknown_scan_count <= 5 or unknown_scan_count % 20 == 0:
                     logger.info("Cafe[scan] no supported order unknown_scan_count=%s", unknown_scan_count)
+                sleep_start = time.monotonic()
                 _sleep_ms(int(profile["poll_ms"]))
+                _perf_time(perf_stats, "no_order_sleep", time.monotonic() - sleep_start)
                 continue
 
             selected = orders[0]
             recipe_id = str(selected["recipe_id"])
+            order_selected_at = time.monotonic()
+            if last_order_completed_at is not None:
+                gap_sec = order_selected_at - last_order_completed_at
+                _perf_observe(perf_stats, "order_gap", recipe_id, gap_sec)
+                logger.info(
+                    "Cafe[perf] order_gap recipe=%s previous_completed_to_selected_sec=%.3f",
+                    recipe_id,
+                    gap_sec,
+                )
             logger.info(
-                "Cafe[order] selected=%s score=%.4f center=(%s,%s) all=%s stock=%s",
+                "Cafe[order] selected=%s score=%.4f center=(%s,%s) all=%s stocks=%s batches=%s",
                 recipe_id,
                 float(selected["score"]),
                 selected["center_x"],
@@ -505,7 +790,8 @@ def yihuan_cafe_run_session(
                     }
                     for order in orders
                 ],
-                coffee_stock,
+                dict(stocks),
+                dict(batches_made),
             )
             _append_trace(
                 phase_trace,
@@ -516,24 +802,32 @@ def yihuan_cafe_run_session(
                     "score": selected["score"],
                     "center_x": selected["center_x"],
                     "center_y": selected["center_y"],
-                    "coffee_stock_before": coffee_stock,
+                    "stocks_before": dict(stocks),
                 },
             )
 
-            coffee_stock, made_batch = _execute_recipe(
-                app,
-                profile,
+            recipe_start = time.monotonic()
+            consumed_stock_id = _execute_recipe(app, profile, recipe_id, stocks=stocks)
+            recipe_elapsed = time.monotonic() - recipe_start
+            selected_to_completed_sec = time.monotonic() - order_selected_at
+            _perf_time(perf_stats, "recipe_execute", recipe_elapsed)
+            _perf_observe(perf_stats, "recipe_elapsed", recipe_id, selected_to_completed_sec)
+            logger.info(
+                "Cafe[perf] order_timing recipe=%s selected_to_completed_sec=%.3f recipe_execute_sec=%.3f",
                 recipe_id,
-                coffee_stock=coffee_stock,
+                selected_to_completed_sec,
+                recipe_elapsed,
             )
             orders_completed += 1
             recognized_counts[recipe_id] = int(recognized_counts.get(recipe_id, 0)) + 1
+            last_order_completed_at = time.monotonic()
             logger.info(
-                "Cafe[order] completed=%s orders_completed=%s stock_remaining=%s batches=%s",
+                "Cafe[order] completed=%s consumed_stock=%s orders_completed=%s stocks=%s batches=%s",
                 recipe_id,
+                consumed_stock_id,
                 orders_completed,
-                coffee_stock,
-                coffee_batches_made,
+                dict(stocks),
+                dict(batches_made),
             )
             _append_trace(
                 phase_trace,
@@ -541,32 +835,27 @@ def yihuan_cafe_run_session(
                 event="order_completed",
                 payload={
                     "recipe_id": recipe_id,
-                    "coffee_stock_after": coffee_stock,
-                    "coffee_batches_made": coffee_batches_made,
+                    "consumed_stock_id": consumed_stock_id,
+                    "stocks_after": dict(stocks),
+                    "batches_made": dict(batches_made),
                     "orders_completed": orders_completed,
                 },
             )
 
+            capture_start = time.monotonic()
             capture = app.capture()
+            _perf_time(perf_stats, "capture_after_order", time.monotonic() - capture_start)
+            _perf_count(perf_stats, "capture_count")
             if not capture.success or capture.image is None:
                 failure_reason = "capture_failed"
                 logger.error("Cafe[session] capture failed after order")
-                return {
-                    "status": "failed",
-                    "stopped_reason": "failure",
-                    "failure_reason": failure_reason,
-                    "orders_completed": orders_completed,
-                    "coffee_batches_made": coffee_batches_made,
-                    "coffee_stock_remaining": coffee_stock,
-                    "recognized_counts": recognized_counts,
-                    "unknown_scan_count": unknown_scan_count,
-                    "level_outcome": level_outcome,
-                    "level_end_detection": level_end_detection,
-                    "phase_trace": phase_trace,
-                    "elapsed_sec": round(time.monotonic() - start_time, 3),
-                    "profile_name": resolved_profile,
-                }
+                return result_payload(
+                    status="failed",
+                    stopped_reason="failure",
+                    failure_reason_value=failure_reason,
+                )
 
+            level_end_start = time.monotonic()
             level_end_stable_count, should_stop, pending_level_end, detection = _check_level_end(
                 yihuan_cafe,
                 profile,
@@ -576,73 +865,100 @@ def yihuan_cafe_run_session(
                 phase_trace=phase_trace,
                 start_time=start_time,
             )
+            _perf_time(perf_stats, "level_end_check_after_order", time.monotonic() - level_end_start)
+            _perf_count(perf_stats, "level_end_check_count")
             level_end_detection = detection
             if should_stop:
                 level_outcome = str(detection.get("outcome") or "unknown")
                 stopped_reason = "level_end"
                 break
             if pending_level_end:
+                sleep_start = time.monotonic()
                 _sleep_ms(int(profile["level_end_poll_ms"]))
+                _perf_time(perf_stats, "level_end_pending_sleep", time.monotonic() - sleep_start)
                 continue
 
-            if coffee_stock <= 0 and _should_keep_stocking(
+            stock_sync_start = time.monotonic()
+            stock_sync_result = _sync_stocks_from_visual(
+                yihuan_cafe,
+                capture.image,
+                profile_name=resolved_profile,
+                stocks=stocks,
+                phase_trace=phase_trace,
+                start_time=start_time,
+            )
+            _perf_time(perf_stats, "stock_visual_sync_after_order", time.monotonic() - stock_sync_start)
+            _perf_count(perf_stats, "stock_visual_sync_count")
+            _perf_count(
+                perf_stats,
+                "stock_visual_correction_count",
+                len(list(stock_sync_result.get("corrections") or [])),
+            )
+
+            depleted_stock_ids = [
+                stock_id
+                for stock_id in stock_profiles
+                if int(stocks.get(stock_id, 0)) <= 0
+            ]
+            if depleted_stock_ids and _should_keep_stocking(
                 orders_completed=orders_completed,
                 max_orders=max_orders_value,
                 deadline=deadline,
             ):
                 logger.info(
-                    "Cafe[stock] depleted after order=%s orders_completed=%s; replenishing before next scan",
-                    recipe_id,
+                    "Cafe[stock] depleted_after_order=%s orders_completed=%s; replenishing before next scan",
+                    depleted_stock_ids,
                     orders_completed,
                 )
                 _append_trace(
                     phase_trace,
                     start_time=start_time,
-                    event="coffee_stock_depleted_after_order",
-                    payload={"orders_completed": orders_completed},
+                    event="stock_depleted_after_order",
+                    payload={
+                        "stock_ids": depleted_stock_ids,
+                        "orders_completed": orders_completed,
+                    },
                 )
-                coffee_stock, made_batch = _ensure_coffee_stock(
+                restock_start = time.monotonic()
+                _ensure_all_depleted_stocks(
                     app,
                     profile,
-                    coffee_stock=coffee_stock,
+                    stocks=stocks,
+                    batches_made=batches_made,
                     phase_trace=phase_trace,
                     start_time=start_time,
                 )
-                if made_batch:
-                    coffee_batches_made += 1
+                restock_elapsed = time.monotonic() - restock_start
+                _perf_time(perf_stats, "restock_after_order", restock_elapsed)
+                _perf_count(perf_stats, "restock_after_order_call_count")
+                _perf_count(perf_stats, "restock_stock_started_count", len(depleted_stock_ids))
+                logger.info(
+                    "Cafe[perf] restock_after_order elapsed_sec=%.3f depleted=%s remaining=%s",
+                    restock_elapsed,
+                    depleted_stock_ids,
+                    dict(stocks),
+                )
 
-        logger.info("Cafe[session] stopped reason=%s orders_completed=%s", stopped_reason, orders_completed)
-        return {
-            "status": "success",
-            "stopped_reason": stopped_reason,
-            "failure_reason": None,
-            "orders_completed": orders_completed,
-            "coffee_batches_made": coffee_batches_made,
-            "coffee_stock_remaining": coffee_stock,
-            "recognized_counts": recognized_counts,
-            "unknown_scan_count": unknown_scan_count,
-            "level_outcome": level_outcome,
-            "level_end_detection": level_end_detection,
-            "phase_trace": phase_trace,
-            "elapsed_sec": round(time.monotonic() - start_time, 3),
-            "profile_name": resolved_profile,
-        }
+        logger.info(
+            "Cafe[session] stopped reason=%s orders_completed=%s stocks=%s batches=%s",
+            stopped_reason,
+            orders_completed,
+            dict(stocks),
+            dict(batches_made),
+        )
+        logger.info("Cafe[perf] summary=%s", _round_perf_stats(perf_stats))
+        return result_payload(
+            status="success",
+            stopped_reason=stopped_reason,
+            failure_reason_value=None,
+        )
     except Exception as exc:  # noqa: BLE001
         failure_reason = type(exc).__name__
         logger.exception("Cafe[session] failed: %s", exc)
-        return {
-            "status": "failed",
-            "stopped_reason": "exception",
-            "failure_reason": failure_reason,
-            "failure_message": str(exc),
-            "orders_completed": orders_completed,
-            "coffee_batches_made": coffee_batches_made,
-            "coffee_stock_remaining": coffee_stock,
-            "recognized_counts": recognized_counts,
-            "unknown_scan_count": unknown_scan_count,
-            "level_outcome": level_outcome,
-            "level_end_detection": level_end_detection,
-            "phase_trace": phase_trace,
-            "elapsed_sec": round(time.monotonic() - start_time, 3),
-            "profile_name": resolved_profile,
-        }
+        logger.info("Cafe[perf] summary=%s", _round_perf_stats(perf_stats))
+        return result_payload(
+            status="failed",
+            stopped_reason="exception",
+            failure_reason_value=failure_reason,
+            extra={"failure_message": str(exc)},
+        )

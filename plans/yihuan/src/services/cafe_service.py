@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import time
 from typing import Any
 
 import cv2
@@ -31,6 +32,10 @@ class YihuanCafeService:
         self._template_dir = self._profile_dir / "templates"
         self._profile_cache: dict[str, dict[str, Any]] = {}
         self._template_cache: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+        self._template_gray_cache: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+        self._template_scaled_gray_cache: dict[tuple[str, float], tuple[np.ndarray, np.ndarray]] = {}
+        self._order_scan_state: dict[str, dict[str, Any]] = {}
+        self._last_order_scan_debug: dict[str, Any] = {}
 
     def load_profile(self, profile_name: str | None = None) -> dict[str, Any]:
         resolved_name = str(profile_name or self._DEFAULT_PROFILE).strip() or self._DEFAULT_PROFILE
@@ -50,6 +55,8 @@ class YihuanCafeService:
         }
         if not order_templates:
             raise ValueError(f"Cafe profile has no order_templates: {profile_path}")
+
+        stock_profiles = self._coerce_stock_profiles(payload)
 
         normalized = {
             "profile_name": str(payload.get("profile_name") or resolved_name),
@@ -131,6 +138,61 @@ class YihuanCafeService:
             "level_end_stable_frames": max(int(payload.get("level_end_stable_frames", 2) or 2), 1),
             "level_end_poll_ms": max(int(payload.get("level_end_poll_ms", 120) or 120), 10),
             "order_search_region": self._coerce_region(payload.get("order_search_region"), default=(220, 60, 720, 250)),
+            "order_locator_enabled": self._coerce_bool(payload.get("order_locator_enabled", True)),
+            "order_locator_fallback_full_scan": self._coerce_bool(
+                payload.get("order_locator_fallback_full_scan", True)
+            ),
+            "order_locator_fallback_every_no_order_scans": max(
+                int(payload.get("order_locator_fallback_every_no_order_scans", 10) or 10),
+                1,
+            ),
+            "order_locator_region": self._coerce_region(
+                payload.get("order_locator_region"),
+                default=(160, 75, 820, 190),
+            ),
+            "order_locator_hough_dp": max(float(payload.get("order_locator_hough_dp", 1.0) or 1.0), 0.1),
+            "order_locator_hough_min_dist": max(
+                int(payload.get("order_locator_hough_min_dist", 45) or 45),
+                1,
+            ),
+            "order_locator_hough_param1": max(
+                int(payload.get("order_locator_hough_param1", 80) or 80),
+                1,
+            ),
+            "order_locator_hough_param2": max(
+                int(payload.get("order_locator_hough_param2", 30) or 30),
+                1,
+            ),
+            "order_locator_min_radius": max(int(payload.get("order_locator_min_radius", 18) or 18), 1),
+            "order_locator_max_radius": max(int(payload.get("order_locator_max_radius", 45) or 45), 1),
+            "order_locator_yellow_hsv_lower": self._coerce_hsv_triplet(
+                payload.get("order_locator_yellow_hsv_lower"),
+                default=(8, 70, 80),
+            ),
+            "order_locator_yellow_hsv_upper": self._coerce_hsv_triplet(
+                payload.get("order_locator_yellow_hsv_upper"),
+                default=(45, 255, 255),
+            ),
+            "order_locator_min_yellow_pixels": max(
+                int(payload.get("order_locator_min_yellow_pixels", 80) or 80),
+                1,
+            ),
+            "order_locator_yellow_inner_pad": max(
+                int(payload.get("order_locator_yellow_inner_pad", 8) or 8),
+                0,
+            ),
+            "order_locator_yellow_outer_pad": max(
+                int(payload.get("order_locator_yellow_outer_pad", 10) or 10),
+                0,
+            ),
+            "order_locator_nms_distance_px": max(
+                int(payload.get("order_locator_nms_distance_px", 45) or 45),
+                1,
+            ),
+            "order_classify_region_size": self._coerce_size(
+                payload.get("order_classify_region_size"),
+                default=(130, 120),
+            ),
             "order_templates": order_templates,
             "template_threshold": float(payload.get("template_threshold", 0.78) or 0.78),
             "template_scales": self._coerce_float_list(
@@ -140,18 +202,22 @@ class YihuanCafeService:
             "match_nms_distance_px": max(int(payload.get("match_nms_distance_px", 35) or 35), 1),
             "match_peak_window_px": max(int(payload.get("match_peak_window_px", 9) or 9), 1),
             "max_candidates_per_template_scale": max(int(payload.get("max_candidates_per_template_scale", 80) or 80), 1),
-            "coffee_station_point": self._coerce_point(payload.get("coffee_station_point"), default=(1035, 665)),
-            "coffee_stock_point": self._coerce_point(payload.get("coffee_stock_point"), default=(1190, 665)),
+            "stock_profiles": stock_profiles,
+            "coffee_station_point": stock_profiles["coffee"]["station_point"],
+            "coffee_stock_point": stock_profiles["coffee"]["stock_point"],
             "coffee_stock_points": self._coerce_point_list(
                 payload.get("coffee_stock_points"),
                 default=((1145, 665), (1190, 665), (1235, 665)),
             ),
             "glass_point": self._coerce_point(payload.get("glass_point"), default=(1200, 535)),
             "coffee_cup_point": self._coerce_point(payload.get("coffee_cup_point"), default=(825, 525)),
+            "bacon_point": self._coerce_point(payload.get("bacon_point"), default=(130, 430)),
+            "egg_point": self._coerce_point(payload.get("egg_point"), default=(260, 430)),
+            "jam_point": self._coerce_point(payload.get("jam_point"), default=(675, 430)),
             "cream_point": self._coerce_point(payload.get("cream_point"), default=(925, 430)),
             "latte_art_point": self._coerce_point(payload.get("latte_art_point"), default=(1030, 430)),
-            "coffee_batch_size": max(int(payload.get("coffee_batch_size", 3) or 3), 1),
-            "coffee_make_sec": max(float(payload.get("coffee_make_sec", 1.5) or 1.5), 0.0),
+            "coffee_batch_size": stock_profiles["coffee"]["batch_size"],
+            "coffee_make_sec": stock_profiles["coffee"]["make_sec"],
             "start_game_delay_sec": max(float(payload.get("start_game_delay_sec", 1.0) or 1.0), 0.0),
             "click_repeat_count": max(int(payload.get("click_repeat_count", 3) or 3), 1),
             "click_hold_ms": max(int(payload.get("click_hold_ms", 100) or 100), 0),
@@ -171,6 +237,201 @@ class YihuanCafeService:
         profile_name: str | None = None,
     ) -> list[dict[str, Any]]:
         profile = self.load_profile(profile_name)
+        profile_key = str(profile["profile_name"])
+        scan_start = time.perf_counter()
+        debug: dict[str, Any] = {
+            "strategy": "two_stage",
+            "locator_count": 0,
+            "classified_count": 0,
+            "fallback_used": False,
+            "fallback_allowed": False,
+            "fallback_reason": None,
+            "fallback_skipped_reason": None,
+            "two_stage_miss_count": int(self._order_scan_state.get(profile_key, {}).get("two_stage_miss_count", 0)),
+            "locator_sec": 0.0,
+            "classification_sec": 0.0,
+            "fallback_sec": 0.0,
+            "total_sec": 0.0,
+        }
+        if bool(profile["order_locator_enabled"]):
+            locator_start = time.perf_counter()
+            locators = self.detect_order_candidates(source_image, profile_name=profile_name)
+            debug["locator_sec"] = time.perf_counter() - locator_start
+            debug["locator_count"] = len(locators)
+            if locators:
+                candidates: list[dict[str, Any]] = []
+                classify_start = time.perf_counter()
+                for locator in locators:
+                    classified = self._classify_order_candidate(source_image, locator, profile=profile)
+                    if classified is not None:
+                        candidates.append(classified)
+                debug["classification_sec"] = time.perf_counter() - classify_start
+                debug["classified_count"] = len(candidates)
+
+                if candidates:
+                    kept = self._nms_by_center_distance(candidates, int(profile["match_nms_distance_px"]))
+                    kept.sort(key=lambda item: (float(item["center_x"]), float(item["center_y"])))
+                    self._set_order_scan_debug(
+                        profile_key,
+                        debug,
+                        scan_start=scan_start,
+                        orders_returned=len(kept),
+                        reset_miss_count=True,
+                    )
+                    return kept
+
+            if not bool(profile["order_locator_fallback_full_scan"]):
+                debug["fallback_skipped_reason"] = "disabled"
+                self._increment_order_scan_miss(profile_key, debug)
+                self._set_order_scan_debug(profile_key, debug, scan_start=scan_start, orders_returned=0)
+                return []
+
+            miss_count = self._increment_order_scan_miss(profile_key, debug)
+            fallback_every = int(profile["order_locator_fallback_every_no_order_scans"])
+            debug["fallback_allowed"] = miss_count % fallback_every == 0
+            debug["two_stage_miss_count"] = miss_count
+            if not bool(debug["fallback_allowed"]):
+                debug["fallback_skipped_reason"] = f"throttled_{miss_count}_of_{fallback_every}"
+                self._set_order_scan_debug(profile_key, debug, scan_start=scan_start, orders_returned=0)
+                return []
+
+            debug["strategy"] = "full_scan_fallback"
+            debug["fallback_used"] = True
+            debug["fallback_reason"] = "two_stage_no_match"
+            fallback_start = time.perf_counter()
+            orders = self._analyze_orders_full_scan(source_image, profile=profile)
+            debug["fallback_sec"] = time.perf_counter() - fallback_start
+            if orders:
+                self._reset_order_scan_miss(profile_key)
+                debug["two_stage_miss_count"] = 0
+            self._set_order_scan_debug(profile_key, debug, scan_start=scan_start, orders_returned=len(orders))
+            return orders
+
+        debug["strategy"] = "full_scan"
+        debug["fallback_used"] = True
+        debug["fallback_allowed"] = True
+        debug["fallback_reason"] = "locator_disabled"
+        fallback_start = time.perf_counter()
+        orders = self._analyze_orders_full_scan(source_image, profile=profile)
+        debug["fallback_sec"] = time.perf_counter() - fallback_start
+        self._set_order_scan_debug(profile_key, debug, scan_start=scan_start, orders_returned=len(orders))
+        return orders
+
+    def get_last_order_scan_debug(self) -> dict[str, Any]:
+        return dict(self._last_order_scan_debug)
+
+    def reset_order_scan_state(self, profile_name: str | None = None) -> None:
+        if profile_name is None:
+            self._order_scan_state.clear()
+            self._last_order_scan_debug = {}
+            return
+
+        profile = self.load_profile(profile_name)
+        self._order_scan_state.pop(str(profile["profile_name"]), None)
+        if self._last_order_scan_debug.get("profile_name") == str(profile["profile_name"]):
+            self._last_order_scan_debug = {}
+
+    def _increment_order_scan_miss(self, profile_key: str, debug: dict[str, Any]) -> int:
+        state = self._order_scan_state.setdefault(profile_key, {"two_stage_miss_count": 0})
+        state["two_stage_miss_count"] = int(state.get("two_stage_miss_count", 0)) + 1
+        debug["two_stage_miss_count"] = int(state["two_stage_miss_count"])
+        return int(state["two_stage_miss_count"])
+
+    def _reset_order_scan_miss(self, profile_key: str) -> None:
+        state = self._order_scan_state.setdefault(profile_key, {"two_stage_miss_count": 0})
+        state["two_stage_miss_count"] = 0
+
+    def _set_order_scan_debug(
+        self,
+        profile_key: str,
+        debug: dict[str, Any],
+        *,
+        scan_start: float,
+        orders_returned: int,
+        reset_miss_count: bool = False,
+    ) -> None:
+        if reset_miss_count:
+            self._reset_order_scan_miss(profile_key)
+            debug["two_stage_miss_count"] = 0
+
+        debug["profile_name"] = profile_key
+        debug["orders_returned"] = int(orders_returned)
+        debug["total_sec"] = time.perf_counter() - scan_start
+        self._last_order_scan_debug = dict(debug)
+
+    def detect_order_candidates(
+        self,
+        source_image: np.ndarray,
+        *,
+        profile_name: str | None = None,
+    ) -> list[dict[str, Any]]:
+        profile = self.load_profile(profile_name)
+        region = profile["order_locator_region"]
+        crop = self._crop_region(source_image, region)
+        if crop.size == 0:
+            return []
+
+        crop_rgb = self._ensure_rgb(crop)
+        gray = cv2.cvtColor(crop_rgb, cv2.COLOR_RGB2GRAY)
+        gray = cv2.medianBlur(gray, 5)
+        circles = cv2.HoughCircles(
+            gray,
+            cv2.HOUGH_GRADIENT,
+            dp=float(profile["order_locator_hough_dp"]),
+            minDist=float(profile["order_locator_hough_min_dist"]),
+            param1=float(profile["order_locator_hough_param1"]),
+            param2=float(profile["order_locator_hough_param2"]),
+            minRadius=int(profile["order_locator_min_radius"]),
+            maxRadius=int(profile["order_locator_max_radius"]),
+        )
+        if circles is None:
+            return []
+
+        hsv = cv2.cvtColor(crop_rgb, cv2.COLOR_RGB2HSV)
+        yellow_mask = cv2.inRange(
+            hsv,
+            np.array(profile["order_locator_yellow_hsv_lower"], dtype=np.uint8),
+            np.array(profile["order_locator_yellow_hsv_upper"], dtype=np.uint8),
+        )
+
+        region_x, region_y, _, _ = region
+        candidates: list[dict[str, Any]] = []
+        for raw_x, raw_y, raw_radius in np.round(circles[0, :]).astype(int).tolist():
+            radius = int(raw_radius)
+            yellow_pixels = self._count_annulus_pixels(
+                yellow_mask,
+                center_x=int(raw_x),
+                center_y=int(raw_y),
+                radius=radius,
+                inner_pad=int(profile["order_locator_yellow_inner_pad"]),
+                outer_pad=int(profile["order_locator_yellow_outer_pad"]),
+            )
+            if yellow_pixels < int(profile["order_locator_min_yellow_pixels"]):
+                continue
+
+            center_x = int(region_x + raw_x)
+            center_y = int(region_y + raw_y)
+            candidates.append(
+                {
+                    "score": float(yellow_pixels),
+                    "center_x": center_x,
+                    "center_y": center_y,
+                    "radius": radius,
+                    "yellow_pixels": yellow_pixels,
+                    "bbox": [center_x - radius, center_y - radius, radius * 2, radius * 2],
+                }
+            )
+
+        kept = self._nms_by_center_distance(candidates, int(profile["order_locator_nms_distance_px"]))
+        kept.sort(key=lambda item: (float(item["center_x"]), float(item["center_y"])))
+        return kept
+
+    def _analyze_orders_full_scan(
+        self,
+        source_image: np.ndarray,
+        *,
+        profile: dict[str, Any],
+    ) -> list[dict[str, Any]]:
         region = profile["order_search_region"]
         crop = self._crop_region(source_image, region)
         if crop.size == 0:
@@ -193,6 +454,58 @@ class YihuanCafeService:
         kept = self._nms_by_center_distance(candidates, int(profile["match_nms_distance_px"]))
         kept.sort(key=lambda item: (float(item["center_x"]), float(item["center_y"])))
         return kept
+
+    def _classify_order_candidate(
+        self,
+        source_image: np.ndarray,
+        locator: dict[str, Any],
+        *,
+        profile: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        region_width, region_height = profile["order_classify_region_size"]
+        center_x = int(locator["center_x"])
+        center_y = int(locator["center_y"])
+        region = (
+            int(round(center_x - region_width / 2.0)),
+            int(round(center_y - region_height / 2.0)),
+            int(region_width),
+            int(region_height),
+        )
+        crop = self._crop_region(source_image, region)
+        if crop.size == 0:
+            return None
+
+        best: dict[str, Any] | None = None
+        crop_gray = cv2.cvtColor(self._ensure_rgb(crop), cv2.COLOR_RGB2GRAY)
+        for recipe_id, template_name in profile["order_templates"].items():
+            template, mask = self._load_template_gray(template_name)
+            match = self._best_template_match_multiscale(
+                crop_gray,
+                template,
+                mask,
+                recipe_id=recipe_id,
+                template_name=template_name,
+                region=region,
+                profile=profile,
+            )
+            if match is None:
+                continue
+            if best is None or float(match["score"]) > float(best["score"]):
+                best = match
+
+        if best is None:
+            return None
+
+        best.update(
+            {
+                "center_x": int(locator["center_x"]),
+                "center_y": int(locator["center_y"]),
+                "locator_radius": int(locator["radius"]),
+                "locator_yellow_pixels": int(locator["yellow_pixels"]),
+                "locator_bbox": list(locator["bbox"]),
+            }
+        )
+        return best
 
     def detect_level_started(
         self,
@@ -390,6 +703,66 @@ class YihuanCafeService:
 
         return candidates
 
+    def _best_template_match_multiscale(
+        self,
+        crop: np.ndarray,
+        template: np.ndarray,
+        mask: np.ndarray,
+        *,
+        recipe_id: str,
+        template_name: str | None = None,
+        region: Region,
+        profile: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        threshold = float(profile["template_threshold"])
+        region_x, region_y, _, _ = region
+        best: dict[str, Any] | None = None
+
+        for scale in profile["template_scales"]:
+            template_width = max(int(round(template.shape[1] * float(scale))), 4)
+            template_height = max(int(round(template.shape[0] * float(scale))), 4)
+            if template_width >= crop.shape[1] or template_height >= crop.shape[0]:
+                continue
+
+            if template_name:
+                scaled_template, scaled_mask = self._load_scaled_template_gray(
+                    template_name,
+                    scale=float(scale),
+                )
+            else:
+                interpolation = cv2.INTER_AREA if float(scale) < 1.0 else cv2.INTER_CUBIC
+                scaled_template = cv2.resize(template, (template_width, template_height), interpolation=interpolation)
+                scaled_mask = cv2.resize(mask, (template_width, template_height), interpolation=cv2.INTER_NEAREST)
+            if int(np.count_nonzero(scaled_mask)) < 20:
+                continue
+
+            result = cv2.matchTemplate(
+                crop,
+                scaled_template,
+                cv2.TM_CCOEFF_NORMED,
+                mask=scaled_mask,
+            )
+            result = np.nan_to_num(result, nan=-1.0, posinf=-1.0, neginf=-1.0)
+            _, max_value, _, max_location = cv2.minMaxLoc(result)
+            score = float(max_value)
+            if score < threshold:
+                continue
+
+            left, top = int(max_location[0]), int(max_location[1])
+            bbox = [int(region_x + left), int(region_y + top), int(template_width), int(template_height)]
+            candidate = {
+                "recipe_id": recipe_id,
+                "score": round(score, 4),
+                "center_x": int(round(bbox[0] + bbox[2] / 2.0)),
+                "center_y": int(round(bbox[1] + bbox[3] / 2.0)),
+                "bbox": bbox,
+                "scale": round(float(scale), 3),
+            }
+            if best is None or float(candidate["score"]) > float(best["score"]):
+                best = candidate
+
+        return best
+
     def _load_template(self, template_name: str) -> tuple[np.ndarray, np.ndarray]:
         cached = self._template_cache.get(template_name)
         if cached is not None:
@@ -415,6 +788,33 @@ class YihuanCafeService:
 
         loaded = (np.ascontiguousarray(image), np.ascontiguousarray(mask))
         self._template_cache[template_name] = loaded
+        return loaded
+
+    def _load_template_gray(self, template_name: str) -> tuple[np.ndarray, np.ndarray]:
+        cached = self._template_gray_cache.get(template_name)
+        if cached is not None:
+            return cached
+
+        image, mask = self._load_template(template_name)
+        gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+        loaded = (np.ascontiguousarray(gray), mask)
+        self._template_gray_cache[template_name] = loaded
+        return loaded
+
+    def _load_scaled_template_gray(self, template_name: str, *, scale: float) -> tuple[np.ndarray, np.ndarray]:
+        cache_key = (template_name, round(float(scale), 4))
+        cached = self._template_scaled_gray_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        template, mask = self._load_template_gray(template_name)
+        template_width = max(int(round(template.shape[1] * float(scale))), 4)
+        template_height = max(int(round(template.shape[0] * float(scale))), 4)
+        interpolation = cv2.INTER_AREA if float(scale) < 1.0 else cv2.INTER_CUBIC
+        scaled_template = cv2.resize(template, (template_width, template_height), interpolation=interpolation)
+        scaled_mask = cv2.resize(mask, (template_width, template_height), interpolation=cv2.INTER_NEAREST)
+        loaded = (np.ascontiguousarray(scaled_template), np.ascontiguousarray(scaled_mask))
+        self._template_scaled_gray_cache[cache_key] = loaded
         return loaded
 
     @staticmethod
@@ -586,6 +986,36 @@ class YihuanCafeService:
         return source_image[top:bottom, left:right]
 
     @staticmethod
+    def _count_annulus_pixels(
+        mask: np.ndarray,
+        *,
+        center_x: int,
+        center_y: int,
+        radius: int,
+        inner_pad: int,
+        outer_pad: int,
+    ) -> int:
+        if mask.size == 0:
+            return 0
+
+        outer_radius = max(int(radius) + int(outer_pad), 1)
+        inner_radius = max(int(radius) - int(inner_pad), 0)
+        left = max(int(center_x) - outer_radius, 0)
+        top = max(int(center_y) - outer_radius, 0)
+        right = min(int(center_x) + outer_radius + 1, mask.shape[1])
+        bottom = min(int(center_y) + outer_radius + 1, mask.shape[0])
+        if right <= left or bottom <= top:
+            return 0
+
+        local_mask = mask[top:bottom, left:right]
+        yy, xx = np.ogrid[top:bottom, left:right]
+        distance_sq = (xx - int(center_x)) ** 2 + (yy - int(center_y)) ** 2
+        annulus = (distance_sq <= outer_radius * outer_radius) & (
+            distance_sq >= inner_radius * inner_radius
+        )
+        return int(np.count_nonzero(local_mask[annulus]))
+
+    @staticmethod
     def _coerce_size(value: Any, *, default: tuple[int, int]) -> tuple[int, int]:
         if isinstance(value, (list, tuple)) and len(value) >= 2:
             return max(int(value[0]), 1), max(int(value[1]), 1)
@@ -640,3 +1070,159 @@ class YihuanCafeService:
             if number > 0:
                 result.append(number)
         return result or list(default)
+
+    def _coerce_stock_profiles(self, payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        raw_profiles = dict(payload.get("stock_profiles") or {})
+        defaults: dict[str, dict[str, Any]] = {
+            "bread": {
+                "station_point": (75, 665),
+                "stock_point": (65, 525),
+                "monitor_region": (20, 500, 120, 80),
+                "monitor_min_pixels": 120,
+                "monitor_white_s_max": 90,
+                "monitor_white_v_min": 170,
+                "monitor_use_warm": False,
+                "batch_size": 3,
+                "make_sec": 1.5,
+                "enabled": True,
+            },
+            "croissant": {
+                "station_point": (475, 665),
+                "stock_point": (425, 525),
+                "monitor_region": (340, 515, 170, 75),
+                "monitor_min_pixels": 30,
+                "monitor_white_s_max": 90,
+                "monitor_white_v_min": 170,
+                "monitor_use_warm": False,
+                "batch_size": 3,
+                "make_sec": 1.5,
+                "enabled": True,
+            },
+            "cake": {
+                "station_point": (690, 665),
+                "stock_point": (840, 665),
+                "monitor_region": (770, 635, 190, 80),
+                "monitor_min_pixels": 150,
+                "monitor_white_s_max": 90,
+                "monitor_white_v_min": 170,
+                "monitor_use_warm": True,
+                "batch_size": 6,
+                "make_sec": 1.5,
+                "enabled": True,
+            },
+            "coffee": {
+                "station_point": self._coerce_point(payload.get("coffee_station_point"), default=(1035, 665)),
+                "stock_point": self._coerce_point(payload.get("coffee_stock_point"), default=(1190, 665)),
+                "monitor_region": (1145, 610, 130, 105),
+                "monitor_min_pixels": 120,
+                "monitor_white_s_max": 90,
+                "monitor_white_v_min": 150,
+                "monitor_use_warm": False,
+                "batch_size": max(int(payload.get("coffee_batch_size", 3) or 3), 1),
+                "make_sec": max(float(payload.get("coffee_make_sec", 1.5) or 1.5), 0.0),
+                "enabled": True,
+            },
+        }
+
+        normalized: dict[str, dict[str, Any]] = {}
+        for stock_id, fallback in defaults.items():
+            raw = dict(raw_profiles.get(stock_id) or {})
+            enabled_value = raw.get("enabled", fallback["enabled"])
+            if isinstance(enabled_value, str):
+                enabled = enabled_value.strip().lower() not in {"0", "false", "no", "off", ""}
+            else:
+                enabled = bool(enabled_value)
+            normalized[stock_id] = {
+                "station_point": self._coerce_point(raw.get("station_point"), default=fallback["station_point"]),
+                "stock_point": self._coerce_point(raw.get("stock_point"), default=fallback["stock_point"]),
+                "monitor_region": self._coerce_region(
+                    raw.get("monitor_region"),
+                    default=fallback["monitor_region"],
+                ),
+                "monitor_min_pixels": max(
+                    int(raw.get("monitor_min_pixels", fallback["monitor_min_pixels"]) or fallback["monitor_min_pixels"]),
+                    1,
+                ),
+                "monitor_white_s_max": max(
+                    min(int(raw.get("monitor_white_s_max", fallback["monitor_white_s_max"]) or fallback["monitor_white_s_max"]), 255),
+                    0,
+                ),
+                "monitor_white_v_min": max(
+                    min(int(raw.get("monitor_white_v_min", fallback["monitor_white_v_min"]) or fallback["monitor_white_v_min"]), 255),
+                    0,
+                ),
+                "monitor_use_warm": self._coerce_bool(raw.get("monitor_use_warm", fallback["monitor_use_warm"])),
+                "monitor_warm_h_max": max(min(int(raw.get("monitor_warm_h_max", 35) or 35), 179), 0),
+                "monitor_warm_s_min": max(min(int(raw.get("monitor_warm_s_min", 60) or 60), 255), 0),
+                "monitor_warm_v_min": max(min(int(raw.get("monitor_warm_v_min", 120) or 120), 255), 0),
+                "batch_size": max(int(raw.get("batch_size", fallback["batch_size"]) or fallback["batch_size"]), 1),
+                "make_sec": max(float(raw.get("make_sec", fallback["make_sec"]) or fallback["make_sec"]), 0.0),
+                "enabled": enabled,
+            }
+
+        return normalized
+
+    def detect_stock_status(
+        self,
+        source_image: np.ndarray,
+        *,
+        profile_name: str | None = None,
+    ) -> dict[str, Any]:
+        profile = self.load_profile(profile_name)
+        stocks: dict[str, Any] = {}
+        for stock_id, stock_profile in profile["stock_profiles"].items():
+            if not bool(stock_profile.get("enabled", True)):
+                continue
+            region = stock_profile["monitor_region"]
+            crop = self._crop_region(source_image, region)
+            if crop.size == 0:
+                stocks[stock_id] = {
+                    "present": None,
+                    "reason": "empty_region",
+                    "region": list(region),
+                    "product_pixels": 0,
+                    "min_pixels": int(stock_profile["monitor_min_pixels"]),
+                    "white_pixels": 0,
+                    "warm_pixels": 0,
+                }
+                continue
+
+            crop_rgb = self._ensure_rgb(crop)
+            hsv = cv2.cvtColor(crop_rgb, cv2.COLOR_RGB2HSV)
+            hue, sat, val = cv2.split(hsv)
+            white_mask = (
+                (sat <= int(stock_profile["monitor_white_s_max"]))
+                & (val >= int(stock_profile["monitor_white_v_min"]))
+            )
+            warm_mask = np.zeros_like(white_mask, dtype=bool)
+            if bool(stock_profile.get("monitor_use_warm", False)):
+                warm_mask = (
+                    (hue <= int(stock_profile["monitor_warm_h_max"]))
+                    & (sat >= int(stock_profile["monitor_warm_s_min"]))
+                    & (val >= int(stock_profile["monitor_warm_v_min"]))
+                )
+            product_mask = white_mask | warm_mask
+            white_pixels = int(np.count_nonzero(white_mask))
+            warm_pixels = int(np.count_nonzero(warm_mask))
+            product_pixels = int(np.count_nonzero(product_mask))
+            min_pixels = int(stock_profile["monitor_min_pixels"])
+            present = product_pixels >= min_pixels
+            stocks[stock_id] = {
+                "present": present,
+                "reason": "present" if present else "empty",
+                "region": list(region),
+                "product_pixels": product_pixels,
+                "min_pixels": min_pixels,
+                "white_pixels": white_pixels,
+                "warm_pixels": warm_pixels,
+            }
+
+        return {"stocks": stocks}
+
+    @staticmethod
+    def _coerce_bool(value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() not in {"0", "false", "no", "off", ""}
+        return bool(value)
