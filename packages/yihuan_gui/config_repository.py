@@ -7,7 +7,7 @@ import yaml
 
 from plans.aura_base.src.platform.runtime_config import WINDOWS_CAPTURE_BACKENDS, WINDOWS_INPUT_BACKENDS
 
-from .logic import FishingRunDefaults, GuiPreferences, RuntimeSettings
+from .logic import CafeRunDefaults, FishingRunDefaults, GuiPreferences, RuntimeSettings, extract_cafe_loop_defaults
 
 
 DEFAULT_HISTORY_LIMIT = 50
@@ -23,6 +23,7 @@ class YihuanConfigRepository:
         self.config_path = self.plan_root / "config.yaml"
         self.input_profiles_dir = self.plan_root / "data" / "input_profiles"
         self.fishing_profiles_dir = self.plan_root / "data" / "fishing"
+        self.cafe_profiles_dir = self.plan_root / "data" / "cafe"
         self._settings_store = settings_store
 
     def load_config(self) -> dict[str, Any]:
@@ -48,6 +49,12 @@ class YihuanConfigRepository:
         if not self.fishing_profiles_dir.exists():
             return []
         names = sorted(path.stem for path in self.fishing_profiles_dir.glob("*.yaml"))
+        return names
+
+    def list_cafe_profiles(self) -> list[str]:
+        if not self.cafe_profiles_dir.exists():
+            return []
+        names = sorted(path.stem for path in self.cafe_profiles_dir.glob("*.yaml"))
         return names
 
     def get_runtime_settings(self) -> RuntimeSettings:
@@ -123,6 +130,45 @@ class YihuanConfigRepository:
         payload["fishing"] = fishing
         self.save_config(payload)
 
+    def get_cafe_defaults(self, cafe_task: Mapping[str, Any] | None = None) -> CafeRunDefaults:
+        defaults = extract_cafe_loop_defaults(cafe_task)
+        return CafeRunDefaults(
+            profile_name=self._resolve_cafe_profile_name(defaults.profile_name),
+            max_seconds=defaults.max_seconds,
+            max_orders=defaults.max_orders,
+            start_game=defaults.start_game,
+            wait_level_started=defaults.wait_level_started,
+            min_order_interval_sec=defaults.min_order_interval_sec,
+            min_order_duration_sec=defaults.min_order_duration_sec,
+        )
+
+    def update_cafe_defaults(self, defaults: CafeRunDefaults) -> None:
+        self.validate_cafe_defaults(defaults)
+        payload = self.load_config()
+        cafe = dict(payload.get("cafe") or {})
+        cafe["profile_name"] = defaults.profile_name
+        payload["cafe"] = cafe
+        self.save_config(payload)
+
+    def get_cafe_profile_default_seconds(self, profile_name: str) -> float | None:
+        profile_name = str(profile_name or "").strip()
+        if not profile_name:
+            return None
+
+        profile_path = self.cafe_profiles_dir / f"{profile_name}.yaml"
+        if not profile_path.is_file():
+            return None
+
+        payload = yaml.safe_load(profile_path.read_text(encoding="utf-8")) or {}
+        if not isinstance(payload, Mapping):
+            return None
+
+        try:
+            value = float(payload.get("max_seconds"))
+        except (TypeError, ValueError):
+            return None
+        return value if value > 0 else None
+
     def validate_runtime_settings(self, runtime_settings: RuntimeSettings) -> None:
         if not runtime_settings.title_regex.strip():
             raise ValueError("窗口标题匹配规则不能为空。")
@@ -155,6 +201,14 @@ class YihuanConfigRepository:
         if available_profiles and profile_name not in available_profiles:
             raise ValueError(f"钓鱼识别档案不存在：{profile_name}")
 
+    def validate_cafe_defaults(self, defaults: CafeRunDefaults) -> None:
+        profile_name = str(defaults.profile_name).strip()
+        if not profile_name:
+            raise ValueError("沙威玛识别档案不能为空。")
+        available_profiles = self.list_cafe_profiles()
+        if available_profiles and profile_name not in available_profiles:
+            raise ValueError(f"沙威玛识别档案不存在：{profile_name}")
+
     @staticmethod
     def exclude_titles_to_text(exclude_titles: Iterable[Any]) -> str:
         return "\n".join(str(item).strip() for item in exclude_titles if str(item).strip())
@@ -180,6 +234,12 @@ class YihuanConfigRepository:
             if resolved:
                 return resolved
         return default_profile
+
+    def _resolve_cafe_profile_name(self, fallback_profile: str) -> str:
+        payload = self.load_config()
+        cafe = dict(payload.get("cafe") or {})
+        configured_profile = str(cafe.get("profile_name") or cafe.get("profile") or "").strip()
+        return configured_profile or str(fallback_profile or CafeRunDefaults().profile_name)
 
     def _settings_value(self, key: str, default_value: Any) -> Any:
         if self._settings_store is None:

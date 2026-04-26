@@ -39,24 +39,29 @@ from packages.aura_core.runtime.privilege import (
 from .bridge import RunnerBridge
 from .config_repository import YihuanConfigRepository
 from .logic import (
+    CafeRunDefaults,
     DEVELOPER_TASK_REFS,
     FishingRunDefaults,
     GAME_NAME,
     GuiPreferences,
     RuntimeSettings,
     TASK_AUTO_LOOP,
+    TASK_CAFE_AUTO_LOOP,
     TASK_PLAN_LOADED,
     TASK_PLAN_READY,
     TASK_RUNTIME_PROBE,
     build_auto_loop_inputs,
+    build_cafe_loop_inputs,
     build_settings_sections,
     auto_loop_business_status,
+    cafe_loop_business_status,
     event_display_name,
     extract_auto_loop_defaults,
     format_event_stream,
     format_nodes_timeline,
     history_row_label,
     render_auto_loop_brief_text,
+    render_cafe_loop_brief_text,
     render_history_summary_html,
     render_json,
     render_overview_plan_info_html,
@@ -130,6 +135,7 @@ class YihuanMainWindow(QMainWindow):
         self._ui_preferences = self._repo.get_ui_preferences()
         self._runtime_settings = self._repo.get_runtime_settings()
         self._fishing_defaults = self._repo.get_fishing_defaults()
+        self._cafe_defaults = self._repo.get_cafe_defaults()
 
         self._task_rows: dict[str, dict[str, Any]] = {}
         self._history_rows: dict[str, dict[str, Any]] = {}
@@ -140,8 +146,10 @@ class YihuanMainWindow(QMainWindow):
         self._latest_doctor: dict[str, Any] = {}
         self._live_state: dict[str, Any] = {"active_runs": {}}
         self._current_fishing_cid: str | None = None
+        self._current_cafe_cid: str | None = None
         self._current_history_cid: str | None = None
         self._auto_loop_available = False
+        self._cafe_auto_loop_available = False
 
         central = QWidget(self)
         central_layout = QVBoxLayout(central)
@@ -152,15 +160,18 @@ class YihuanMainWindow(QMainWindow):
 
         self._overview_page = QWidget(self)
         self._fishing_page = QWidget(self)
+        self._cafe_page = QWidget(self)
         self._history_page = QWidget(self)
         self._settings_page = QWidget(self)
         self._tabs.addTab(self._overview_page, "总览")
         self._tabs.addTab(self._fishing_page, "钓鱼")
+        self._tabs.addTab(self._cafe_page, "沙威玛")
         self._tabs.addTab(self._history_page, "历史")
         self._tabs.addTab(self._settings_page, "设置")
 
         self._build_overview_page()
         self._build_fishing_page()
+        self._build_cafe_page()
         self._build_history_page()
         self._build_settings_page()
         self._restore_window_settings()
@@ -295,6 +306,71 @@ class YihuanMainWindow(QMainWindow):
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
 
+    def _build_cafe_page(self) -> None:
+        layout = QVBoxLayout(self._cafe_page)
+        splitter = QSplitter(Qt.Horizontal, self._cafe_page)
+        layout.addWidget(splitter)
+
+        left_scroll = QScrollArea(splitter)
+        left_scroll.setWidgetResizable(True)
+        left_body = QWidget(left_scroll)
+        left_layout = QVBoxLayout(left_body)
+        left_scroll.setWidget(left_body)
+        splitter.addWidget(left_scroll)
+
+        control_group = QGroupBox("沙威玛", left_body)
+        control_form = QFormLayout(control_group)
+        self._cafe_profile_label = QLabel("-", control_group)
+        self._cafe_max_seconds_spin = QSpinBox(control_group)
+        self._cafe_max_seconds_spin.setMinimum(0)
+        self._cafe_max_seconds_spin.setMaximum(99999)
+        self._cafe_max_seconds_spin.setToolTip("填 0 时使用当前沙威玛识别档案里的默认运行时长。")
+        self._cafe_max_orders_spin = QSpinBox(control_group)
+        self._cafe_max_orders_spin.setMinimum(0)
+        self._cafe_max_orders_spin.setMaximum(99999)
+        self._cafe_max_orders_spin.setToolTip("填 0 时不按订单数量停止。")
+        self._cafe_start_game_check = QCheckBox("自动点击开始游戏", control_group)
+        self._cafe_wait_level_started_check = QCheckBox("等待关卡开始", control_group)
+        self._start_cafe_button = QPushButton("开始沙威玛", control_group)
+        self._start_cafe_button.clicked.connect(self._start_cafe_loop)
+        self._cafe_limit_hint_label = QLabel("", control_group)
+        self._cafe_limit_hint_label.setWordWrap(True)
+        control_form.addRow("沙威玛识别档案", self._cafe_profile_label)
+        control_form.addRow("最大运行秒数（0 = 使用档案默认）", self._cafe_max_seconds_spin)
+        control_form.addRow("最大订单数（0 = 不限制订单数）", self._cafe_max_orders_spin)
+        control_form.addRow("说明", self._cafe_limit_hint_label)
+        control_form.addRow("", self._cafe_start_game_check)
+        control_form.addRow("", self._cafe_wait_level_started_check)
+        control_form.addRow("", self._start_cafe_button)
+        left_layout.addWidget(control_group)
+
+        state_group = QGroupBox("当前状态", left_body)
+        state_form = QFormLayout(state_group)
+        self._cafe_task_label = QLabel("等待执行", state_group)
+        self._cafe_guard_label = QLabel("空闲", state_group)
+        self._cafe_last_result_label = QLabel("暂无结果", state_group)
+        self._cafe_last_result_label.setWordWrap(True)
+        state_form.addRow("当前任务", self._cafe_task_label)
+        state_form.addRow("运行守卫", self._cafe_guard_label)
+        state_form.addRow("最近结果", self._cafe_last_result_label)
+        left_layout.addWidget(state_group)
+
+        summary_group = QGroupBox("最近一次沙威玛摘要", left_body)
+        summary_layout = QVBoxLayout(summary_group)
+        self._cafe_summary_browser = QTextBrowser(summary_group)
+        self._cafe_summary_browser.setHtml("<p>尚未执行沙威玛。</p>")
+        summary_layout.addWidget(self._cafe_summary_browser)
+        view_history_button = QPushButton("跳转到历史记录", summary_group)
+        view_history_button.clicked.connect(self._jump_cafe_to_history)
+        summary_layout.addWidget(view_history_button)
+        left_layout.addWidget(summary_group)
+        left_layout.addStretch(1)
+
+        self._cafe_detail_viewer = RunDetailViewer(splitter)
+        splitter.addWidget(self._cafe_detail_viewer)
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+
     def _build_history_page(self) -> None:
         layout = QVBoxLayout(self._history_page)
         button_row = QHBoxLayout()
@@ -339,6 +415,12 @@ class YihuanMainWindow(QMainWindow):
         self._fishing_profile_combo = QComboBox(fishing_group)
         fishing_form.addRow("钓鱼识别档案", self._fishing_profile_combo)
         layout.addWidget(fishing_group)
+
+        cafe_group = QGroupBox("沙威玛设置", self._settings_page)
+        cafe_form = QFormLayout(cafe_group)
+        self._cafe_profile_combo = QComboBox(cafe_group)
+        cafe_form.addRow("沙威玛识别档案", self._cafe_profile_combo)
+        layout.addWidget(cafe_group)
 
         ui_group = QGroupBox("界面偏好", self._settings_page)
         ui_form = QFormLayout(ui_group)
@@ -404,6 +486,19 @@ class YihuanMainWindow(QMainWindow):
         )
         self._fishing_profile_label.setText(self._fishing_defaults.profile_name)
 
+        self._cafe_defaults = self._repo.get_cafe_defaults(self._task_rows.get(TASK_CAFE_AUTO_LOOP))
+        self._set_combo_items(
+            self._cafe_profile_combo,
+            self._cafe_defaults.profile_name,
+            self._repo.list_cafe_profiles(),
+        )
+        self._cafe_profile_label.setText(self._cafe_defaults.profile_name)
+        self._cafe_max_seconds_spin.setValue(int(self._cafe_defaults.max_seconds))
+        self._cafe_max_orders_spin.setValue(int(self._cafe_defaults.max_orders))
+        self._cafe_start_game_check.setChecked(bool(self._cafe_defaults.start_game))
+        self._cafe_wait_level_started_check.setChecked(bool(self._cafe_defaults.wait_level_started))
+        self._refresh_cafe_limit_hint()
+
         self._history_limit_spin.setValue(int(ui_map["gui.history_limit"].value))
         self._auto_probe_check.setChecked(bool(ui_map["gui.auto_runtime_probe_on_startup"].value))
         self._expand_developer_tools_check.setChecked(bool(ui_map["gui.expand_developer_tools"].value))
@@ -420,6 +515,18 @@ class YihuanMainWindow(QMainWindow):
         index = combo.findData(str(current_value or ""))
         if index >= 0:
             combo.setCurrentIndex(index)
+
+    def _refresh_cafe_limit_hint(self) -> None:
+        default_seconds = self._repo.get_cafe_profile_default_seconds(self._cafe_defaults.profile_name)
+        if default_seconds is None:
+            default_text = "当前档案默认运行时长未知"
+        else:
+            seconds_text = int(default_seconds) if float(default_seconds).is_integer() else round(default_seconds, 1)
+            default_text = f"当前档案默认运行时长：{seconds_text} 秒"
+
+        self._cafe_limit_hint_label.setText(
+            f"{default_text}。最大运行秒数填 0 会使用这个默认值；最大订单数填 0 表示不限制订单数。"
+        )
 
     def _setup_bridge(self) -> None:
         self._bridge_thread = QThread(self)
@@ -483,10 +590,18 @@ class YihuanMainWindow(QMainWindow):
         fishing_defaults = FishingRunDefaults(
             profile_name=str(self._fishing_profile_combo.currentData() or self._fishing_profile_combo.currentText())
         )
+        cafe_defaults = CafeRunDefaults(
+            profile_name=str(self._cafe_profile_combo.currentData() or self._cafe_profile_combo.currentText()),
+            max_seconds=int(self._cafe_max_seconds_spin.value()),
+            max_orders=int(self._cafe_max_orders_spin.value()),
+            start_game=self._cafe_start_game_check.isChecked(),
+            wait_level_started=self._cafe_wait_level_started_check.isChecked(),
+        )
 
         try:
             self._repo.update_runtime_settings(runtime_settings)
             self._repo.update_fishing_defaults(fishing_defaults)
+            self._repo.update_cafe_defaults(cafe_defaults)
             self._repo.save_ui_preferences(ui_preferences)
         except Exception as exc:  # noqa: BLE001
             QMessageBox.warning(self, "保存设置失败", str(exc))
@@ -495,7 +610,10 @@ class YihuanMainWindow(QMainWindow):
         self._runtime_settings = runtime_settings
         self._ui_preferences = ui_preferences
         self._fishing_defaults = fishing_defaults
+        self._cafe_defaults = cafe_defaults
         self._fishing_profile_label.setText(self._fishing_defaults.profile_name)
+        self._cafe_profile_label.setText(self._cafe_defaults.profile_name)
+        self._refresh_cafe_limit_hint()
         self._developer_group.setChecked(ui_preferences.expand_developer_tools)
         self.request_apply_preferences.emit(ui_preferences)
         self.request_refresh_history.emit()
@@ -510,13 +628,23 @@ class YihuanMainWindow(QMainWindow):
         self._task_rows = {str(task.get("task_ref") or ""): dict(task) for task in tasks}
         self._task_count_label.setText(str(len(self._task_rows)))
         self._auto_loop_available = TASK_AUTO_LOOP in self._task_rows
+        self._cafe_auto_loop_available = TASK_CAFE_AUTO_LOOP in self._task_rows
         self._fishing_defaults = self._repo.get_fishing_defaults(self._task_rows.get(TASK_AUTO_LOOP))
+        self._cafe_defaults = self._repo.get_cafe_defaults(self._task_rows.get(TASK_CAFE_AUTO_LOOP))
         self._fishing_profile_label.setText(self._fishing_defaults.profile_name)
+        self._cafe_profile_label.setText(self._cafe_defaults.profile_name)
+        self._cafe_max_seconds_spin.setValue(int(self._cafe_defaults.max_seconds))
+        self._cafe_max_orders_spin.setValue(int(self._cafe_defaults.max_orders))
+        self._cafe_start_game_check.setChecked(bool(self._cafe_defaults.start_game))
+        self._cafe_wait_level_started_check.setChecked(bool(self._cafe_defaults.wait_level_started))
+        self._refresh_cafe_limit_hint()
         if not self._auto_loop_available:
             self._start_auto_loop_button.setEnabled(False)
             self._fishing_guard_label.setText("未找到自动循环钓鱼任务。")
-        else:
-            self._apply_task_guard()
+        if not self._cafe_auto_loop_available:
+            self._start_cafe_button.setEnabled(False)
+            self._cafe_guard_label.setText("未找到沙威玛任务。")
+        self._apply_task_guard()
 
     def _dispatch_task(self, task_ref: str, inputs: dict[str, Any]) -> None:
         self._settings_store.setValue("window/last_task_ref", task_ref)
@@ -530,12 +658,34 @@ class YihuanMainWindow(QMainWindow):
         payload = build_auto_loop_inputs(self._max_rounds_spin.value(), self._fishing_defaults)
         self._dispatch_task(TASK_AUTO_LOOP, payload)
 
+    def _start_cafe_loop(self) -> None:
+        if not self._cafe_auto_loop_available:
+            QMessageBox.warning(self, "无法启动沙威玛", "当前工作区中没有找到沙威玛任务。")
+            return
+        payload = build_cafe_loop_inputs(
+            self._cafe_max_seconds_spin.value(),
+            self._cafe_max_orders_spin.value(),
+            self._cafe_start_game_check.isChecked(),
+            self._cafe_wait_level_started_check.isChecked(),
+            self._cafe_defaults,
+        )
+        self._dispatch_task(TASK_CAFE_AUTO_LOOP, payload)
+
     def _jump_to_history(self) -> None:
         self._tabs.setCurrentWidget(self._history_page)
         if self._current_fishing_cid and self._current_fishing_cid in self._history_rows:
             for index in range(self._history_list.count()):
                 item = self._history_list.item(index)
                 if str(item.data(Qt.UserRole) or "") == self._current_fishing_cid:
+                    self._history_list.setCurrentItem(item)
+                    break
+
+    def _jump_cafe_to_history(self) -> None:
+        self._tabs.setCurrentWidget(self._history_page)
+        if self._current_cafe_cid and self._current_cafe_cid in self._history_rows:
+            for index in range(self._history_list.count()):
+                item = self._history_list.item(index)
+                if str(item.data(Qt.UserRole) or "") == self._current_cafe_cid:
                     self._history_list.setCurrentItem(item)
                     break
 
@@ -546,6 +696,8 @@ class YihuanMainWindow(QMainWindow):
             self._cid_to_task_ref[cid] = task_ref
             if task_ref == TASK_AUTO_LOOP:
                 self._current_fishing_cid = cid
+            elif task_ref == TASK_CAFE_AUTO_LOOP:
+                self._current_cafe_cid = cid
         self._recent_cid_label.setText(cid or "-")
         self._recent_status_label.setText(status_display_name(dispatch.get("status") or "-"))
         self.statusBar().showMessage(f"{task_display_name(task_ref)} 已加入执行队列。", 5000)
@@ -562,6 +714,8 @@ class YihuanMainWindow(QMainWindow):
             self._history_detail_viewer.show_detail(payload)
         if self._current_fishing_cid == cid:
             self._fishing_detail_viewer.show_detail(payload)
+        if self._current_cafe_cid == cid:
+            self._cafe_detail_viewer.show_detail(payload)
 
         self._recent_status_label.setText(status_display_name(payload.get("status")))
         self._recent_cid_label.setText(cid)
@@ -573,7 +727,19 @@ class YihuanMainWindow(QMainWindow):
             self._fishing_last_result_label.setText(render_auto_loop_brief_text(payload))
             self._fishing_summary_browser.setHtml(render_history_summary_html(payload))
 
-        final_status = str(auto_loop_business_status(payload) or payload.get("status") or "").lower()
+        if str(payload.get("task_name") or "") == TASK_CAFE_AUTO_LOOP:
+            business_status = cafe_loop_business_status(payload)
+            if business_status:
+                self._recent_status_label.setText(status_display_name(business_status))
+            self._cafe_last_result_label.setText(render_cafe_loop_brief_text(payload))
+            self._cafe_summary_browser.setHtml(render_history_summary_html(payload))
+
+        final_status = str(
+            auto_loop_business_status(payload)
+            or cafe_loop_business_status(payload)
+            or payload.get("status")
+            or ""
+        ).lower()
         if final_status != "success":
             self._last_error_label.setText(
                 f"{task_display_name(payload.get('task_name'))}: {status_display_name(final_status)}"
@@ -607,25 +773,37 @@ class YihuanMainWindow(QMainWindow):
 
     def _apply_task_guard(self) -> None:
         active_runs = self._live_state.get("active_runs") or {}
-        enabled = self._auto_loop_available and task_is_enabled(TASK_AUTO_LOOP, active_runs)
-        self._start_auto_loop_button.setEnabled(enabled)
+        fishing_enabled = self._auto_loop_available and task_is_enabled(TASK_AUTO_LOOP, active_runs)
+        cafe_enabled = self._cafe_auto_loop_available and task_is_enabled(TASK_CAFE_AUTO_LOOP, active_runs)
+        self._start_auto_loop_button.setEnabled(fishing_enabled)
+        self._start_cafe_button.setEnabled(cafe_enabled)
 
-        active_fishing_task = None
+        active_runtime_task = None
         for run in active_runs.values():
             task_name = str(run.get("task_name") or "").strip()
-            if task_name.startswith("tasks:fishing:"):
-                active_fishing_task = task_name
+            if task_name.startswith(("tasks:fishing:", "tasks:cafe:")):
+                active_runtime_task = task_name
                 break
 
-        if active_fishing_task:
-            self._fishing_task_label.setText(task_display_name(active_fishing_task))
+        if active_runtime_task:
+            self._fishing_task_label.setText(task_display_name(active_runtime_task))
             self._fishing_guard_label.setText("已有会操作游戏窗口的任务在运行。")
+            self._cafe_task_label.setText(task_display_name(active_runtime_task))
+            self._cafe_guard_label.setText("已有会操作游戏窗口的任务在运行。")
         elif not self._auto_loop_available:
             self._fishing_task_label.setText("自动循环钓鱼任务缺失")
             self._fishing_guard_label.setText("无法启动")
         else:
             self._fishing_task_label.setText("等待执行")
             self._fishing_guard_label.setText("空闲")
+
+        if not active_runtime_task:
+            if not self._cafe_auto_loop_available:
+                self._cafe_task_label.setText("沙威玛任务缺失")
+                self._cafe_guard_label.setText("无法启动")
+            else:
+                self._cafe_task_label.setText("等待执行")
+                self._cafe_guard_label.setText("空闲")
 
     def _on_history_loaded(self, rows: list[dict[str, Any]]) -> None:
         previous_cid = self._current_history_cid

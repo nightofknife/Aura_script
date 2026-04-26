@@ -12,12 +12,14 @@ TASK_PLAN_LOADED = "tasks:checks:plan_loaded.yaml"
 TASK_RUNTIME_PROBE = "tasks:checks:runtime_probe.yaml"
 TASK_AUTO_LOOP = "tasks:fishing:auto_loop.yaml"
 TASK_LIVE_MONITOR = "tasks:fishing:live_monitor.yaml"
+TASK_CAFE_AUTO_LOOP = "tasks:cafe:auto_loop.yaml"
 
 VISIBLE_HISTORY_TASK_REFS = (
     TASK_PLAN_READY,
     TASK_PLAN_LOADED,
     TASK_RUNTIME_PROBE,
     TASK_AUTO_LOOP,
+    TASK_CAFE_AUTO_LOOP,
 )
 DEVELOPER_TASK_REFS = (TASK_PLAN_READY, TASK_PLAN_LOADED, TASK_RUNTIME_PROBE)
 TERMINAL_STATUSES = {"success", "error", "failed", "timeout", "cancelled", "partial"}
@@ -28,6 +30,7 @@ TASK_DISPLAY_NAMES = {
     TASK_RUNTIME_PROBE: "异环运行时探针",
     TASK_AUTO_LOOP: "自动循环钓鱼",
     TASK_LIVE_MONITOR: "钓鱼实时监视",
+    TASK_CAFE_AUTO_LOOP: "沙威玛",
 }
 
 STATUS_LABELS = {
@@ -47,6 +50,11 @@ STOP_REASON_LABELS = {
     "max_consecutive_failures": "达到最大连续失败次数",
     "duration_reached": "达到运行时长",
     "window_closed": "监视窗口已关闭",
+    "max_seconds": "达到最大运行秒数",
+    "max_orders": "达到最大订单数",
+    "level_end": "关卡结束",
+    "failure": "执行失败",
+    "exception": "发生异常",
 }
 
 FAILURE_REASON_LABELS = {
@@ -56,6 +64,40 @@ FAILURE_REASON_LABELS = {
     "post_duel_cleanup_timeout": "对抗结束清理超时",
     "not_ready": "未进入可抛竿状态",
     "duel_lost_to_ready": "对抗结束后回到准备态",
+    "capture_failed": "截图失败",
+    "level_start_capture_failed": "等待开局时截图失败",
+    "level_start_timeout": "等待关卡开始超时",
+}
+
+RECIPE_LABELS = {
+    "latte_coffee": "拿铁咖啡",
+    "cream_coffee": "奶油咖啡",
+    "bacon_bread": "培根面包",
+    "egg_croissant": "鸡蛋可颂",
+    "jam_cake": "果酱蛋糕",
+}
+
+STOCK_LABELS = {
+    "bread": "面包",
+    "croissant": "可颂",
+    "cake": "蛋糕",
+    "coffee": "咖啡",
+}
+
+CAFE_EVENT_LABELS = {
+    "start_game_clicked": "点击开始游戏",
+    "level_start_waiting": "等待关卡开始",
+    "level_started_confirmed": "确认关卡开始",
+    "stock_batch_started": "开始补货",
+    "stock_batch_ready": "补货完成",
+    "stock_visual_empty_correction": "视觉库存校正",
+    "order_pacing_wait": "订单节奏等待",
+    "fake_customer_hammer_clicked": "敲走假顾客",
+    "order_selected": "选择订单",
+    "order_completed": "完成订单",
+    "stock_depleted_after_order": "订单后库存耗尽",
+    "level_end_detected": "检测到关卡结束",
+    "level_start_timeout": "等待关卡开始超时",
 }
 
 PHASE_LABELS = {
@@ -175,6 +217,17 @@ class FishingRunDefaults:
 
 
 @dataclass(frozen=True)
+class CafeRunDefaults:
+    profile_name: str = "default_1280x720_cn"
+    max_seconds: int = 0
+    max_orders: int = 0
+    start_game: bool = True
+    wait_level_started: bool = True
+    min_order_interval_sec: float = 0.5
+    min_order_duration_sec: float = 0.0
+
+
+@dataclass(frozen=True)
 class SettingsField:
     key: str
     label: str
@@ -207,6 +260,24 @@ def build_auto_loop_inputs(max_rounds: Any, defaults: FishingRunDefaults) -> dic
     }
 
 
+def build_cafe_loop_inputs(
+    max_seconds: Any,
+    max_orders: Any,
+    start_game: Any,
+    wait_level_started: Any,
+    defaults: CafeRunDefaults,
+) -> dict[str, Any]:
+    return {
+        "profile_name": str(defaults.profile_name),
+        "max_seconds": int(max_seconds),
+        "max_orders": int(max_orders),
+        "start_game": bool(start_game),
+        "wait_level_started": bool(wait_level_started),
+        "min_order_interval_sec": float(defaults.min_order_interval_sec),
+        "min_order_duration_sec": float(defaults.min_order_duration_sec),
+    }
+
+
 def extract_auto_loop_defaults(task_row: Mapping[str, Any] | None) -> FishingRunDefaults:
     default_profile = FishingRunDefaults().profile_name
     for field in (task_row or {}).get("inputs") or []:
@@ -218,6 +289,34 @@ def extract_auto_loop_defaults(task_row: Mapping[str, Any] | None) -> FishingRun
         if resolved:
             return FishingRunDefaults(profile_name=resolved)
     return FishingRunDefaults(profile_name=default_profile)
+
+
+def extract_cafe_loop_defaults(task_row: Mapping[str, Any] | None) -> CafeRunDefaults:
+    values = {
+        "profile_name": CafeRunDefaults().profile_name,
+        "max_seconds": CafeRunDefaults().max_seconds,
+        "max_orders": CafeRunDefaults().max_orders,
+        "start_game": CafeRunDefaults().start_game,
+        "wait_level_started": CafeRunDefaults().wait_level_started,
+        "min_order_interval_sec": CafeRunDefaults().min_order_interval_sec,
+        "min_order_duration_sec": CafeRunDefaults().min_order_duration_sec,
+    }
+    for field in (task_row or {}).get("inputs") or []:
+        if not isinstance(field, Mapping):
+            continue
+        name = str(field.get("name") or "").strip()
+        if name not in values:
+            continue
+        values[name] = field.get("default", values[name])
+    return CafeRunDefaults(
+        profile_name=str(values["profile_name"] or CafeRunDefaults().profile_name),
+        max_seconds=int(float(values["max_seconds"] or 0)),
+        max_orders=int(float(values["max_orders"] or 0)),
+        start_game=_coerce_bool(values["start_game"]),
+        wait_level_started=_coerce_bool(values["wait_level_started"]),
+        min_order_interval_sec=float(values["min_order_interval_sec"] or 0.0),
+        min_order_duration_sec=float(values["min_order_duration_sec"] or 0.0),
+    )
 
 
 def build_settings_sections(
@@ -299,7 +398,7 @@ def build_settings_sections(
 
 def is_runtime_interacting_task(task_ref: str | None) -> bool:
     normalized = str(task_ref or "").strip()
-    return normalized == TASK_RUNTIME_PROBE or normalized.startswith("tasks:fishing:")
+    return normalized == TASK_RUNTIME_PROBE or normalized.startswith(("tasks:fishing:", "tasks:cafe:"))
 
 
 def task_is_enabled(task_ref: str | None, active_runs: Mapping[str, Mapping[str, Any]]) -> bool:
@@ -520,6 +619,9 @@ def render_task_result_html(task_ref: str | None, detail: Mapping[str, Any] | No
     if task_name == TASK_AUTO_LOOP and isinstance(user_data, Mapping):
         return render_auto_loop_result_html(user_data)
 
+    if task_name == TASK_CAFE_AUTO_LOOP and isinstance(user_data, Mapping):
+        return render_cafe_loop_result_html(user_data)
+
     if user_data is not None:
         return f"<pre>{html.escape(render_json(user_data))}</pre>"
     return "<p>当前没有可显示的任务输出。</p>"
@@ -534,6 +636,21 @@ def auto_loop_user_data(detail: Mapping[str, Any] | None) -> Mapping[str, Any] |
 
 def auto_loop_business_status(detail: Mapping[str, Any] | None) -> str | None:
     user_data = auto_loop_user_data(detail)
+    if not user_data:
+        return None
+    status = str(user_data.get("status") or "").strip().lower()
+    return status or None
+
+
+def cafe_loop_user_data(detail: Mapping[str, Any] | None) -> Mapping[str, Any] | None:
+    payload = dict(detail or {})
+    final_result = dict(payload.get("final_result") or {})
+    user_data = final_result.get("user_data")
+    return user_data if isinstance(user_data, Mapping) else None
+
+
+def cafe_loop_business_status(detail: Mapping[str, Any] | None) -> str | None:
+    user_data = cafe_loop_user_data(detail)
     if not user_data:
         return None
     status = str(user_data.get("status") or "").strip().lower()
@@ -569,6 +686,118 @@ def render_auto_loop_result_html(user_data: Mapping[str, Any]) -> str:
     else:
         lines.append("<p>暂无每轮结果。</p>")
     return "".join(lines)
+
+
+def render_cafe_loop_brief_text(detail: Mapping[str, Any] | None) -> str:
+    user_data = cafe_loop_user_data(detail)
+    if not user_data:
+        return "暂无沙威玛结果。"
+    return (
+        f"{status_display_name(user_data.get('status'))} / "
+        f"完成订单 {user_data.get('orders_completed', 0)} / "
+        f"驱赶假顾客 {user_data.get('fake_customers_driven', 0)} / "
+        f"停止原因 {stop_reason_display_name(user_data.get('stopped_reason'))} / "
+        f"关卡结果 {_cafe_level_outcome_display_name(user_data.get('level_outcome'))} / "
+        f"耗时 {_format_seconds(user_data.get('elapsed_sec'))}"
+    )
+
+
+def render_cafe_loop_result_html(user_data: Mapping[str, Any]) -> str:
+    lines = [
+        _kv_html("业务结果", status_display_name(user_data.get("status"))),
+        _kv_html("停止原因", stop_reason_display_name(user_data.get("stopped_reason"))),
+        _kv_html("失败原因", failure_reason_display_name(user_data.get("failure_reason"))),
+        _kv_html("完成订单数", user_data.get("orders_completed")),
+        _kv_html("检测到假顾客", user_data.get("fake_customers_detected")),
+        _kv_html("驱赶假顾客", user_data.get("fake_customers_driven")),
+        _kv_html("关卡结果", _cafe_level_outcome_display_name(user_data.get("level_outcome"))),
+        _kv_html("未知扫描次数", user_data.get("unknown_scan_count")),
+        _kv_html("最小订单间隔", _format_seconds(user_data.get("min_order_interval_sec"))),
+        _kv_html("单订单最短耗时", _format_seconds(user_data.get("min_order_duration_sec"))),
+        _kv_html("总耗时", _format_seconds(user_data.get("elapsed_sec"))),
+        _kv_html("识别档案", user_data.get("profile_name")),
+        _render_cafe_counts_table("订单统计", user_data.get("recognized_counts"), RECIPE_LABELS),
+        _render_cafe_counts_table("补货统计", user_data.get("batches_made"), STOCK_LABELS),
+        _render_cafe_counts_table("剩余库存", user_data.get("stocks_remaining"), STOCK_LABELS),
+        _render_pending_batches_table(user_data.get("pending_batches")),
+        _render_cafe_perf_stats(user_data.get("perf_stats")),
+        _render_cafe_trace_tail(user_data.get("phase_trace") or []),
+    ]
+    if user_data.get("failure_message"):
+        lines.insert(3, _kv_html("失败信息", user_data.get("failure_message")))
+    return "".join(lines)
+
+
+def _render_cafe_counts_table(title: str, values: Any, labels: Mapping[str, str]) -> str:
+    if not isinstance(values, Mapping):
+        return f"<p><b>{html.escape(title)}</b>：-</p>"
+    rows = [f"<p><b>{html.escape(title)}</b></p><table border='1' cellspacing='0' cellpadding='4'>"]
+    rows.append("<tr><th>项目</th><th>数量</th></tr>")
+    for key, value in dict(values).items():
+        rows.append(
+            "<tr>"
+            f"<td>{html.escape(labels.get(str(key), str(key)))}</td>"
+            f"<td>{html.escape(str(value))}</td>"
+            "</tr>"
+        )
+    rows.append("</table>")
+    return "".join(rows)
+
+
+def _render_pending_batches_table(values: Any) -> str:
+    if not isinstance(values, Mapping) or not values:
+        return "<p><b>未完成补货</b>：无</p>"
+    rows = ["<p><b>未完成补货</b></p><table border='1' cellspacing='0' cellpadding='4'>"]
+    rows.append("<tr><th>库存</th><th>批量</th><th>剩余时间</th></tr>")
+    for stock_id, raw_item in dict(values).items():
+        item = dict(raw_item or {}) if isinstance(raw_item, Mapping) else {}
+        rows.append(
+            "<tr>"
+            f"<td>{html.escape(STOCK_LABELS.get(str(stock_id), str(stock_id)))}</td>"
+            f"<td>{html.escape(str(item.get('batch_size', '-')))}</td>"
+            f"<td>{html.escape(_format_seconds(item.get('ready_in_sec')))}</td>"
+            "</tr>"
+        )
+    rows.append("</table>")
+    return "".join(rows)
+
+
+def _render_cafe_perf_stats(stats: Any) -> str:
+    if not isinstance(stats, Mapping):
+        return "<p><b>性能统计</b>：-</p>"
+    time_sec = dict(stats.get("time_sec") or {})
+    counts = dict(stats.get("counts") or {})
+    rows = ["<p><b>性能统计</b></p><table border='1' cellspacing='0' cellpadding='4'>"]
+    rows.append("<tr><th>指标</th><th>值</th></tr>")
+    for key, value in time_sec.items():
+        rows.append(f"<tr><td>{html.escape(_perf_label(key))}</td><td>{html.escape(_format_seconds(value))}</td></tr>")
+    for key, value in counts.items():
+        rows.append(f"<tr><td>{html.escape(_perf_label(key))}</td><td>{html.escape(str(value))}</td></tr>")
+    rows.append("</table>")
+    return "".join(rows)
+
+
+def _render_cafe_trace_tail(trace: Iterable[Mapping[str, Any]]) -> str:
+    tail = [dict(item) for item in list(trace)[-12:] if isinstance(item, Mapping)]
+    if not tail:
+        return "<p><b>事件轨迹</b>：-</p>"
+    rows = [
+        "<p><b>事件轨迹（最后 12 条）</b></p>"
+        "<table border='1' cellspacing='0' cellpadding='4'>"
+        "<tr><th>时间</th><th>事件</th><th>内容</th></tr>"
+    ]
+    for entry in tail:
+        event = str(entry.get("event") or "")
+        payload = {key: value for key, value in entry.items() if key not in {"t", "event"}}
+        rows.append(
+            "<tr>"
+            f"<td>{html.escape(_format_seconds(entry.get('t')))}</td>"
+            f"<td>{html.escape(CAFE_EVENT_LABELS.get(event, event or '-'))}</td>"
+            f"<td><pre>{html.escape(render_json(payload))}</pre></td>"
+            "</tr>"
+        )
+    rows.append("</table>")
+    return "".join(rows)
 
 
 def _render_auto_loop_rounds_table(results: list[dict[str, Any]]) -> str:
@@ -713,6 +942,80 @@ def _format_ratio(value: Any) -> str:
         return f"{float(value) * 100.0:.1f}%"
     except (TypeError, ValueError):
         return str(value)
+
+
+def _cafe_level_outcome_display_name(outcome: Any) -> str:
+    normalized = str(outcome or "").strip().lower()
+    if not normalized:
+        return "-"
+    return {
+        "success": "成功",
+        "failure": "失败",
+        "unknown": "未知",
+    }.get(normalized, normalized)
+
+
+def _perf_label(key: Any) -> str:
+    normalized = str(key or "")
+    labels = {
+        "start_game_click": "点击开始游戏耗时",
+        "start_game_click_count": "点击开始游戏次数",
+        "start_game_delay": "开始后等待",
+        "level_start_wait": "等待关卡开始",
+        "capture_before_stock": "补货前截图",
+        "capture_before_scan": "扫描前截图",
+        "capture_after_order": "订单后截图",
+        "capture_count": "截图次数",
+        "level_end_check_count": "关卡结束检测次数",
+        "level_end_check_before_stock": "补货前关卡结束检测",
+        "level_end_check_before_scan": "扫描前关卡结束检测",
+        "level_end_check_after_order": "订单后关卡结束检测",
+        "stock_visual_sync_count": "库存视觉同步次数",
+        "stock_visual_correction_count": "库存视觉校正次数",
+        "restock_before_scan": "扫描前补货耗时",
+        "restock_after_order": "订单后补货耗时",
+        "restock_stock_started_count": "启动补货次数",
+        "order_scan": "订单扫描",
+        "order_scan_count": "订单扫描次数",
+        "order_scan_locator": "订单定位",
+        "order_scan_classify": "订单分类",
+        "order_scan_fallback": "全图兜底扫描",
+        "order_scan_fallback_count": "全图兜底次数",
+        "order_scan_fallback_skipped_count": "兜底跳过次数",
+        "no_order_scan_count": "无订单扫描次数",
+        "no_order_sleep": "无订单等待",
+        "recipe_execute": "配方执行耗时",
+        "level_end_pending_sleep": "关卡结束确认等待",
+        "stock_async_wait": "异步补货等待",
+        "stock_async_wait_count": "异步补货等待次数",
+        "stock_batch_ready_count": "补货完成次数",
+        "order_pacing_wait": "订单节奏等待",
+        "order_pacing_wait_count": "订单节奏等待次数",
+        "min_order_interval_wait_count": "订单间隔等待次数",
+        "min_order_duration_wait_count": "订单最短耗时等待次数",
+        "fake_customer_scan_before_stock": "补货前假顾客扫描",
+        "fake_customer_scan_before_order": "订单前假顾客扫描",
+        "fake_customer_scan_count": "假顾客扫描次数",
+        "fake_customer_detected_count": "假顾客候选数量",
+        "fake_customer_hammer_click_count": "敲走假顾客次数",
+        "fake_customer_cooldown_skip_count": "假顾客冷却跳过次数",
+        "stock_visual_sync_before_scan": "扫描前库存视觉同步",
+        "stock_visual_sync_after_order": "订单后库存视觉同步",
+        "restock_before_scan_call_count": "扫描前补货调用次数",
+        "restock_after_order_call_count": "订单后补货调用次数",
+    }
+    return labels.get(normalized, normalized)
+
+
+def _coerce_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    lowered = str(value).strip().lower()
+    if lowered in {"1", "true", "yes", "on"}:
+        return True
+    if lowered in {"0", "false", "no", "off", ""}:
+        return False
+    return bool(value)
 
 
 def render_history_summary_html(detail: Mapping[str, Any] | None) -> str:

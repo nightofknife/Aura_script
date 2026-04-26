@@ -80,6 +80,53 @@ level_end_button_max_height: 55
 level_end_button_min_count: 2
 level_end_stable_frames: 2
 level_end_poll_ms: 120
+fake_customer_enabled: true
+fake_customer_region:
+  - 360
+  - 220
+  - 570
+  - 70
+fake_customer_hammer_point:
+  - 70
+  - 325
+fake_customer_hammer_debug_enabled: true
+fake_customer_hammer_debug_dir: tmp/cafe_fake_customer_hammers
+fake_customer_after_drive_ms: 200
+fake_customer_global_cooldown_sec: 0
+fake_customer_same_spot_cooldown_sec: 3.0
+fake_customer_same_spot_distance_px: 85
+fake_customer_red_hsv_lower_1:
+  - 0
+  - 145
+  - 90
+fake_customer_red_hsv_upper_1:
+  - 5
+  - 255
+  - 255
+fake_customer_red_hsv_lower_2:
+  - 176
+  - 145
+  - 90
+fake_customer_red_hsv_upper_2:
+  - 179
+  - 255
+  - 255
+fake_customer_min_component_area: 650
+fake_customer_max_component_area: 2000
+fake_customer_min_component_width: 25
+fake_customer_max_component_width: 75
+fake_customer_min_component_height: 30
+fake_customer_max_component_height: 90
+fake_customer_min_aspect_ratio: 0.6
+fake_customer_max_fill_ratio: 0.9
+fake_customer_center_x_min: 0
+fake_customer_center_x_max: 1280
+fake_customer_center_y_min: 235
+fake_customer_center_y_max: 315
+fake_customer_nms_distance_px: 70
+fake_customer_confirm_frames: 2
+fake_customer_clear_frames: 2
+fake_customer_after_hammer_suppress_sec: 0
 order_search_region:
   - 220
   - 60
@@ -129,6 +176,9 @@ template_scales:
 match_nms_distance_px: 35
 match_peak_window_px: 9
 max_candidates_per_template_scale: 80
+order_sort_strategy: fifo
+order_track_distance_px: 80
+order_track_forget_after_scans: 40
 stock_profiles:
   bread:
     station_point:
@@ -242,7 +292,12 @@ start_game_delay_sec: 1.0
 click_repeat_count: 2
 click_hold_ms: 100
 click_repeat_interval_ms: 100
+single_click_notes:
+  - start_game
+  - fake_customer_hammer
 step_delay_ms: 100
 craft_delay_ms: 100
-poll_ms: 120
+poll_ms: 40
+min_order_interval_sec: 0.5
+min_order_duration_sec: 0
 max_seconds: 130

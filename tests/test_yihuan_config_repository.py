@@ -5,7 +5,7 @@ import tempfile
 import unittest
 
 from packages.yihuan_gui.config_repository import YihuanConfigRepository
-from packages.yihuan_gui.logic import FishingRunDefaults, GuiPreferences, RuntimeSettings
+from packages.yihuan_gui.logic import CafeRunDefaults, FishingRunDefaults, GuiPreferences, RuntimeSettings
 
 
 class _MemorySettingsStore:
@@ -25,6 +25,7 @@ class TestYihuanConfigRepository(unittest.TestCase):
         self.plan_root = Path(self.temp_dir.name) / "yihuan"
         (self.plan_root / "data" / "input_profiles").mkdir(parents=True)
         (self.plan_root / "data" / "fishing").mkdir(parents=True)
+        (self.plan_root / "data" / "cafe").mkdir(parents=True)
         (self.plan_root / "data" / "input_profiles" / "default_pc.yaml").write_text("actions: {}\n", encoding="utf-8")
         (self.plan_root / "data" / "input_profiles" / "gamepad.yaml").write_text("actions: {}\n", encoding="utf-8")
         (self.plan_root / "data" / "fishing" / "default_1280x720_cn.yaml").write_text(
@@ -33,6 +34,14 @@ class TestYihuanConfigRepository(unittest.TestCase):
         )
         (self.plan_root / "data" / "fishing" / "custom_1280x720_cn.yaml").write_text(
             "profile_name: custom_1280x720_cn\n",
+            encoding="utf-8",
+        )
+        (self.plan_root / "data" / "cafe" / "default_1280x720_cn.yaml").write_text(
+            "profile_name: default_1280x720_cn\nmax_seconds: 130\n",
+            encoding="utf-8",
+        )
+        (self.plan_root / "data" / "cafe" / "custom_cafe.yaml").write_text(
+            "profile_name: custom_cafe\n",
             encoding="utf-8",
         )
         (self.plan_root / "config.yaml").write_text(
@@ -147,6 +156,23 @@ class TestYihuanConfigRepository(unittest.TestCase):
     def test_fishing_defaults_validation_rejects_unknown_profile(self):
         with self.assertRaisesRegex(ValueError, "钓鱼识别档案不存在"):
             self.repo.validate_fishing_defaults(FishingRunDefaults(profile_name="missing_profile"))
+
+    def test_cafe_defaults_round_trip_preserves_unedited_fields(self):
+        self.repo.update_cafe_defaults(CafeRunDefaults(profile_name="custom_cafe"))
+
+        defaults = self.repo.get_cafe_defaults()
+        payload = self.repo.load_config()
+        self.assertEqual(defaults.profile_name, "custom_cafe")
+        self.assertEqual(payload["cafe"]["profile_name"], "custom_cafe")
+        self.assertEqual(payload["extra"]["keep"], True)
+
+    def test_cafe_defaults_validation_rejects_unknown_profile(self):
+        with self.assertRaisesRegex(ValueError, "沙威玛识别档案不存在"):
+            self.repo.validate_cafe_defaults(CafeRunDefaults(profile_name="missing_profile"))
+
+    def test_cafe_profile_default_seconds_reads_profile_yaml(self):
+        self.assertEqual(self.repo.get_cafe_profile_default_seconds("default_1280x720_cn"), 130.0)
+        self.assertIsNone(self.repo.get_cafe_profile_default_seconds("missing_profile"))
 
 
 if __name__ == "__main__":

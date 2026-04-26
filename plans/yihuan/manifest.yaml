@@ -65,6 +65,14 @@ exports:
       type: Any
       required: false
       default: true
+    - name: min_order_interval_sec
+      type: Any
+      required: false
+      default: null
+    - name: min_order_duration_sec
+      type: Any
+      required: false
+      default: null
   - name: yihuan_fishing_debug_monitor
     module: plans.yihuan.src.actions.fishing_actions
     function: yihuan_fishing_debug_monitor
@@ -169,13 +177,13 @@ exports:
     source: tasks/bootstrap/plan_ready.yaml
     description: 校验异环方案包已加载，并返回方案包脚手架元数据。
   - id: cafe/auto_loop/auto_loop
-    title: Yihuan cafe auto loop
+    title: 沙威玛自动循环
     source: tasks/cafe/auto_loop.yaml
-    description: Run the Yihuan cafe mini-game automation loop.
+    description: 自动执行异环餐饮小游戏，识别订单、补货并制作餐品。
   - id: cafe/auto_loop
-    title: Yihuan cafe auto loop
+    title: 沙威玛自动循环
     source: tasks/cafe/auto_loop.yaml
-    description: Run the Yihuan cafe mini-game automation loop.
+    description: 自动执行异环餐饮小游戏，识别订单、补货并制作餐品。
   - id: checks/plan_loaded/plan_loaded
     title: 异环方案包已加载
     source: tasks/checks/plan_loaded.yaml

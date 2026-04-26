@@ -20,3 +20,5 @@ input:
   actions: {}
 fishing:
   profile_name: default_1280x720_cn
+cafe:
+  profile_name: default_1280x720_cn

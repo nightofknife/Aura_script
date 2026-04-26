@@ -1,7 +1,7 @@
 auto_loop:
   meta:
-    title: Yihuan cafe auto loop
-    description: Run the Yihuan cafe mini-game automation loop.
+    title: 沙威玛自动循环
+    description: 自动执行异环餐饮小游戏，识别订单、补货并制作餐品。
     inputs:
       - name: profile_name
         type: string
@@ -18,6 +18,12 @@ auto_loop:
       - name: wait_level_started
         type: boolean
         default: true
+      - name: min_order_interval_sec
+        type: number
+        default: 0.5
+      - name: min_order_duration_sec
+        type: number
+        default: 0
   steps:
     run:
       action: yihuan_cafe_run_session
@@ -27,4 +33,6 @@ auto_loop:
         max_orders: "{{ inputs.max_orders }}"
         start_game: "{{ inputs.start_game }}"
         wait_level_started: "{{ inputs.wait_level_started }}"
+        min_order_interval_sec: "{{ inputs.min_order_interval_sec }}"
+        min_order_duration_sec: "{{ inputs.min_order_duration_sec }}"
   returns: "{{ nodes.run.output }}"

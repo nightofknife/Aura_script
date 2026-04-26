@@ -3,17 +3,23 @@ from __future__ import annotations
 import unittest
 
 from packages.yihuan_gui.logic import (
+    CafeRunDefaults,
     FishingRunDefaults,
     GuiPreferences,
     LiveUiState,
     RuntimeSettings,
     TASK_AUTO_LOOP,
+    TASK_CAFE_AUTO_LOOP,
     TASK_LIVE_MONITOR,
     TASK_PLAN_READY,
     build_auto_loop_inputs,
+    build_cafe_loop_inputs,
     build_settings_sections,
+    cafe_loop_business_status,
     extract_auto_loop_defaults,
+    extract_cafe_loop_defaults,
     render_auto_loop_brief_text,
+    render_cafe_loop_brief_text,
     reduce_live_events,
     render_task_result_html,
     task_is_enabled,
@@ -43,6 +49,51 @@ class TestYihuanGuiLogic(unittest.TestCase):
         )
 
         self.assertEqual(defaults.profile_name, "custom_profile")
+
+    def test_build_cafe_loop_inputs_uses_page_values_and_defaults(self):
+        payload = build_cafe_loop_inputs(
+            120,
+            8,
+            True,
+            False,
+            CafeRunDefaults(profile_name="default_1280x720_cn"),
+        )
+
+        self.assertEqual(
+            payload,
+            {
+                "profile_name": "default_1280x720_cn",
+                "max_seconds": 120,
+                "max_orders": 8,
+                "start_game": True,
+                "wait_level_started": False,
+                "min_order_interval_sec": 0.5,
+                "min_order_duration_sec": 0.0,
+            },
+        )
+
+    def test_extract_cafe_loop_defaults_uses_task_defaults(self):
+        defaults = extract_cafe_loop_defaults(
+            {
+                "inputs": [
+                    {"name": "profile_name", "type": "string", "default": "custom_cafe"},
+                    {"name": "max_seconds", "type": "number", "default": 90},
+                    {"name": "max_orders", "type": "number", "default": 4},
+                    {"name": "start_game", "type": "boolean", "default": False},
+                    {"name": "wait_level_started", "type": "boolean", "default": True},
+                    {"name": "min_order_interval_sec", "type": "number", "default": 0.75},
+                    {"name": "min_order_duration_sec", "type": "number", "default": 0.25},
+                ]
+            }
+        )
+
+        self.assertEqual(defaults.profile_name, "custom_cafe")
+        self.assertEqual(defaults.max_seconds, 90)
+        self.assertEqual(defaults.max_orders, 4)
+        self.assertFalse(defaults.start_game)
+        self.assertTrue(defaults.wait_level_started)
+        self.assertEqual(defaults.min_order_interval_sec, 0.75)
+        self.assertEqual(defaults.min_order_duration_sec, 0.25)
 
     def test_reduce_live_events_tracks_auto_loop_lifecycle(self):
         state, finished = reduce_live_events(
@@ -137,6 +188,57 @@ class TestYihuanGuiLogic(unittest.TestCase):
         self.assertIn("失败", text)
         self.assertIn("总轮数 2", text)
 
+    def test_task_result_renderer_handles_cafe_loop(self):
+        detail = {
+            "task_name": TASK_CAFE_AUTO_LOOP,
+            "final_result": {
+                "user_data": {
+                    "status": "success",
+                    "stopped_reason": "max_orders",
+                    "failure_reason": None,
+                    "orders_completed": 3,
+                    "fake_customers_detected": 2,
+                    "fake_customers_driven": 1,
+                    "pending_batches": {"coffee": {"batch_size": 3, "ready_in_sec": 0.4}},
+                    "min_order_interval_sec": 0.5,
+                    "min_order_duration_sec": 0.0,
+                    "recognized_counts": {
+                        "latte_coffee": 1,
+                        "cream_coffee": 1,
+                        "bacon_bread": 1,
+                    },
+                    "batches_made": {"bread": 1, "croissant": 1, "cake": 1, "coffee": 1},
+                    "stocks_remaining": {"bread": 2, "croissant": 3, "cake": 6, "coffee": 1},
+                    "unknown_scan_count": 0,
+                    "level_outcome": "success",
+                    "elapsed_sec": 12.5,
+                    "profile_name": "default_1280x720_cn",
+                    "perf_stats": {
+                        "time_sec": {"order_scan": 0.2},
+                        "counts": {"order_scan_count": 3},
+                    },
+                    "phase_trace": [
+                        {"t": 0.5, "event": "fake_customer_hammer_clicked", "candidate_count": 1},
+                        {"t": 1.0, "event": "order_selected", "recipe_id": "latte_coffee"},
+                        {"t": 2.0, "event": "order_completed", "recipe_id": "latte_coffee"},
+                    ],
+                }
+            },
+        }
+
+        html = render_task_result_html(TASK_CAFE_AUTO_LOOP, detail)
+
+        self.assertIn("完成订单 3", render_cafe_loop_brief_text(detail))
+        self.assertIn("驱赶假顾客 1", render_cafe_loop_brief_text(detail))
+        self.assertEqual(cafe_loop_business_status(detail), "success")
+        self.assertIn("达到最大订单数", html)
+        self.assertIn("拿铁咖啡", html)
+        self.assertIn("驱赶假顾客", html)
+        self.assertIn("未完成补货", html)
+        self.assertIn("敲走假顾客", html)
+        self.assertIn("订单统计", html)
+        self.assertIn("事件轨迹", html)
+
     def test_runtime_task_guard_disables_auto_loop_when_fishing_task_active(self):
         active_runs = {
             "cid-1": {
@@ -147,6 +249,20 @@ class TestYihuanGuiLogic(unittest.TestCase):
         }
 
         self.assertFalse(task_is_enabled(TASK_AUTO_LOOP, active_runs))
+        self.assertFalse(task_is_enabled(TASK_CAFE_AUTO_LOOP, active_runs))
+        self.assertTrue(task_is_enabled(TASK_PLAN_READY, active_runs))
+
+    def test_runtime_task_guard_disables_fishing_when_cafe_task_active(self):
+        active_runs = {
+            "cid-1": {
+                "cid": "cid-1",
+                "task_name": TASK_CAFE_AUTO_LOOP,
+                "status": "running",
+            }
+        }
+
+        self.assertFalse(task_is_enabled(TASK_AUTO_LOOP, active_runs))
+        self.assertFalse(task_is_enabled(TASK_CAFE_AUTO_LOOP, active_runs))
         self.assertTrue(task_is_enabled(TASK_PLAN_READY, active_runs))
 
     def test_settings_sections_are_grouped_into_runtime_and_ui(self):

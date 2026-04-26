@@ -35,6 +35,7 @@ class YihuanCafeService:
         self._template_gray_cache: dict[str, tuple[np.ndarray, np.ndarray]] = {}
         self._template_scaled_gray_cache: dict[tuple[str, float], tuple[np.ndarray, np.ndarray]] = {}
         self._order_scan_state: dict[str, dict[str, Any]] = {}
+        self._order_arrival_state: dict[str, dict[str, Any]] = {}
         self._last_order_scan_debug: dict[str, Any] = {}
 
     def load_profile(self, profile_name: str | None = None) -> dict[str, Any]:
@@ -137,6 +138,184 @@ class YihuanCafeService:
             "level_end_button_min_count": max(int(payload.get("level_end_button_min_count", 2) or 2), 1),
             "level_end_stable_frames": max(int(payload.get("level_end_stable_frames", 2) or 2), 1),
             "level_end_poll_ms": max(int(payload.get("level_end_poll_ms", 120) or 120), 10),
+            "fake_customer_enabled": self._coerce_bool(payload.get("fake_customer_enabled", True)),
+            "fake_customer_region": self._coerce_region(
+                payload.get("fake_customer_region"),
+                default=(360, 220, 570, 70),
+            ),
+            "fake_customer_hammer_point": self._coerce_point(
+                payload.get("fake_customer_hammer_point"),
+                default=(70, 325),
+            ),
+            "fake_customer_hammer_debug_enabled": self._coerce_bool(
+                payload.get("fake_customer_hammer_debug_enabled", True)
+            ),
+            "fake_customer_hammer_debug_dir": str(
+                payload.get("fake_customer_hammer_debug_dir") or "tmp/cafe_fake_customer_hammers"
+            ),
+            "fake_customer_after_drive_ms": max(
+                int(payload.get("fake_customer_after_drive_ms", 200) or 200),
+                0,
+            ),
+            "fake_customer_global_cooldown_sec": max(
+                float(payload.get("fake_customer_global_cooldown_sec", 1.0) or 1.0),
+                0.0,
+            ),
+            "fake_customer_same_spot_cooldown_sec": max(
+                float(payload.get("fake_customer_same_spot_cooldown_sec", 3.0) or 3.0),
+                0.0,
+            ),
+            "fake_customer_same_spot_distance_px": max(
+                int(payload.get("fake_customer_same_spot_distance_px", 85) or 85),
+                1,
+            ),
+            "fake_customer_red_hsv_lower_1": self._coerce_hsv_triplet(
+                payload.get("fake_customer_red_hsv_lower_1"),
+                default=(0, 145, 90),
+            ),
+            "fake_customer_red_hsv_upper_1": self._coerce_hsv_triplet(
+                payload.get("fake_customer_red_hsv_upper_1"),
+                default=(5, 255, 255),
+            ),
+            "fake_customer_red_hsv_lower_2": self._coerce_hsv_triplet(
+                payload.get("fake_customer_red_hsv_lower_2"),
+                default=(176, 145, 90),
+            ),
+            "fake_customer_red_hsv_upper_2": self._coerce_hsv_triplet(
+                payload.get("fake_customer_red_hsv_upper_2"),
+                default=(179, 255, 255),
+            ),
+            "fake_customer_min_component_area": max(
+                int(payload.get("fake_customer_min_component_area", 650) or 650),
+                1,
+            ),
+            "fake_customer_max_component_area": max(
+                int(payload.get("fake_customer_max_component_area", 2000) or 2000),
+                1,
+            ),
+            "fake_customer_min_component_width": max(
+                int(payload.get("fake_customer_min_component_width", 25) or 25),
+                1,
+            ),
+            "fake_customer_max_component_width": max(
+                int(payload.get("fake_customer_max_component_width", 90) or 90),
+                1,
+            ),
+            "fake_customer_min_component_height": max(
+                int(payload.get("fake_customer_min_component_height", 30) or 30),
+                1,
+            ),
+            "fake_customer_max_component_height": max(
+                int(payload.get("fake_customer_max_component_height", 90) or 90),
+                1,
+            ),
+            "fake_customer_min_aspect_ratio": max(
+                float(payload.get("fake_customer_min_aspect_ratio", 0.6) or 0.6),
+                0.0,
+            ),
+            "fake_customer_max_fill_ratio": max(
+                float(payload.get("fake_customer_max_fill_ratio", 0.9) or 0.9),
+                0.0,
+            ),
+            "fake_customer_center_x_min": max(
+                int(payload.get("fake_customer_center_x_min", 0) or 0),
+                0,
+            ),
+            "fake_customer_center_x_max": max(
+                int(payload.get("fake_customer_center_x_max", 1280) or 1280),
+                0,
+            ),
+            "fake_customer_center_y_min": max(
+                int(payload.get("fake_customer_center_y_min", 235) or 235),
+                0,
+            ),
+            "fake_customer_center_y_max": max(
+                int(payload.get("fake_customer_center_y_max", 315) or 315),
+                0,
+            ),
+            "fake_customer_nms_distance_px": max(
+                int(payload.get("fake_customer_nms_distance_px", 70) or 70),
+                1,
+            ),
+            "fake_customer_body_region_from_order": self._coerce_offset_region(
+                payload.get("fake_customer_body_region_from_order"),
+                default=(-90, 40, 180, 245),
+            ),
+            "fake_customer_require_order_slot": self._coerce_bool(
+                payload.get("fake_customer_require_order_slot", True)
+            ),
+            "fake_customer_min_red_pixels": max(
+                int(payload.get("fake_customer_min_red_pixels", 700) or 700),
+                1,
+            ),
+            "fake_customer_min_blue_pixels": max(
+                int(payload.get("fake_customer_min_blue_pixels", 550) or 550),
+                1,
+            ),
+            "fake_customer_min_dark_pixels": max(
+                int(payload.get("fake_customer_min_dark_pixels", 3500) or 3500),
+                0,
+            ),
+            "fake_customer_min_skin_pixels": max(
+                int(payload.get("fake_customer_min_skin_pixels", 180) or 180),
+                0,
+            ),
+            "fake_customer_red_check_region_ratio": self._coerce_ratio_region(
+                payload.get("fake_customer_red_check_region_ratio"),
+                default=(0.20, 0.18, 0.80, 0.58),
+            ),
+            "fake_customer_blue_check_region_ratio": self._coerce_ratio_region(
+                payload.get("fake_customer_blue_check_region_ratio"),
+                default=(0.25, 0.45, 0.75, 0.75),
+            ),
+            "fake_customer_dark_check_region_ratio": self._coerce_ratio_region(
+                payload.get("fake_customer_dark_check_region_ratio"),
+                default=(0.05, 0.15, 0.95, 0.95),
+            ),
+            "fake_customer_skin_check_region_ratio": self._coerce_ratio_region(
+                payload.get("fake_customer_skin_check_region_ratio"),
+                default=(0.25, 0.02, 0.75, 0.35),
+            ),
+            "fake_customer_blue_hsv_lower": self._coerce_hsv_triplet(
+                payload.get("fake_customer_blue_hsv_lower"),
+                default=(95, 35, 30),
+            ),
+            "fake_customer_blue_hsv_upper": self._coerce_hsv_triplet(
+                payload.get("fake_customer_blue_hsv_upper"),
+                default=(135, 255, 220),
+            ),
+            "fake_customer_dark_hsv_lower": self._coerce_hsv_triplet(
+                payload.get("fake_customer_dark_hsv_lower"),
+                default=(0, 0, 0),
+            ),
+            "fake_customer_dark_hsv_upper": self._coerce_hsv_triplet(
+                payload.get("fake_customer_dark_hsv_upper"),
+                default=(179, 150, 115),
+            ),
+            "fake_customer_skin_hsv_lower": self._coerce_hsv_triplet(
+                payload.get("fake_customer_skin_hsv_lower"),
+                default=(0, 10, 80),
+            ),
+            "fake_customer_skin_hsv_upper": self._coerce_hsv_triplet(
+                payload.get("fake_customer_skin_hsv_upper"),
+                default=(35, 130, 255),
+            ),
+            "fake_customer_min_red_blue_vertical_gap_px": max(
+                int(payload.get("fake_customer_min_red_blue_vertical_gap_px", 18) or 18),
+                0,
+            ),
+            "fake_customer_confirm_frames": max(
+                int(payload.get("fake_customer_confirm_frames", 2) or 2),
+                1,
+            ),
+            "fake_customer_clear_frames": max(
+                int(payload.get("fake_customer_clear_frames", 2) or 2),
+                1,
+            ),
+            "fake_customer_after_hammer_suppress_sec": max(
+                float(payload.get("fake_customer_after_hammer_suppress_sec", 2.0) or 2.0),
+                0.0,
+            ),
             "order_search_region": self._coerce_region(payload.get("order_search_region"), default=(220, 60, 720, 250)),
             "order_locator_enabled": self._coerce_bool(payload.get("order_locator_enabled", True)),
             "order_locator_fallback_full_scan": self._coerce_bool(
@@ -202,6 +381,16 @@ class YihuanCafeService:
             "match_nms_distance_px": max(int(payload.get("match_nms_distance_px", 35) or 35), 1),
             "match_peak_window_px": max(int(payload.get("match_peak_window_px", 9) or 9), 1),
             "max_candidates_per_template_scale": max(int(payload.get("max_candidates_per_template_scale", 80) or 80), 1),
+            "order_sort_strategy": self._coerce_choice(
+                payload.get("order_sort_strategy"),
+                default="fifo",
+                allowed={"fifo", "left_to_right"},
+            ),
+            "order_track_distance_px": max(int(payload.get("order_track_distance_px", 80) or 80), 1),
+            "order_track_forget_after_scans": max(
+                int(payload.get("order_track_forget_after_scans", 40) or 40),
+                1,
+            ),
             "stock_profiles": stock_profiles,
             "coffee_station_point": stock_profiles["coffee"]["station_point"],
             "coffee_stock_point": stock_profiles["coffee"]["stock_point"],
@@ -219,12 +408,18 @@ class YihuanCafeService:
             "coffee_batch_size": stock_profiles["coffee"]["batch_size"],
             "coffee_make_sec": stock_profiles["coffee"]["make_sec"],
             "start_game_delay_sec": max(float(payload.get("start_game_delay_sec", 1.0) or 1.0), 0.0),
-            "click_repeat_count": max(int(payload.get("click_repeat_count", 3) or 3), 1),
+            "click_repeat_count": max(int(payload.get("click_repeat_count", 2) or 2), 1),
             "click_hold_ms": max(int(payload.get("click_hold_ms", 100) or 100), 0),
             "click_repeat_interval_ms": max(int(payload.get("click_repeat_interval_ms", 100) or 100), 0),
+            "single_click_notes": self._coerce_string_list(
+                payload.get("single_click_notes"),
+                default=("start_game", "fake_customer_hammer"),
+            ),
             "step_delay_ms": max(int(payload.get("step_delay_ms", 100) or 100), 0),
             "craft_delay_ms": max(int(payload.get("craft_delay_ms", 100) or 100), 0),
             "poll_ms": max(int(payload.get("poll_ms", 120) or 120), 0),
+            "min_order_interval_sec": max(float(payload.get("min_order_interval_sec", 0.5) or 0.0), 0.0),
+            "min_order_duration_sec": max(float(payload.get("min_order_duration_sec", 0.0) or 0.0), 0.0),
             "max_seconds": max(float(payload.get("max_seconds", 130.0) or 130.0), 0.1),
         }
         self._profile_cache[resolved_name] = normalized
@@ -270,7 +465,7 @@ class YihuanCafeService:
 
                 if candidates:
                     kept = self._nms_by_center_distance(candidates, int(profile["match_nms_distance_px"]))
-                    kept.sort(key=lambda item: (float(item["center_x"]), float(item["center_y"])))
+                    kept = self._sort_orders_for_selection(kept, profile_key=profile_key, profile=profile, debug=debug)
                     self._set_order_scan_debug(
                         profile_key,
                         debug,
@@ -283,6 +478,7 @@ class YihuanCafeService:
             if not bool(profile["order_locator_fallback_full_scan"]):
                 debug["fallback_skipped_reason"] = "disabled"
                 self._increment_order_scan_miss(profile_key, debug)
+                self._age_order_tracks(profile_key, profile=profile, debug=debug)
                 self._set_order_scan_debug(profile_key, debug, scan_start=scan_start, orders_returned=0)
                 return []
 
@@ -292,6 +488,7 @@ class YihuanCafeService:
             debug["two_stage_miss_count"] = miss_count
             if not bool(debug["fallback_allowed"]):
                 debug["fallback_skipped_reason"] = f"throttled_{miss_count}_of_{fallback_every}"
+                self._age_order_tracks(profile_key, profile=profile, debug=debug)
                 self._set_order_scan_debug(profile_key, debug, scan_start=scan_start, orders_returned=0)
                 return []
 
@@ -304,6 +501,14 @@ class YihuanCafeService:
             if orders:
                 self._reset_order_scan_miss(profile_key)
                 debug["two_stage_miss_count"] = 0
+                orders = self._sort_orders_for_selection(
+                    orders,
+                    profile_key=profile_key,
+                    profile=profile,
+                    debug=debug,
+                )
+            else:
+                self._age_order_tracks(profile_key, profile=profile, debug=debug)
             self._set_order_scan_debug(profile_key, debug, scan_start=scan_start, orders_returned=len(orders))
             return orders
 
@@ -314,6 +519,10 @@ class YihuanCafeService:
         fallback_start = time.perf_counter()
         orders = self._analyze_orders_full_scan(source_image, profile=profile)
         debug["fallback_sec"] = time.perf_counter() - fallback_start
+        if orders:
+            orders = self._sort_orders_for_selection(orders, profile_key=profile_key, profile=profile, debug=debug)
+        else:
+            self._age_order_tracks(profile_key, profile=profile, debug=debug)
         self._set_order_scan_debug(profile_key, debug, scan_start=scan_start, orders_returned=len(orders))
         return orders
 
@@ -323,13 +532,33 @@ class YihuanCafeService:
     def reset_order_scan_state(self, profile_name: str | None = None) -> None:
         if profile_name is None:
             self._order_scan_state.clear()
+            self._order_arrival_state.clear()
             self._last_order_scan_debug = {}
             return
 
         profile = self.load_profile(profile_name)
-        self._order_scan_state.pop(str(profile["profile_name"]), None)
-        if self._last_order_scan_debug.get("profile_name") == str(profile["profile_name"]):
+        profile_key = str(profile["profile_name"])
+        self._order_scan_state.pop(profile_key, None)
+        self._order_arrival_state.pop(profile_key, None)
+        if self._last_order_scan_debug.get("profile_name") == profile_key:
             self._last_order_scan_debug = {}
+
+    def mark_order_completed(self, order: dict[str, Any] | None = None, *, profile_name: str | None = None) -> bool:
+        profile = self.load_profile(profile_name)
+        profile_key = str(profile["profile_name"])
+        state = self._order_arrival_state.get(profile_key)
+        if not state:
+            return False
+
+        raw_track_id = None if order is None else order.get("track_id")
+        if raw_track_id is None:
+            return False
+
+        tracks = state.setdefault("tracks", {})
+        track_id = int(raw_track_id)
+        removed = tracks.pop(track_id, None) is not None
+        state["tracks"] = tracks
+        return removed
 
     def _increment_order_scan_miss(self, profile_key: str, debug: dict[str, Any]) -> int:
         state = self._order_scan_state.setdefault(profile_key, {"two_stage_miss_count": 0})
@@ -358,6 +587,143 @@ class YihuanCafeService:
         debug["orders_returned"] = int(orders_returned)
         debug["total_sec"] = time.perf_counter() - scan_start
         self._last_order_scan_debug = dict(debug)
+
+    def _sort_orders_for_selection(
+        self,
+        orders: list[dict[str, Any]],
+        *,
+        profile_key: str,
+        profile: dict[str, Any],
+        debug: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        if str(profile.get("order_sort_strategy") or "fifo") == "left_to_right":
+            debug["order_sort_strategy"] = "left_to_right"
+            kept = sorted(orders, key=lambda item: (float(item["center_x"]), float(item["center_y"])))
+            debug["order_track_count"] = len(self._order_arrival_state.get(profile_key, {}).get("tracks", {}))
+            return kept
+
+        debug["order_sort_strategy"] = "fifo"
+        return self._sort_orders_by_arrival(orders, profile_key=profile_key, profile=profile, debug=debug)
+
+    def _sort_orders_by_arrival(
+        self,
+        orders: list[dict[str, Any]],
+        *,
+        profile_key: str,
+        profile: dict[str, Any],
+        debug: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        state = self._order_arrival_state.setdefault(
+            profile_key,
+            {
+                "scan_index": 0,
+                "next_track_id": 1,
+                "next_arrival_index": 1,
+                "tracks": {},
+            },
+        )
+        state["scan_index"] = int(state.get("scan_index", 0)) + 1
+        scan_index = int(state["scan_index"])
+        tracks: dict[int, dict[str, Any]] = {
+            int(track_id): dict(track)
+            for track_id, track in dict(state.get("tracks") or {}).items()
+        }
+        self._prune_order_tracks(tracks, scan_index=scan_index, profile=profile)
+
+        track_distance_sq = float(int(profile["order_track_distance_px"]) ** 2)
+        unmatched_track_ids = set(tracks.keys())
+        decorated: list[dict[str, Any]] = []
+        for order in sorted(orders, key=lambda item: (float(item["center_x"]), float(item["center_y"]))):
+            center_x = float(order["center_x"])
+            center_y = float(order["center_y"])
+            best_track_id: int | None = None
+            best_distance_sq: float | None = None
+            for track_id in list(unmatched_track_ids):
+                track = tracks[track_id]
+                dx = center_x - float(track["center_x"])
+                dy = center_y - float(track["center_y"])
+                distance_sq = dx * dx + dy * dy
+                if distance_sq > track_distance_sq:
+                    continue
+                if best_distance_sq is None or distance_sq < best_distance_sq:
+                    best_track_id = track_id
+                    best_distance_sq = distance_sq
+
+            if best_track_id is None:
+                best_track_id = int(state.get("next_track_id", 1))
+                state["next_track_id"] = best_track_id + 1
+                tracks[best_track_id] = {
+                    "track_id": best_track_id,
+                    "first_seen_scan": scan_index,
+                    "first_seen_order": int(state.get("next_arrival_index", 1)),
+                    "last_seen_scan": scan_index,
+                    "center_x": center_x,
+                    "center_y": center_y,
+                    "recipe_id": str(order.get("recipe_id") or ""),
+                }
+                state["next_arrival_index"] = int(state.get("next_arrival_index", 1)) + 1
+            else:
+                unmatched_track_ids.discard(best_track_id)
+
+            track = tracks[best_track_id]
+            track["last_seen_scan"] = scan_index
+            track["center_x"] = center_x
+            track["center_y"] = center_y
+            track["recipe_id"] = str(order.get("recipe_id") or "")
+            order = dict(order)
+            order["track_id"] = int(best_track_id)
+            order["arrival_index"] = int(track["first_seen_order"])
+            order["first_seen_scan"] = int(track["first_seen_scan"])
+            order["last_seen_scan"] = int(track["last_seen_scan"])
+            decorated.append(order)
+
+        state["tracks"] = tracks
+        self._order_arrival_state[profile_key] = state
+        decorated.sort(
+            key=lambda item: (
+                int(item.get("arrival_index", 0)),
+                float(item["center_x"]),
+                float(item["center_y"]),
+            )
+        )
+        debug["order_track_count"] = len(tracks)
+        debug["returned_track_ids"] = [int(item["track_id"]) for item in decorated]
+        debug["returned_arrival_indices"] = [int(item["arrival_index"]) for item in decorated]
+        return decorated
+
+    def _age_order_tracks(self, profile_key: str, *, profile: dict[str, Any], debug: dict[str, Any]) -> None:
+        state = self._order_arrival_state.get(profile_key)
+        if not state:
+            debug["order_sort_strategy"] = str(profile.get("order_sort_strategy") or "fifo")
+            debug["order_track_count"] = 0
+            return
+
+        state["scan_index"] = int(state.get("scan_index", 0)) + 1
+        tracks: dict[int, dict[str, Any]] = {
+            int(track_id): dict(track)
+            for track_id, track in dict(state.get("tracks") or {}).items()
+        }
+        self._prune_order_tracks(tracks, scan_index=int(state["scan_index"]), profile=profile)
+        state["tracks"] = tracks
+        self._order_arrival_state[profile_key] = state
+        debug["order_sort_strategy"] = str(profile.get("order_sort_strategy") or "fifo")
+        debug["order_track_count"] = len(tracks)
+
+    @staticmethod
+    def _prune_order_tracks(
+        tracks: dict[int, dict[str, Any]],
+        *,
+        scan_index: int,
+        profile: dict[str, Any],
+    ) -> None:
+        forget_after = int(profile["order_track_forget_after_scans"])
+        stale_track_ids = [
+            track_id
+            for track_id, track in tracks.items()
+            if int(scan_index) - int(track.get("last_seen_scan", 0)) > forget_after
+        ]
+        for track_id in stale_track_ids:
+            tracks.pop(track_id, None)
 
     def detect_order_candidates(
         self,
@@ -641,6 +1007,467 @@ class YihuanCafeService:
             "buttons_count": len(buttons),
             "button_bboxes": [button["bbox"] for button in buttons],
         }
+
+    def detect_fake_customers(
+        self,
+        source_image: np.ndarray,
+        *,
+        profile_name: str | None = None,
+    ) -> dict[str, Any]:
+        profile = self.load_profile(profile_name)
+        if not bool(profile.get("fake_customer_enabled", True)):
+            return {
+                "detected": False,
+                "reason": "disabled",
+                "region": list(profile.get("fake_customer_region") or (360, 220, 570, 70)),
+                "red_pixels": 0,
+                "component_count": 0,
+                "kept_count": 0,
+                "candidates": [],
+            }
+
+        region = self._coerce_region(
+            profile.get("fake_customer_region"),
+            default=(360, 220, 570, 70),
+        )
+        crop = self._crop_region(source_image, region)
+        if crop.size == 0:
+            return {
+                "detected": False,
+                "reason": "empty_region",
+                "region": list(region),
+                "red_pixels": 0,
+                "component_count": 0,
+                "kept_count": 0,
+                "candidates": [],
+            }
+
+        crop_rgb = self._ensure_rgb(crop)
+        hsv = cv2.cvtColor(crop_rgb, cv2.COLOR_RGB2HSV)
+        mask = self._red_mask_for_hsv(hsv, profile)
+        red_pixels = int(np.count_nonzero(mask))
+        component_count, _, stats, centroids = cv2.connectedComponentsWithStats(mask, connectivity=8)
+
+        region_x, region_y, _, _ = region
+        min_area = int(profile.get("fake_customer_min_component_area", 650) or 650)
+        max_area = int(profile.get("fake_customer_max_component_area", 2000) or 2000)
+        min_width = int(profile.get("fake_customer_min_component_width", 25) or 25)
+        max_width = int(profile.get("fake_customer_max_component_width", 75) or 75)
+        min_height = int(profile.get("fake_customer_min_component_height", 30) or 30)
+        max_height = int(profile.get("fake_customer_max_component_height", 90) or 90)
+        min_aspect_ratio = float(profile.get("fake_customer_min_aspect_ratio", 0.6) or 0.6)
+        max_fill_ratio = float(profile.get("fake_customer_max_fill_ratio", 0.9) or 0.9)
+        min_center_x, max_center_x = sorted(
+            (
+                int(profile.get("fake_customer_center_x_min", 0) or 0),
+                int(profile.get("fake_customer_center_x_max", 1280) or 1280),
+            )
+        )
+        min_center_y, max_center_y = sorted(
+            (
+                int(profile.get("fake_customer_center_y_min", 235) or 235),
+                int(profile.get("fake_customer_center_y_max", 315) or 315),
+            )
+        )
+
+        candidates: list[dict[str, Any]] = []
+        for label in range(1, component_count):
+            area = int(stats[label, cv2.CC_STAT_AREA])
+            left = int(stats[label, cv2.CC_STAT_LEFT])
+            top = int(stats[label, cv2.CC_STAT_TOP])
+            width = int(stats[label, cv2.CC_STAT_WIDTH])
+            height = int(stats[label, cv2.CC_STAT_HEIGHT])
+            center_x = float(region_x + centroids[label][0])
+            center_y = float(region_y + centroids[label][1])
+
+            if area < min_area or area > max_area:
+                continue
+            if width < min_width or width > max_width:
+                continue
+            if height < min_height or height > max_height:
+                continue
+            if center_x < min_center_x or center_x > max_center_x:
+                continue
+            if center_y < min_center_y or center_y > max_center_y:
+                continue
+
+            aspect_ratio = float(height) / max(float(width), 1.0)
+            fill_ratio = float(area) / max(float(width * height), 1.0)
+            if aspect_ratio < min_aspect_ratio:
+                continue
+            if max_fill_ratio > 0 and fill_ratio > max_fill_ratio:
+                continue
+
+            candidates.append(
+                {
+                    "score": round(float(area), 3),
+                    "area": area,
+                    "aspect_ratio": round(aspect_ratio, 4),
+                    "fill_ratio": round(fill_ratio, 4),
+                    "center_x": int(round(center_x)),
+                    "center_y": int(round(center_y)),
+                    "bbox": [region_x + left, region_y + top, width, height],
+                    "source": "color_component",
+                }
+            )
+
+        candidates = self._nms_by_center_distance(
+            candidates,
+            int(profile.get("fake_customer_nms_distance_px", 70) or 70),
+        )
+        candidates.sort(key=lambda item: (int(item["center_x"]), int(item["center_y"])))
+        reason = "ok" if candidates else "no_candidate"
+        return {
+            "detected": bool(candidates),
+            "reason": reason,
+            "region": list(region),
+            "red_pixels": red_pixels,
+            "component_count": max(component_count - 1, 0),
+            "kept_count": len(candidates),
+            "candidates": candidates,
+        }
+
+    def save_fake_customer_hammer_debug_image(
+        self,
+        source_image: np.ndarray,
+        detection: dict[str, Any],
+        *,
+        profile_name: str | None = None,
+        sequence: int | None = None,
+        output_dir: str | Path | None = None,
+    ) -> str | None:
+        """Save the exact frame that triggered a hammer click plus its red HSV mask."""
+        if source_image is None or source_image.size == 0:
+            return None
+
+        profile = self.load_profile(profile_name)
+        region = self._coerce_region(
+            profile.get("fake_customer_region"),
+            default=(360, 220, 570, 70),
+        )
+        image_rgb = np.ascontiguousarray(self._ensure_rgb(source_image).copy())
+        crop = self._crop_region(image_rgb, region)
+        if crop.size == 0:
+            return None
+
+        crop_rgb = self._ensure_rgb(crop)
+        hsv = cv2.cvtColor(crop_rgb, cv2.COLOR_RGB2HSV)
+        mask = self._red_mask_for_hsv(hsv, profile)
+
+        original_panel = image_rgb.copy()
+        mask_panel = np.zeros_like(image_rgb)
+        x, y, width, height = region
+        mask_rgb = cv2.cvtColor(mask, cv2.COLOR_GRAY2RGB)
+        mask_panel[y : y + crop_rgb.shape[0], x : x + crop_rgb.shape[1]] = mask_rgb
+
+        roi_color = (180, 0, 255)
+        candidate_color = (255, 0, 0)
+        cv2.rectangle(original_panel, (x, y), (x + width, y + height), roi_color, 2)
+        cv2.rectangle(mask_panel, (x, y), (x + width, y + height), roi_color, 2)
+
+        for candidate in list(detection.get("candidates") or []):
+            bbox = candidate.get("bbox")
+            if not isinstance(bbox, (list, tuple)) or len(bbox) < 4:
+                continue
+            left, top, box_width, box_height = [int(value) for value in bbox[:4]]
+            right = left + box_width
+            bottom = top + box_height
+            center_x = int(candidate.get("center_x", left + box_width // 2) or (left + box_width // 2))
+            center_y = int(candidate.get("center_y", top + box_height // 2) or (top + box_height // 2))
+            for panel in (original_panel, mask_panel):
+                cv2.rectangle(panel, (left, top), (right, bottom), candidate_color, 2)
+                cv2.line(panel, (center_x - 8, center_y), (center_x + 8, center_y), candidate_color, 1)
+                cv2.line(panel, (center_x, center_y - 8), (center_x, center_y + 8), candidate_color, 1)
+
+        cv2.putText(original_panel, "original", (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+        cv2.putText(mask_panel, "hsv red mask", (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+        combined = np.concatenate([original_panel, mask_panel], axis=1)
+
+        raw_output_dir = Path(output_dir or profile.get("fake_customer_hammer_debug_dir") or "tmp/cafe_fake_customer_hammers")
+        if not raw_output_dir.is_absolute():
+            repo_root = self._plan_root.parents[1]
+            raw_output_dir = repo_root / raw_output_dir
+        raw_output_dir.mkdir(parents=True, exist_ok=True)
+
+        index = 0 if sequence is None else int(sequence)
+        filename = f"hammer_{time.strftime('%Y%m%d-%H%M%S')}_{index:03d}.png"
+        output_path = raw_output_dir / filename
+        cv2.imwrite(str(output_path), cv2.cvtColor(combined, cv2.COLOR_RGB2BGR))
+        return str(output_path)
+
+    def _fake_customer_body_region_from_order(
+        self,
+        locator: dict[str, Any],
+        profile: dict[str, Any],
+    ) -> Region:
+        offset_x, offset_y, width, height = profile["fake_customer_body_region_from_order"]
+        center_x = int(locator.get("center_x", 0) or 0)
+        center_y = int(locator.get("center_y", 0) or 0)
+        return (
+            max(center_x + int(offset_x), 0),
+            max(center_y + int(offset_y), 0),
+            int(width),
+            int(height),
+        )
+
+    def _fake_customer_fallback_slots_from_red(
+        self,
+        source_image: np.ndarray,
+        profile: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        region = self._coerce_region(profile.get("fake_customer_region"), default=(360, 220, 570, 70))
+        crop = self._crop_region(source_image, region)
+        if crop.size == 0:
+            return []
+
+        crop_rgb = self._ensure_rgb(crop)
+        hsv = cv2.cvtColor(crop_rgb, cv2.COLOR_RGB2HSV)
+        mask = self._red_mask_for_hsv(hsv, profile)
+        component_count, _, stats, centroids = cv2.connectedComponentsWithStats(mask, connectivity=8)
+        if component_count <= 1:
+            return []
+
+        region_x, region_y, _, _ = region
+        min_area = int(profile.get("fake_customer_min_component_area", 650) or 650)
+        max_area = int(profile.get("fake_customer_max_component_area", 2000) or 2000)
+        min_width = int(profile.get("fake_customer_min_component_width", 25) or 25)
+        max_width = int(profile.get("fake_customer_max_component_width", 75) or 75)
+        min_height = int(profile.get("fake_customer_min_component_height", 30) or 30)
+        max_height = int(profile.get("fake_customer_max_component_height", 90) or 90)
+        min_aspect_ratio = float(profile.get("fake_customer_min_aspect_ratio", 0.6) or 0.6)
+        max_fill_ratio = float(profile.get("fake_customer_max_fill_ratio", 0.9) or 0.9)
+        _, _, slot_width, slot_height = profile["fake_customer_body_region_from_order"]
+        slots: list[dict[str, Any]] = []
+        for label in range(1, component_count):
+            area = int(stats[label, cv2.CC_STAT_AREA])
+            left = int(stats[label, cv2.CC_STAT_LEFT])
+            top = int(stats[label, cv2.CC_STAT_TOP])
+            width = int(stats[label, cv2.CC_STAT_WIDTH])
+            height = int(stats[label, cv2.CC_STAT_HEIGHT])
+            if area < min_area or area > max_area:
+                continue
+            if width < min_width or width > max_width:
+                continue
+            if height < min_height or height > max_height:
+                continue
+            aspect_ratio = float(height) / max(float(width), 1.0)
+            fill_ratio = float(area) / max(float(width * height), 1.0)
+            if aspect_ratio < min_aspect_ratio:
+                continue
+            if max_fill_ratio > 0 and fill_ratio > max_fill_ratio:
+                continue
+
+            center_x = int(round(region_x + float(centroids[label][0])))
+            body_left = max(int(round(center_x - int(slot_width) / 2.0)), 0)
+            body_top = max(region_y + top - int(round(int(slot_height) * 0.26)), 0)
+            slots.append(
+                {
+                    "source": "red_fallback",
+                    "region": (body_left, body_top, int(slot_width), int(slot_height)),
+                }
+            )
+
+        return slots
+
+    def _detect_fake_customer_features_in_region(
+        self,
+        source_image: np.ndarray,
+        region: Region,
+        profile: dict[str, Any],
+        *,
+        source: str,
+        order_locator: dict[str, Any] | None = None,
+    ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+        crop = self._crop_region(source_image, region)
+        debug: dict[str, Any] = {
+            "source": source,
+            "region": list(region),
+            "reason": "empty_region",
+            "red_pixels": 0,
+            "blue_pixels": 0,
+            "dark_pixels": 0,
+            "skin_pixels": 0,
+        }
+        if order_locator is not None:
+            debug["order_center_x"] = int(order_locator.get("center_x", 0) or 0)
+            debug["order_center_y"] = int(order_locator.get("center_y", 0) or 0)
+        if crop.size == 0:
+            return None, debug
+
+        crop_rgb = self._ensure_rgb(crop)
+        hsv = cv2.cvtColor(crop_rgb, cv2.COLOR_RGB2HSV)
+        red_mask = self._red_mask_for_hsv(hsv, profile)
+        blue_mask = cv2.inRange(
+            hsv,
+            np.array(profile["fake_customer_blue_hsv_lower"], dtype=np.uint8),
+            np.array(profile["fake_customer_blue_hsv_upper"], dtype=np.uint8),
+        )
+        dark_mask = cv2.inRange(
+            hsv,
+            np.array(profile["fake_customer_dark_hsv_lower"], dtype=np.uint8),
+            np.array(profile["fake_customer_dark_hsv_upper"], dtype=np.uint8),
+        )
+        skin_mask = cv2.inRange(
+            hsv,
+            np.array(profile["fake_customer_skin_hsv_lower"], dtype=np.uint8),
+            np.array(profile["fake_customer_skin_hsv_upper"], dtype=np.uint8),
+        )
+
+        red_bounds = self._ratio_bounds(red_mask.shape[1], red_mask.shape[0], profile["fake_customer_red_check_region_ratio"])
+        blue_bounds = self._ratio_bounds(
+            blue_mask.shape[1],
+            blue_mask.shape[0],
+            profile["fake_customer_blue_check_region_ratio"],
+        )
+        dark_bounds = self._ratio_bounds(
+            dark_mask.shape[1],
+            dark_mask.shape[0],
+            profile["fake_customer_dark_check_region_ratio"],
+        )
+        skin_bounds = self._ratio_bounds(
+            skin_mask.shape[1],
+            skin_mask.shape[0],
+            profile["fake_customer_skin_check_region_ratio"],
+        )
+
+        red_crop = self._slice_mask(red_mask, red_bounds)
+        blue_crop = self._slice_mask(blue_mask, blue_bounds)
+        dark_crop = self._slice_mask(dark_mask, dark_bounds)
+        skin_crop = self._slice_mask(skin_mask, skin_bounds)
+        red_pixels = int(np.count_nonzero(red_crop))
+        blue_pixels = int(np.count_nonzero(blue_crop))
+        dark_pixels = int(np.count_nonzero(dark_crop))
+        skin_pixels = int(np.count_nonzero(skin_crop))
+        debug.update(
+            {
+                "reason": "checked",
+                "red_pixels": red_pixels,
+                "blue_pixels": blue_pixels,
+                "dark_pixels": dark_pixels,
+                "skin_pixels": skin_pixels,
+                "red_region": list(red_bounds),
+                "blue_region": list(blue_bounds),
+            }
+        )
+
+        red_component = self._largest_component(red_crop, offset_x=red_bounds[0], offset_y=red_bounds[1])
+        if red_component is None:
+            debug["reason"] = "red_component_missing"
+            return None, debug
+        debug["red_component"] = red_component
+
+        if red_pixels < int(profile["fake_customer_min_red_pixels"]):
+            debug["reason"] = "red_pixels_too_few"
+            return None, debug
+        if int(red_component["area"]) < int(profile.get("fake_customer_min_component_area", 650) or 650):
+            debug["reason"] = "red_component_too_small"
+            return None, debug
+        if blue_pixels < int(profile["fake_customer_min_blue_pixels"]):
+            debug["reason"] = "blue_pixels_too_few"
+            return None, debug
+        if dark_pixels < int(profile["fake_customer_min_dark_pixels"]):
+            debug["reason"] = "dark_pixels_too_few"
+            return None, debug
+        if skin_pixels < int(profile["fake_customer_min_skin_pixels"]):
+            debug["reason"] = "skin_pixels_too_few"
+            return None, debug
+
+        blue_center = self._mask_center(blue_crop, offset_x=blue_bounds[0], offset_y=blue_bounds[1])
+        if blue_center is None:
+            debug["reason"] = "blue_component_missing"
+            return None, debug
+        red_center_y = float(red_component["center_y"])
+        blue_center_y = float(blue_center[1])
+        vertical_gap = blue_center_y - red_center_y
+        debug["red_blue_vertical_gap_px"] = round(vertical_gap, 2)
+        if vertical_gap < int(profile["fake_customer_min_red_blue_vertical_gap_px"]):
+            debug["reason"] = "red_blue_layout_invalid"
+            return None, debug
+
+        region_x, region_y, _, _ = region
+        red_bbox = list(red_component["bbox"])
+        abs_red_bbox = [region_x + red_bbox[0], region_y + red_bbox[1], red_bbox[2], red_bbox[3]]
+        center_x = int(round(region_x + float(red_component["center_x"])))
+        center_y = int(round(region_y + float(red_component["center_y"])))
+        score = (
+            float(red_component["area"])
+            + min(float(blue_pixels), 2500.0) * 0.35
+            + min(float(dark_pixels), 12000.0) * 0.04
+            + min(float(skin_pixels), 3500.0) * 0.04
+        )
+        candidate = {
+            "score": round(score, 3),
+            "area": int(red_component["area"]),
+            "center_x": center_x,
+            "center_y": center_y,
+            "bbox": abs_red_bbox,
+            "body_bbox": list(region),
+            "source": source,
+            "red_pixels": red_pixels,
+            "blue_pixels": blue_pixels,
+            "dark_pixels": dark_pixels,
+            "skin_pixels": skin_pixels,
+            "red_blue_vertical_gap_px": round(vertical_gap, 2),
+        }
+        if order_locator is not None:
+            candidate["order_center_x"] = int(order_locator.get("center_x", 0) or 0)
+            candidate["order_center_y"] = int(order_locator.get("center_y", 0) or 0)
+        return candidate, {**debug, "reason": "ok"}
+
+    def _red_mask_for_hsv(self, hsv: np.ndarray, profile: dict[str, Any]) -> np.ndarray:
+        mask_1 = cv2.inRange(
+            hsv,
+            np.array(profile.get("fake_customer_red_hsv_lower_1", (0, 145, 90)), dtype=np.uint8),
+            np.array(profile.get("fake_customer_red_hsv_upper_1", (5, 255, 255)), dtype=np.uint8),
+        )
+        mask_2 = cv2.inRange(
+            hsv,
+            np.array(profile.get("fake_customer_red_hsv_lower_2", (176, 145, 90)), dtype=np.uint8),
+            np.array(profile.get("fake_customer_red_hsv_upper_2", (179, 255, 255)), dtype=np.uint8),
+        )
+        return cv2.bitwise_or(mask_1, mask_2)
+
+    @staticmethod
+    def _largest_component(mask: np.ndarray, *, offset_x: int = 0, offset_y: int = 0) -> dict[str, Any] | None:
+        component_count, _, stats, centroids = cv2.connectedComponentsWithStats(mask, connectivity=8)
+        if component_count <= 1:
+            return None
+        best_label = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+        left = int(stats[best_label, cv2.CC_STAT_LEFT])
+        top = int(stats[best_label, cv2.CC_STAT_TOP])
+        width = int(stats[best_label, cv2.CC_STAT_WIDTH])
+        height = int(stats[best_label, cv2.CC_STAT_HEIGHT])
+        area = int(stats[best_label, cv2.CC_STAT_AREA])
+        center_x = float(centroids[best_label][0]) + float(offset_x)
+        center_y = float(centroids[best_label][1]) + float(offset_y)
+        return {
+            "area": area,
+            "bbox": [int(offset_x) + left, int(offset_y) + top, width, height],
+            "center_x": round(center_x, 3),
+            "center_y": round(center_y, 3),
+            "fill_ratio": round(float(area) / max(float(width * height), 1.0), 4),
+        }
+
+    @staticmethod
+    def _mask_center(mask: np.ndarray, *, offset_x: int = 0, offset_y: int = 0) -> tuple[float, float] | None:
+        ys, xs = np.where(mask > 0)
+        if len(xs) == 0:
+            return None
+        return float(np.mean(xs)) + float(offset_x), float(np.mean(ys)) + float(offset_y)
+
+    @staticmethod
+    def _ratio_bounds(width: int, height: int, ratio_region: tuple[float, float, float, float]) -> tuple[int, int, int, int]:
+        x1, y1, x2, y2 = ratio_region
+        left = max(min(int(round(float(width) * x1)), width), 0)
+        top = max(min(int(round(float(height) * y1)), height), 0)
+        right = max(min(int(round(float(width) * x2)), width), left + 1)
+        bottom = max(min(int(round(float(height) * y2)), height), top + 1)
+        return left, top, right, bottom
+
+    @staticmethod
+    def _slice_mask(mask: np.ndarray, bounds: tuple[int, int, int, int]) -> np.ndarray:
+        left, top, right, bottom = bounds
+        return mask[top:bottom, left:right]
 
     def _match_template_multiscale(
         self,
@@ -1033,6 +1860,30 @@ class YihuanCafeService:
         return default
 
     @staticmethod
+    def _coerce_offset_region(value: Any, *, default: Region) -> Region:
+        if isinstance(value, (list, tuple)) and len(value) >= 4:
+            return (
+                int(value[0]),
+                int(value[1]),
+                max(int(value[2]), 1),
+                max(int(value[3]), 1),
+            )
+        return default
+
+    @staticmethod
+    def _coerce_ratio_region(value: Any, *, default: tuple[float, float, float, float]) -> tuple[float, float, float, float]:
+        if not isinstance(value, (list, tuple)) or len(value) < 4:
+            return default
+
+        left = max(min(float(value[0]), 1.0), 0.0)
+        top = max(min(float(value[1]), 1.0), 0.0)
+        right = max(min(float(value[2]), 1.0), 0.0)
+        bottom = max(min(float(value[3]), 1.0), 0.0)
+        if right <= left or bottom <= top:
+            return default
+        return left, top, right, bottom
+
+    @staticmethod
     def _coerce_point(value: Any, *, default: Point) -> Point:
         if isinstance(value, (list, tuple)) and len(value) >= 2:
             return int(value[0]), int(value[1])
@@ -1047,6 +1898,18 @@ class YihuanCafeService:
                 max(min(int(value[2]), 255), 0),
             )
         return default
+
+    @staticmethod
+    def _coerce_choice(value: Any, *, default: str, allowed: set[str]) -> str:
+        normalized = str(value or default).strip().lower()
+        return normalized if normalized in allowed else default
+
+    @staticmethod
+    def _coerce_string_list(value: Any, *, default: tuple[str, ...]) -> list[str]:
+        if not isinstance(value, list):
+            return list(default)
+        result = [str(item).strip() for item in value if str(item).strip()]
+        return result or list(default)
 
     def _coerce_point_list(self, value: Any, *, default: tuple[Point, ...]) -> list[Point]:
         if not isinstance(value, list):
