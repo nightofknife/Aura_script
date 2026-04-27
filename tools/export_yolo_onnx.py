@@ -51,8 +51,8 @@ def _load_onnxruntime_module():
         import onnxruntime as ort
     except ImportError as exc:
         raise RuntimeError(
-            "onnxruntime is required for export validation. Install requirements/optional-yolo-cpu.txt "
-            "or requirements/optional-yolo-cuda.txt."
+            "onnxruntime is required for export validation. Install requirements/optional-vision-onnx-cpu.txt "
+            "or requirements/optional-vision-onnx-cuda.txt."
         ) from exc
     return ort
 

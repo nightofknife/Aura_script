@@ -184,7 +184,9 @@ class _FakeCafeService:
             "fake_customer_min_component_width": 25,
             "fake_customer_max_component_width": 75,
             "fake_customer_min_component_height": 38,
-            "fake_customer_max_component_height": 90,
+            "fake_customer_max_component_height": 45,
+            "fake_customer_hammer_clip_top_margin_px": 18,
+            "fake_customer_hammer_clip_min_height_px": 48,
             "fake_customer_min_aspect_ratio": 0.7,
             "fake_customer_max_fill_ratio": 0.9,
             "fake_customer_center_x_min": 0,
@@ -639,12 +641,12 @@ class TestYihuanCafeDetection(unittest.TestCase):
         profile["fake_customer_require_order_slot"] = False
 
         cv2.rectangle(image, (390, 230), (545, 430), (35, 40, 45), -1)
-        cv2.ellipse(image, (468, 269), (25, 28), 0, 0, 360, (220, 30, 30), -1)
+        cv2.ellipse(image, (468, 270), (25, 19), 0, 0, 360, (220, 30, 30), -1)
         cv2.rectangle(image, (430, 320), (505, 370), (55, 80, 160), -1)
         cv2.ellipse(image, (468, 225), (24, 30), 0, 0, 360, (210, 170, 145), -1)
 
         cv2.rectangle(image, (735, 230), (890, 430), (35, 40, 45), -1)
-        cv2.ellipse(image, (811, 269), (25, 28), 0, 0, 360, (220, 30, 30), -1)
+        cv2.ellipse(image, (811, 270), (25, 19), 0, 0, 360, (220, 30, 30), -1)
         cv2.rectangle(image, (775, 320), (850, 370), (55, 80, 160), -1)
         cv2.ellipse(image, (811, 225), (24, 30), 0, 0, 360, (210, 170, 145), -1)
         cv2.rectangle(image, (600, 390), (740, 430), (220, 30, 30), -1)
@@ -655,6 +657,23 @@ class TestYihuanCafeDetection(unittest.TestCase):
         self.assertTrue(detection["detected"])
         self.assertEqual(len(detection["candidates"]), 2)
         self.assertEqual([candidate["center_x"] for candidate in detection["candidates"]], [468, 811])
+
+    def test_fake_customer_detection_rejects_hammer_animation_red_head(self):
+        image = np.zeros((720, 1280, 3), dtype=np.uint8)
+        profile = self.service.load_profile("default_1280x720_cn")
+        profile["fake_customer_require_order_slot"] = False
+
+        cv2.ellipse(image, (779, 250), (25, 30), 0, 0, 360, (220, 30, 30), 8)
+
+        with patch.object(self.service, "load_profile", return_value=profile):
+            detection = self.service.detect_fake_customers(image)
+
+        self.assertFalse(detection["detected"], detection)
+        self.assertEqual(
+            detection["reject_counts"].get("hammer_animation_top_clipped"),
+            1,
+            detection,
+        )
 
     def test_fake_customer_detection_rejects_flat_sofa_like_red_blocks(self):
         image = np.zeros((720, 1280, 3), dtype=np.uint8)

@@ -887,3 +887,22 @@ models/yolo/yolo11n.meta.json
 - 部署机只保留运行时必须依赖
 - 所有部署模型都用本仓库导出工具生成
 
+## Shared Vision ONNX Runtime note
+
+YOLO and OCR now use the same ONNX Runtime provider/session helper in `packages/aura_core/services/onnx_runtime_backend.py`.
+
+For new deployments prefer the shared dependency files:
+
+```powershell
+.venv\Scripts\python.exe -m pip install -r requirements\optional-vision-onnx-cpu.txt
+.venv\Scripts\python.exe -m pip install -r requirements\optional-vision-onnx-cuda.txt
+```
+
+The legacy YOLO optional files remain as compatibility entrypoints and forward to the shared vision files:
+
+```powershell
+requirements\optional-yolo-cpu.txt
+requirements\optional-yolo-cuda.txt
+```
+
+The rule is unchanged: install exactly one ONNX Runtime package per environment. CPU deployments use `onnxruntime`; CUDA12 deployments use `onnxruntime-gpu`.

@@ -3,8 +3,10 @@ param(
     [string]$VenvPath = ".venv",
     [string]$RuntimeRequirements = "requirements/runtime.txt",
     [string]$LockFile = "requirements/runtime.lock",
-    [string]$PaddleGpuPackage = "paddlepaddle-gpu==3.3.1",
-    [string]$PaddleCudaIndex = "https://www.paddlepaddle.org.cn/packages/stable/cu129/",
+    [ValidateSet("cuda", "cpu", "none")]
+    [string]$VisionProvider = "cuda",
+    [string]$VisionCpuRequirements = "requirements/optional-vision-onnx-cpu.txt",
+    [string]$VisionCudaRequirements = "requirements/optional-vision-onnx-cuda.txt",
     [switch]$UseLock = $true,
     [switch]$FetchMuMuAssets = $true
 )
@@ -62,25 +64,26 @@ function Resolve-BasePython {
     return $resolved.Trim()
 }
 
-function Ensure-PaddleGpuRuntime {
+function Ensure-VisionRuntime {
     param(
         [string]$PythonExe,
-        [string]$PackageSpec,
-        [string]$IndexUrl
+        [string]$Provider,
+        [string]$CpuRequirements,
+        [string]$CudaRequirements
     )
 
-    if (-not $PackageSpec) {
+    if ($Provider -eq "none") {
+        Write-Host "Skipping optional ONNX vision runtime installation."
         return
     }
 
-    Write-Host "Ensuring Paddle GPU runtime ($PackageSpec) from $IndexUrl ..."
-    $arguments = @(
-        "-m", "pip", "install", "--upgrade", $PackageSpec, "numpy<2.4"
-    )
-    if ($IndexUrl) {
-        $arguments += @("--extra-index-url", $IndexUrl)
+    $requirements = $CpuRequirements
+    if ($Provider -eq "cuda") {
+        $requirements = $CudaRequirements
     }
-    Invoke-CheckedCommand -FilePath $PythonExe -ArgumentList $arguments
+    Assert-PathExists -PathValue $requirements -Label "Vision runtime requirements"
+    Write-Host "Installing ONNX vision runtime ($Provider) from $requirements ..."
+    Invoke-CheckedCommand -FilePath $PythonExe -ArgumentList @("-m", "pip", "install", "-r", $requirements)
 }
 
 $BasePython = Resolve-BasePython -PathValue $BasePython
@@ -127,7 +130,11 @@ if ($UseLock -and (Test-Path $LockFile)) {
     $refreshLock = $true
 }
 
-Ensure-PaddleGpuRuntime -PythonExe $venvPython -PackageSpec $PaddleGpuPackage -IndexUrl $PaddleCudaIndex
+Ensure-VisionRuntime `
+    -PythonExe $venvPython `
+    -Provider $VisionProvider `
+    -CpuRequirements $VisionCpuRequirements `
+    -CudaRequirements $VisionCudaRequirements
 
 if ($refreshLock) {
     Invoke-CheckedCommand -FilePath $venvPython -ArgumentList @("-m", "pip", "freeze", "--all") -CaptureOutput | Set-Content -Path $LockFile -Encoding UTF8

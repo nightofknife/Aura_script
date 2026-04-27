@@ -19,7 +19,7 @@ from tools._shared import OverlayConfig, add_common_output_flag, maybe_print, no
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Inspect local GPU runtime health for Aura OCR and YOLO services.")
+    parser = argparse.ArgumentParser(description="Inspect local GPU runtime health for Aura ONNX OCR and YOLO services.")
     parser.add_argument(
         "--onnx-model",
         help="Optional ONNX model path for probing the Aura YoloService with a blank image.",
@@ -27,7 +27,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--probe-ocr",
         action="store_true",
-        help="Initialize Aura OcrService and run one blank-image recognition pass.",
+        help="Initialize Aura ONNX OcrService and run one blank-image recognition pass.",
     )
     add_common_output_flag(parser)
     return parser
@@ -91,7 +91,7 @@ def render_text(payload: dict[str, Any]) -> str:
         lines.append(f"- not installed ({torch_payload.get('error')})")
 
     paddle_payload = payload.get("paddle", {})
-    lines.append("Paddle:")
+    lines.append("Paddle export toolchain:")
     if paddle_payload.get("installed"):
         lines.append(
             f"- version={paddle_payload.get('version')} compiled_with_cuda={paddle_payload.get('compiled_with_cuda')} "
@@ -134,7 +134,8 @@ def render_text(payload: dict[str, Any]) -> str:
         lines.append("OCR probe:")
         if ocr_payload.get("ok"):
             lines.append(
-                f"- preload_device={ocr_payload.get('preload_device')} "
+                f"- backend={ocr_payload.get('backend')} provider={ocr_payload.get('provider')} "
+                f"model={ocr_payload.get('model')} device={ocr_payload.get('preload_device')} "
                 f"result_count={ocr_payload.get('result_count')}"
             )
         else:
@@ -299,6 +300,9 @@ def _probe_ocr_service() -> dict[str, Any]:
         result = await service._recognize_all_async(np.zeros((64, 64, 3), dtype=np.uint8))
         return {
             "ok": True,
+            "backend": service.get_backend(),
+            "provider": service.get_provider(),
+            "model": service.get_model(),
             "preload_device": preload_device,
             "result_count": result.count,
         }

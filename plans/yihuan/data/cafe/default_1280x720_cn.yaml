@@ -116,7 +116,9 @@ fake_customer_max_component_area: 2000
 fake_customer_min_component_width: 25
 fake_customer_max_component_width: 75
 fake_customer_min_component_height: 30
-fake_customer_max_component_height: 90
+fake_customer_max_component_height: 45
+fake_customer_hammer_clip_top_margin_px: 18
+fake_customer_hammer_clip_min_height_px: 48
 fake_customer_min_aspect_ratio: 0.6
 fake_customer_max_fill_ratio: 0.9
 fake_customer_center_x_min: 0

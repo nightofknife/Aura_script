@@ -60,7 +60,14 @@ def _offset_multi_ocr_result(
 @requires_services(ocr="ocr")
 def preload_ocr(ocr: OcrService, warmup: bool = False) -> dict[str, Any]:
     device = ocr.preload_engine(warmup=warmup)
-    return {"ok": True, "device": device, "warmed": bool(warmup)}
+    return {
+        "ok": True,
+        "device": device,
+        "warmed": bool(warmup),
+        "backend": ocr.get_backend(),
+        "provider": ocr.get_provider(),
+        "model": ocr.get_model(),
+    }
 
 
 @action_info(name="find_text", read_only=True, public=True)

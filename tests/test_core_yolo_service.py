@@ -242,21 +242,21 @@ class TestCoreYoloService(unittest.TestCase):
         model_path.write_bytes(b"fake")
 
         fake_ort = _FakeOrtModule(["CUDAExecutionProvider", "CPUExecutionProvider"])
-        with patch.object(self.service, "_load_onnxruntime_module", return_value=fake_ort), patch.object(self.service, "_prepare_cuda_execution_provider_environment") as prepare_cuda:
+        with patch.object(self.service._onnx_backend, "load_onnxruntime_module", return_value=fake_ort), patch.object(self.service._onnx_backend, "prepare_cuda_execution_provider_environment") as prepare_cuda:
             _session, provider = self.service._create_session(model_path)
         self.assertEqual(provider, "CUDAExecutionProvider")
         self.assertEqual(fake_ort.created[0]["providers"], ["CUDAExecutionProvider", "CPUExecutionProvider"])
         prepare_cuda.assert_called_once()
 
         cpu_service = YoloService(config=_FakeConfig({"yolo.execution_provider": "cpu"}))
-        with patch.object(cpu_service, "_load_onnxruntime_module", return_value=fake_ort):
+        with patch.object(cpu_service._onnx_backend, "load_onnxruntime_module", return_value=fake_ort):
             _session, provider = cpu_service._create_session(model_path)
         self.assertEqual(provider, "CPUExecutionProvider")
         self.assertEqual(fake_ort.created[1]["providers"], ["CPUExecutionProvider"])
 
         cuda_only_service = YoloService(config=_FakeConfig({"yolo.execution_provider": "cuda"}))
         cpu_only_ort = _FakeOrtModule(["CPUExecutionProvider"])
-        with patch.object(cuda_only_service, "_load_onnxruntime_module", return_value=cpu_only_ort):
+        with patch.object(cuda_only_service._onnx_backend, "load_onnxruntime_module", return_value=cpu_only_ort):
             with self.assertRaisesRegex(RuntimeError, "CUDAExecutionProvider is not available"):
                 cuda_only_service._create_session(model_path)
 
@@ -276,15 +276,15 @@ class TestCoreYoloService(unittest.TestCase):
             return session
 
         fallback_ort.InferenceSession = _cpu_fallback_session
-        with patch.object(fallback_service, "_load_onnxruntime_module", return_value=fallback_ort), patch.object(fallback_service, "_prepare_cuda_execution_provider_environment"):
+        with patch.object(fallback_service._onnx_backend, "load_onnxruntime_module", return_value=fallback_ort), patch.object(fallback_service._onnx_backend, "prepare_cuda_execution_provider_environment"):
             with self.assertRaisesRegex(RuntimeError, "fell back to CPUExecutionProvider"):
                 fallback_service._create_session(model_path)
 
     def test_prepare_cuda_environment_runs_once(self):
         fake_ort = SimpleNamespace(preload_dlls=lambda: None)
-        with patch.object(self.service, "_register_windows_cuda_dll_directories") as register_dirs, patch.object(self.service, "_preload_torch_cuda_runtime") as preload_torch, patch("packages.aura_core.services.yolo_service.os.name", "nt"):
-            self.service._prepare_cuda_execution_provider_environment(fake_ort)
-            self.service._prepare_cuda_execution_provider_environment(fake_ort)
+        with patch.object(self.service._onnx_backend, "register_windows_cuda_dll_directories") as register_dirs, patch.object(self.service._onnx_backend, "preload_torch_cuda_runtime") as preload_torch, patch("packages.aura_core.services.onnx_runtime_backend.os.name", "nt"):
+            self.service._onnx_backend.prepare_cuda_execution_provider_environment(fake_ort)
+            self.service._onnx_backend.prepare_cuda_execution_provider_environment(fake_ort)
 
         register_dirs.assert_called_once_with(fake_ort)
         preload_torch.assert_called_once()

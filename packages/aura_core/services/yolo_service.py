@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-import importlib.metadata
 import math
-import os
-import site
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import cv2
 import numpy as np
@@ -17,6 +14,7 @@ from packages.aura_core.config.service import ConfigService
 from packages.aura_core.context.plan import current_plan_name
 from packages.aura_core.observability.logging.core_logger import logger
 
+from .onnx_runtime_backend import OnnxRuntimeBackend
 from .yolo_contract import (
     EXPORT_OUTPUT_FORMAT,
     FAMILY_ALIASES,
@@ -74,9 +72,12 @@ class YoloService:
         self._models: Dict[str, _LoadedOnnxModel] = {}
         self._class_names: Dict[str, Dict[int, str]] = {}
         self._active_model_key: Optional[str] = None
-        self._cuda_runtime_prepared = False
-        self._dll_directory_handles: list[Any] = []
-        self._registered_dll_directories: set[str] = set()
+        self._onnx_backend = OnnxRuntimeBackend(
+            config=config,
+            config_prefix="yolo",
+            runtime_name="core YOLO service",
+            install_hint="requirements/optional-vision-onnx-cpu.txt or requirements/optional-vision-onnx-cuda.txt",
+        )
 
     def supported_generations(self) -> List[str]:
         return list(self._SUPPORTED_FAMILIES)
@@ -409,80 +410,7 @@ class YoloService:
             )
 
     def _create_session(self, model_path: Path) -> Tuple[Any, str]:
-        ort = self._load_onnxruntime_module()
-        available_providers = list(getattr(ort, "get_available_providers")())
-        provider_mode = str(self._config.get("yolo.execution_provider", "auto") or "auto").strip().lower()
-        dist_versions = self._onnxruntime_distribution_versions()
-
-        if provider_mode == "auto":
-            providers = [provider for provider in ("CUDAExecutionProvider", "CPUExecutionProvider") if provider in available_providers]
-        elif provider_mode == "cpu":
-            providers = ["CPUExecutionProvider"] if "CPUExecutionProvider" in available_providers else []
-        elif provider_mode == "cuda":
-            providers = ["CUDAExecutionProvider"] if "CUDAExecutionProvider" in available_providers else []
-        else:
-            raise ValueError("yolo.execution_provider must be one of: auto, cpu, cuda.")
-
-        if not providers:
-            if provider_mode == "cuda":
-                if "onnxruntime" in dist_versions and "onnxruntime-gpu" in dist_versions:
-                    raise RuntimeError(
-                        "CUDAExecutionProvider is not available. Detected both onnxruntime and onnxruntime-gpu; "
-                        "remove onnxruntime and reinstall requirements/optional-yolo-cuda.txt."
-                    )
-                raise RuntimeError("CUDAExecutionProvider is not available. Install the CUDA ONNX Runtime package.")
-            raise RuntimeError("No compatible ONNX Runtime execution provider is available.")
-
-        if provider_mode in {"auto", "cuda"} and "CUDAExecutionProvider" not in available_providers:
-            if "onnxruntime" in dist_versions and "onnxruntime-gpu" in dist_versions:
-                logger.warning(
-                    "Both onnxruntime and onnxruntime-gpu are installed; CUDAExecutionProvider may stay hidden until "
-                    "the CPU-only onnxruntime package is removed."
-                )
-
-        if "CUDAExecutionProvider" in providers:
-            self._prepare_cuda_execution_provider_environment(ort)
-
-        session_options = ort.SessionOptions()
-        intra_threads = int(self._config.get("yolo.session.intra_op_num_threads", 0) or 0)
-        inter_threads = int(self._config.get("yolo.session.inter_op_num_threads", 0) or 0)
-        if intra_threads > 0:
-            session_options.intra_op_num_threads = intra_threads
-        if inter_threads > 0:
-            session_options.inter_op_num_threads = inter_threads
-        session_options.graph_optimization_level = self._resolve_graph_optimization_level(
-            ort=ort,
-            raw_value=self._config.get("yolo.session.graph_optimization_level", "all"),
-        )
-
-        session = ort.InferenceSession(str(model_path), sess_options=session_options, providers=providers)
-        active_providers = list(session.get_providers())
-        active_provider = active_providers[0] if active_providers else providers[0]
-        if provider_mode == "cuda" and active_provider != "CUDAExecutionProvider":
-            raise RuntimeError(
-                "CUDAExecutionProvider was requested but ONNX Runtime fell back to "
-                f"{active_provider}. Check CUDA 12 runtime dependencies and cuDNN visibility."
-            )
-        if provider_mode == "auto" and providers[0] == "CUDAExecutionProvider" and active_provider != "CUDAExecutionProvider":
-            logger.warning(
-                "CUDAExecutionProvider is available but could not be activated; falling back to %s.",
-                active_provider,
-            )
-        return session, active_provider
-
-    @staticmethod
-    def _resolve_graph_optimization_level(*, ort: Any, raw_value: Any) -> Any:
-        normalized = str(raw_value or "all").strip().lower()
-        graph_levels = getattr(ort, "GraphOptimizationLevel")
-        mapping = {
-            "disabled": graph_levels.ORT_DISABLE_ALL,
-            "basic": graph_levels.ORT_ENABLE_BASIC,
-            "extended": graph_levels.ORT_ENABLE_EXTENDED,
-            "all": graph_levels.ORT_ENABLE_ALL,
-        }
-        if normalized not in mapping:
-            raise ValueError("yolo.session.graph_optimization_level must be one of: disabled, basic, extended, all.")
-        return mapping[normalized]
+        return self._onnx_backend.create_session(model_path)
 
     def _build_infer_settings(self, overrides: Dict[str, Any], metadata: YoloModelMetadata) -> Dict[str, Any]:
         def pick(key: str, default: Any) -> Any:
@@ -757,124 +685,6 @@ class YoloService:
         area_b = max(bx2 - bx1, 0.0) * max(by2 - by1, 0.0)
         union = max(area_a + area_b - inter_area, 1e-9)
         return inter_area / union
-
-    def _load_onnxruntime_module(self):
-        try:
-            import onnxruntime as ort
-        except ImportError as exc:
-            raise RuntimeError(
-                "onnxruntime is required for core YOLO service. Install requirements/optional-yolo-cpu.txt "
-                "or requirements/optional-yolo-cuda.txt."
-            ) from exc
-        if not hasattr(ort, "InferenceSession"):
-            raise RuntimeError(
-                "onnxruntime import is incomplete. Reinstall requirements/optional-yolo-cpu.txt or "
-                "requirements/optional-yolo-cuda.txt, and do not install both onnxruntime and onnxruntime-gpu."
-            )
-        return ort
-
-    @staticmethod
-    def _onnxruntime_distribution_versions() -> Dict[str, str]:
-        versions: Dict[str, str] = {}
-        for dist_name in ("onnxruntime", "onnxruntime-gpu"):
-            try:
-                versions[dist_name] = importlib.metadata.version(dist_name)
-            except importlib.metadata.PackageNotFoundError:
-                continue
-        return versions
-
-    def _prepare_cuda_execution_provider_environment(self, ort: Any) -> None:
-        with self._lock:
-            if self._cuda_runtime_prepared:
-                return
-            if os.name == "nt":
-                self._register_windows_cuda_dll_directories(ort)
-            self._preload_torch_cuda_runtime()
-            preload = getattr(ort, "preload_dlls", None)
-            if callable(preload):
-                try:
-                    preload()
-                except TypeError:
-                    try:
-                        preload(cuda=True, cudnn=True, msvc=True)
-                    except Exception as exc:  # noqa: BLE001
-                        logger.warning("ONNX Runtime CUDA DLL preload failed: %s", exc)
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("ONNX Runtime CUDA DLL preload failed: %s", exc)
-            self._cuda_runtime_prepared = True
-
-    def _register_windows_cuda_dll_directories(self, ort: Any) -> None:
-        add_dll_directory = getattr(os, "add_dll_directory", None)
-        if not callable(add_dll_directory):
-            return
-
-        candidate_dirs = list(self._candidate_windows_cuda_directories(ort))
-        for candidate in candidate_dirs:
-            resolved = str(candidate.resolve())
-            if resolved in self._registered_dll_directories:
-                continue
-            try:
-                handle = add_dll_directory(resolved)
-            except OSError:
-                continue
-            self._dll_directory_handles.append(handle)
-            self._registered_dll_directories.add(resolved)
-
-    def _candidate_windows_cuda_directories(self, ort: Any) -> Iterable[Path]:
-        seen: set[str] = set()
-
-        def emit(path: Path) -> Iterable[Path]:
-            resolved = str(path.resolve())
-            if path.is_dir() and resolved not in seen:
-                seen.add(resolved)
-                yield path
-
-        for env_name, env_value in os.environ.items():
-            if env_name == "CUDA_PATH" or env_name.startswith("CUDA_PATH_V"):
-                for subdir in ("bin", "libnvvp"):
-                    yield from emit(Path(env_value) / subdir)
-
-        site_roots: list[Path] = []
-        try:
-            site_roots.extend(Path(entry) for entry in site.getsitepackages())
-        except Exception:
-            pass
-        try:
-            usersite = site.getusersitepackages()
-            if usersite:
-                site_roots.append(Path(usersite))
-        except Exception:
-            pass
-        ort_path = getattr(ort, "__file__", None)
-        if ort_path:
-            site_roots.append(Path(ort_path).resolve().parents[1])
-
-        for site_root in site_roots:
-            for relative in (
-                "nvidia/cuda_runtime/bin",
-                "nvidia/cudnn/bin",
-                "nvidia/cublas/bin",
-                "nvidia/cufft/bin",
-                "nvidia/curand/bin",
-                "nvidia/cusolver/bin",
-                "nvidia/cusparse/bin",
-                "torch/lib",
-                "torchvision",
-                "av.libs",
-            ):
-                yield from emit(site_root / relative)
-
-    @staticmethod
-    def _preload_torch_cuda_runtime() -> None:
-        try:
-            import torch
-        except Exception:
-            return
-        try:
-            if getattr(torch.version, "cuda", None):
-                torch.cuda.is_available()
-        except Exception:
-            return
 
     @staticmethod
     def _repo_root() -> Path:

@@ -37,7 +37,17 @@ class TestYihuanConfigRepository(unittest.TestCase):
             encoding="utf-8",
         )
         (self.plan_root / "data" / "cafe" / "default_1280x720_cn.yaml").write_text(
-            "profile_name: default_1280x720_cn\nmax_seconds: 130\n",
+            "\n".join(
+                [
+                    "profile_name: default_1280x720_cn",
+                    "max_seconds: 130",
+                    "min_order_interval_sec: 0.8",
+                    "min_order_duration_sec: 0.2",
+                    "fake_customer_enabled: true",
+                    "fake_customer_hammer_debug_enabled: false",
+                ]
+            )
+            + "\n",
             encoding="utf-8",
         )
         (self.plan_root / "data" / "cafe" / "custom_cafe.yaml").write_text(
@@ -173,6 +183,29 @@ class TestYihuanConfigRepository(unittest.TestCase):
     def test_cafe_profile_default_seconds_reads_profile_yaml(self):
         self.assertEqual(self.repo.get_cafe_profile_default_seconds("default_1280x720_cn"), 130.0)
         self.assertIsNone(self.repo.get_cafe_profile_default_seconds("missing_profile"))
+
+    def test_cafe_defaults_hidden_pacing_uses_profile_yaml(self):
+        defaults = self.repo.get_cafe_defaults(
+            {
+                "inputs": [
+                    {"name": "profile_name", "type": "string", "default": "default_1280x720_cn"},
+                    {"name": "min_order_interval_sec", "type": "number", "default": 0.5},
+                    {"name": "min_order_duration_sec", "type": "number", "default": 0},
+                ]
+            }
+        )
+
+        self.assertEqual(defaults.min_order_interval_sec, 0.8)
+        self.assertEqual(defaults.min_order_duration_sec, 0.2)
+
+    def test_cafe_profile_runtime_defaults_include_pacing_and_fake_customer_flags(self):
+        defaults = self.repo.get_cafe_profile_runtime_defaults("default_1280x720_cn")
+
+        self.assertEqual(defaults["max_seconds"], 130.0)
+        self.assertEqual(defaults["min_order_interval_sec"], 0.8)
+        self.assertEqual(defaults["min_order_duration_sec"], 0.2)
+        self.assertTrue(defaults["fake_customer_enabled"])
+        self.assertFalse(defaults["fake_customer_hammer_debug_enabled"])
 
 
 if __name__ == "__main__":

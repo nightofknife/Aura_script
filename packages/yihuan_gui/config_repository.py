@@ -132,14 +132,20 @@ class YihuanConfigRepository:
 
     def get_cafe_defaults(self, cafe_task: Mapping[str, Any] | None = None) -> CafeRunDefaults:
         defaults = extract_cafe_loop_defaults(cafe_task)
+        profile_name = self._resolve_cafe_profile_name(defaults.profile_name)
+        profile_defaults = self.get_cafe_profile_runtime_defaults(profile_name)
         return CafeRunDefaults(
-            profile_name=self._resolve_cafe_profile_name(defaults.profile_name),
+            profile_name=profile_name,
             max_seconds=defaults.max_seconds,
             max_orders=defaults.max_orders,
             start_game=defaults.start_game,
             wait_level_started=defaults.wait_level_started,
-            min_order_interval_sec=defaults.min_order_interval_sec,
-            min_order_duration_sec=defaults.min_order_duration_sec,
+            min_order_interval_sec=float(
+                profile_defaults.get("min_order_interval_sec", defaults.min_order_interval_sec)
+            ),
+            min_order_duration_sec=float(
+                profile_defaults.get("min_order_duration_sec", defaults.min_order_duration_sec)
+            ),
         )
 
     def update_cafe_defaults(self, defaults: CafeRunDefaults) -> None:
@@ -150,21 +156,37 @@ class YihuanConfigRepository:
         payload["cafe"] = cafe
         self.save_config(payload)
 
-    def get_cafe_profile_default_seconds(self, profile_name: str) -> float | None:
+    def get_cafe_profile_runtime_defaults(self, profile_name: str) -> dict[str, Any]:
         profile_name = str(profile_name or "").strip()
         if not profile_name:
-            return None
+            return {}
 
         profile_path = self.cafe_profiles_dir / f"{profile_name}.yaml"
         if not profile_path.is_file():
-            return None
+            return {}
 
         payload = yaml.safe_load(profile_path.read_text(encoding="utf-8")) or {}
         if not isinstance(payload, Mapping):
-            return None
+            return {}
 
+        result: dict[str, Any] = {}
+        for key in ("max_seconds", "min_order_interval_sec", "min_order_duration_sec"):
+            try:
+                value = float(payload.get(key))
+            except (TypeError, ValueError):
+                continue
+            if value >= 0:
+                result[key] = value
+
+        for key in ("fake_customer_enabled", "fake_customer_hammer_debug_enabled"):
+            if key in payload:
+                result[key] = self._coerce_bool(payload.get(key))
+        return result
+
+    def get_cafe_profile_default_seconds(self, profile_name: str) -> float | None:
+        defaults = self.get_cafe_profile_runtime_defaults(profile_name)
         try:
-            value = float(payload.get("max_seconds"))
+            value = float(defaults.get("max_seconds"))
         except (TypeError, ValueError):
             return None
         return value if value > 0 else None

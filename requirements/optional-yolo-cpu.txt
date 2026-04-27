@@ -1,2 +1,1 @@
-numpy<2.4
-onnxruntime
+-r optional-vision-onnx-cpu.txt

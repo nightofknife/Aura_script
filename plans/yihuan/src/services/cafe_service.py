@@ -206,7 +206,15 @@ class YihuanCafeService:
                 1,
             ),
             "fake_customer_max_component_height": max(
-                int(payload.get("fake_customer_max_component_height", 90) or 90),
+                int(payload.get("fake_customer_max_component_height", 45) or 45),
+                1,
+            ),
+            "fake_customer_hammer_clip_top_margin_px": max(
+                int(payload.get("fake_customer_hammer_clip_top_margin_px", 18) or 18),
+                0,
+            ),
+            "fake_customer_hammer_clip_min_height_px": max(
+                int(payload.get("fake_customer_hammer_clip_min_height_px", 48) or 48),
                 1,
             ),
             "fake_customer_min_aspect_ratio": max(
@@ -1054,7 +1062,7 @@ class YihuanCafeService:
         min_width = int(profile.get("fake_customer_min_component_width", 25) or 25)
         max_width = int(profile.get("fake_customer_max_component_width", 75) or 75)
         min_height = int(profile.get("fake_customer_min_component_height", 30) or 30)
-        max_height = int(profile.get("fake_customer_max_component_height", 90) or 90)
+        max_height = int(profile.get("fake_customer_max_component_height", 45) or 45)
         min_aspect_ratio = float(profile.get("fake_customer_min_aspect_ratio", 0.6) or 0.6)
         max_fill_ratio = float(profile.get("fake_customer_max_fill_ratio", 0.9) or 0.9)
         min_center_x, max_center_x = sorted(
@@ -1071,6 +1079,11 @@ class YihuanCafeService:
         )
 
         candidates: list[dict[str, Any]] = []
+        reject_counts: dict[str, int] = {}
+
+        def count_reject(reason: str) -> None:
+            reject_counts[reason] = int(reject_counts.get(reason, 0)) + 1
+
         for label in range(1, component_count):
             area = int(stats[label, cv2.CC_STAT_AREA])
             left = int(stats[label, cv2.CC_STAT_LEFT])
@@ -1081,21 +1094,35 @@ class YihuanCafeService:
             center_y = float(region_y + centroids[label][1])
 
             if area < min_area or area > max_area:
+                count_reject("area_out_of_range")
                 continue
             if width < min_width or width > max_width:
+                count_reject("width_out_of_range")
+                continue
+            if self._is_fake_customer_hammer_animation_component(
+                top=top,
+                height=height,
+                profile=profile,
+            ):
+                count_reject("hammer_animation_top_clipped")
                 continue
             if height < min_height or height > max_height:
+                count_reject("height_out_of_range")
                 continue
             if center_x < min_center_x or center_x > max_center_x:
+                count_reject("center_x_out_of_range")
                 continue
             if center_y < min_center_y or center_y > max_center_y:
+                count_reject("center_y_out_of_range")
                 continue
 
             aspect_ratio = float(height) / max(float(width), 1.0)
             fill_ratio = float(area) / max(float(width * height), 1.0)
             if aspect_ratio < min_aspect_ratio:
+                count_reject("aspect_ratio_too_small")
                 continue
             if max_fill_ratio > 0 and fill_ratio > max_fill_ratio:
+                count_reject("fill_ratio_too_large")
                 continue
 
             candidates.append(
@@ -1124,6 +1151,7 @@ class YihuanCafeService:
             "red_pixels": red_pixels,
             "component_count": max(component_count - 1, 0),
             "kept_count": len(candidates),
+            "reject_counts": reject_counts,
             "candidates": candidates,
         }
 
@@ -1210,6 +1238,17 @@ class YihuanCafeService:
             int(height),
         )
 
+    def _is_fake_customer_hammer_animation_component(
+        self,
+        *,
+        top: int,
+        height: int,
+        profile: dict[str, Any],
+    ) -> bool:
+        top_margin_px = int(profile.get("fake_customer_hammer_clip_top_margin_px", 18) or 18)
+        min_height_px = int(profile.get("fake_customer_hammer_clip_min_height_px", 48) or 48)
+        return int(top) <= top_margin_px and int(height) >= min_height_px
+
     def _fake_customer_fallback_slots_from_red(
         self,
         source_image: np.ndarray,
@@ -1233,7 +1272,7 @@ class YihuanCafeService:
         min_width = int(profile.get("fake_customer_min_component_width", 25) or 25)
         max_width = int(profile.get("fake_customer_max_component_width", 75) or 75)
         min_height = int(profile.get("fake_customer_min_component_height", 30) or 30)
-        max_height = int(profile.get("fake_customer_max_component_height", 90) or 90)
+        max_height = int(profile.get("fake_customer_max_component_height", 45) or 45)
         min_aspect_ratio = float(profile.get("fake_customer_min_aspect_ratio", 0.6) or 0.6)
         max_fill_ratio = float(profile.get("fake_customer_max_fill_ratio", 0.9) or 0.9)
         _, _, slot_width, slot_height = profile["fake_customer_body_region_from_order"]
@@ -1247,6 +1286,12 @@ class YihuanCafeService:
             if area < min_area or area > max_area:
                 continue
             if width < min_width or width > max_width:
+                continue
+            if self._is_fake_customer_hammer_animation_component(
+                top=top,
+                height=height,
+                profile=profile,
+            ):
                 continue
             if height < min_height or height > max_height:
                 continue

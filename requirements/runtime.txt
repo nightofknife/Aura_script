@@ -15,8 +15,4 @@ dxcam
 av==17.0.0
 opencv-python
 numpy
-paddleocr
-# Windows GPU build is installed from Paddle official cu129 index:
-# python -m pip install paddlepaddle-gpu==3.3.1 -i https://www.paddlepaddle.org.cn/packages/stable/cu129/
-# The setup script installs paddlepaddle-gpu separately from the Paddle index above.
 pillow

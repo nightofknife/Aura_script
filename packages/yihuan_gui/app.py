@@ -517,16 +517,35 @@ class YihuanMainWindow(QMainWindow):
             combo.setCurrentIndex(index)
 
     def _refresh_cafe_limit_hint(self) -> None:
-        default_seconds = self._repo.get_cafe_profile_default_seconds(self._cafe_defaults.profile_name)
+        runtime_defaults = self._repo.get_cafe_profile_runtime_defaults(self._cafe_defaults.profile_name)
+        default_seconds = runtime_defaults.get("max_seconds")
         if default_seconds is None:
             default_text = "当前档案默认运行时长未知"
         else:
             seconds_text = int(default_seconds) if float(default_seconds).is_integer() else round(default_seconds, 1)
             default_text = f"当前档案默认运行时长：{seconds_text} 秒"
 
+        interval_text = self._format_optional_seconds(runtime_defaults.get("min_order_interval_sec"))
+        duration_text = self._format_optional_seconds(runtime_defaults.get("min_order_duration_sec"))
+        fake_customer_text = "开启" if bool(runtime_defaults.get("fake_customer_enabled", True)) else "关闭"
+        hammer_debug_text = "开启" if bool(runtime_defaults.get("fake_customer_hammer_debug_enabled", True)) else "关闭"
         self._cafe_limit_hint_label.setText(
-            f"{default_text}。最大运行秒数填 0 会使用这个默认值；最大订单数填 0 表示不限制订单数。"
+            f"{default_text}；订单间隔：{interval_text}；单订单最短耗时：{duration_text}；"
+            f"假顾客驱赶：{fake_customer_text}；锤击调试图：{hammer_debug_text}。"
+            "最大运行秒数填 0 会使用档案默认值；最大订单数填 0 表示不限制订单数。"
         )
+
+    @staticmethod
+    def _format_optional_seconds(value: Any) -> str:
+        if value is None:
+            return "未配置"
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return str(value)
+        if number <= 0:
+            return "不限制"
+        return f"{number:.3f} 秒"
 
     def _setup_bridge(self) -> None:
         self._bridge_thread = QThread(self)

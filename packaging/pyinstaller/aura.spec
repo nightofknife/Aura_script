@@ -13,7 +13,6 @@ from pathlib import Path
 
 from PyInstaller.utils.hooks import (
     collect_all,
-    collect_data_files,
     collect_dynamic_libs,
     collect_submodules,
     copy_metadata,
@@ -24,10 +23,6 @@ from PyInstaller.utils.hooks import (
 # The build wrapper runs PyInstaller from the repository root.
 ROOT = Path.cwd().resolve()
 ENTRYPOINT = ROOT / "cli.py"
-
-# PaddleX performs a connectivity check on import. Disable it during build-time
-# metadata collection so packaging stays deterministic and offline-friendly.
-os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
 
 INCLUDE_NVIDIA = os.environ.get("AURA_PKG_INCLUDE_NVIDIA", "").strip().lower() in {
     "1",
@@ -90,32 +85,23 @@ def _collect_optional_package(name: str) -> None:
 
 
 for optional_pkg in (
+    "onnxruntime",
+    "numpy",
     "cv2",
     "dxcam",
     "screeninfo",
     "av",
     "dotenv",
     "yaml",
-    "paddleocr",
-    "paddlex",
 ):
     _collect_optional_package(optional_pkg)
-
-# PaddleOCR 3.x depends on PaddleX package data at runtime.
-datas += collect_data_files("paddlex")
-datas += collect_data_files("paddleocr")
-
-# Paddle runtime binaries are loaded dynamically and need explicit collection.
-binaries += collect_dynamic_libs("paddle")
 
 if INCLUDE_NVIDIA:
     binaries += collect_dynamic_libs("nvidia")
 
 for dist_name in _installed_distributions(
-    "paddleocr",
-    "paddlex",
-    "paddlepaddle-gpu",
-    "paddlepaddle",
+    "onnxruntime-gpu",
+    "onnxruntime",
     "numpy",
     "opencv-python",
     "av",
@@ -140,7 +126,21 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[str(ROOT / "packaging" / "pyinstaller" / "rthook_aura_external_plans.py")],
-    excludes=["tests"],
+    excludes=[
+        "paddle",
+        "paddleocr",
+        "paddlex",
+        "torch",
+        "torchvision",
+        "ultralytics",
+        "PySide6",
+        "shiboken6",
+        "matplotlib",
+        "pandas",
+        "scipy",
+        "packages.yihuan_gui",
+        "tests",
+    ],
     noarchive=False,
     optimize=0,
 )

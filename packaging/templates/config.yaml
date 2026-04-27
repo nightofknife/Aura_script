@@ -1,3 +1,8 @@
 package:
   manifest_mode: hybrid
   auto_sync_manifest_on_startup: true
+
+ocr:
+  models_root: models/ocr
+  default_model: ppocrv5_server
+  execution_provider: auto

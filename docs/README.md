@@ -13,6 +13,7 @@
 
 - [aura_base 运行时与平台适配层](./project-reference/aura-base-runtime.md)
 - [YOLO ONNX Runtime 部署、导出与使用指南](./project-reference/yolo-onnx-runtime.md)
+- [OCR ONNX Runtime 部署、导出与使用指南](./project-reference/ocr-onnx-runtime.md)
 - [aura_benchmark 基准计划](./project-reference/benchmark-plan.md)
 
 ## 开发参考
