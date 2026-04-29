@@ -172,8 +172,8 @@ bait_buy_confirm_region:
 bait_buy_confirm_match_threshold: 0.78
 bait_buy_confirm_timeout_sec: 3.0
 bait_success_close_point:
-  - 300
-  - 400
+  - 640
+  - 660
 bait_success_close_clicks: 3
 bait_success_close_interval_ms: 1000
 bait_change_open_action: fish_bait_change
