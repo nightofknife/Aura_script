@@ -125,6 +125,147 @@ class YihuanFishingService:
             "control_zone_width_jump_px": max(self._profile_int(payload, "control_zone_width_jump_px", 30), 0),
             "control_zone_width_min_px": max(self._profile_int(payload, "control_zone_width_min_px", 70), 0),
             "control_zone_width_max_px": max(self._profile_int(payload, "control_zone_width_max_px", 120), 1),
+            "bait_recovery_enabled": self._profile_bool(payload, "bait_recovery_enabled", True),
+            "sell_before_buy_bait": self._profile_bool(payload, "sell_before_buy_bait", True),
+            "bait_recovery_max_attempts_per_round": max(
+                self._profile_int(payload, "bait_recovery_max_attempts_per_round", 1),
+                0,
+            ),
+            "bait_recovery_step_interval_ms": max(
+                self._profile_int(payload, "bait_recovery_step_interval_ms", 500),
+                0,
+            ),
+            "bait_recovery_ready_timeout_sec": max(
+                self._profile_float(payload, "bait_recovery_ready_timeout_sec", 8.0),
+                0.1,
+            ),
+            "bait_shortage_region": self._coerce_region(
+                payload.get("bait_shortage_region") or (350, 300, 600, 120)
+            ),
+            "bait_shortage_template": self._profile_str(
+                payload,
+                "bait_shortage_template",
+                "bait_shortage_bar_center.png",
+            ),
+            "bait_shortage_mask": self._profile_optional_str(payload, "bait_shortage_mask"),
+            "bait_shortage_match_threshold": self._profile_threshold(
+                payload,
+                "bait_shortage_match_threshold",
+                0.78,
+            ),
+            "bait_shortage_dark_bar_region": self._coerce_region(
+                payload.get("bait_shortage_dark_bar_region") or (0, 330, 1280, 65)
+            ),
+            "bait_shortage_dark_pixel_threshold": max(
+                self._profile_int(payload, "bait_shortage_dark_pixel_threshold", 35),
+                0,
+            ),
+            "bait_shortage_dark_row_ratio": self._profile_threshold(
+                payload,
+                "bait_shortage_dark_row_ratio",
+                0.80,
+            ),
+            "bait_shortage_dark_min_height_px": max(
+                self._profile_int(payload, "bait_shortage_dark_min_height_px", 35),
+                1,
+            ),
+            "sell_open_action": self._profile_str(payload, "sell_open_action", "fish_sell_shop"),
+            "sell_step_interval_ms": max(self._profile_int(payload, "sell_step_interval_ms", 1000), 0),
+            "sell_tab_point": self._coerce_point(payload.get("sell_tab_point") or (110, 280)),
+            "sell_one_click_point": self._coerce_point(payload.get("sell_one_click_point") or (710, 640)),
+            "sell_confirm_point": self._coerce_point(payload.get("sell_confirm_point") or (780, 470)),
+            "sell_success_close_point": self._coerce_point(
+                payload.get("sell_success_close_point") or (300, 400)
+            ),
+            "sell_success_close_clicks": max(self._profile_int(payload, "sell_success_close_clicks", 3), 0),
+            "sell_success_close_interval_ms": max(
+                self._profile_int(payload, "sell_success_close_interval_ms", 1000),
+                10,
+            ),
+            "sell_ui_timeout_sec": max(self._profile_float(payload, "sell_ui_timeout_sec", 5.0), 0.1),
+            "sell_confirm_template": self._profile_str(payload, "sell_confirm_template", "sell_confirm_title.png"),
+            "sell_confirm_region": self._coerce_region(
+                payload.get("sell_confirm_region") or (260, 190, 760, 160)
+            ),
+            "sell_confirm_match_threshold": self._profile_threshold(
+                payload,
+                "sell_confirm_match_threshold",
+                0.78,
+            ),
+            "sell_confirm_wait_timeout_sec": max(
+                self._profile_float(payload, "sell_confirm_wait_timeout_sec", 3.0),
+                0.1,
+            ),
+            "sell_success_template": self._profile_str(payload, "sell_success_template", "sell_success_title.png"),
+            "sell_success_region": self._coerce_region(
+                payload.get("sell_success_region") or (330, 330, 620, 190)
+            ),
+            "sell_success_match_threshold": self._profile_threshold(
+                payload,
+                "sell_success_match_threshold",
+                0.78,
+            ),
+            "sell_success_wait_timeout_sec": max(
+                self._profile_float(payload, "sell_success_wait_timeout_sec", 3.0),
+                0.1,
+            ),
+            "bait_shop_open_action": self._profile_str(payload, "bait_shop_open_action", "fish_bait_shop"),
+            "bait_step_interval_ms": max(self._profile_int(payload, "bait_step_interval_ms", 800), 0),
+            "bait_item_kind": self._profile_str(payload, "bait_item_kind", "universal_bait"),
+            "bait_item_point": self._coerce_point(payload.get("bait_item_point") or (374, 165)),
+            "bait_item_after_wait_ms": max(self._profile_int(payload, "bait_item_after_wait_ms", 500), 0),
+            "bait_max_point": self._coerce_point(payload.get("bait_max_point") or (1220, 636)),
+            "bait_max_clicks": max(self._profile_int(payload, "bait_max_clicks", 5), 1),
+            "bait_max_click_interval_ms": max(self._profile_int(payload, "bait_max_click_interval_ms", 500), 0),
+            "bait_max_after_wait_ms": max(self._profile_int(payload, "bait_max_after_wait_ms", 1200), 0),
+            "bait_buy_point": self._coerce_point(payload.get("bait_buy_point") or (1074, 686)),
+            "bait_confirm_point": self._coerce_point(payload.get("bait_confirm_point") or (780, 470)),
+            "bait_buy_confirm_template": self._profile_str(
+                payload,
+                "bait_buy_confirm_template",
+                "bait_buy_confirm_title.png",
+            ),
+            "bait_buy_confirm_region": self._coerce_region(
+                payload.get("bait_buy_confirm_region") or (260, 190, 760, 160)
+            ),
+            "bait_buy_confirm_match_threshold": self._profile_threshold(
+                payload,
+                "bait_buy_confirm_match_threshold",
+                0.78,
+            ),
+            "bait_buy_confirm_timeout_sec": max(
+                self._profile_float(payload, "bait_buy_confirm_timeout_sec", 3.0),
+                0.1,
+            ),
+            "bait_success_close_point": self._coerce_point(
+                payload.get("bait_success_close_point") or (300, 400)
+            ),
+            "bait_success_close_clicks": max(self._profile_int(payload, "bait_success_close_clicks", 3), 0),
+            "bait_success_close_interval_ms": max(
+                self._profile_int(payload, "bait_success_close_interval_ms", 1000),
+                10,
+            ),
+            "bait_change_open_action": self._profile_str(payload, "bait_change_open_action", "fish_bait_change"),
+            "bait_change_open_wait_sec": max(
+                self._profile_float(payload, "bait_change_open_wait_sec", 2.0),
+                0.0,
+            ),
+            "bait_change_confirm_point": self._coerce_point(
+                payload.get("bait_change_confirm_point") or (780, 470)
+            ),
+            "bait_change_after_click_wait_sec": max(
+                self._profile_float(payload, "bait_change_after_click_wait_sec", 1.0),
+                0.0,
+            ),
+            "bait_change_template": self._profile_str(payload, "bait_change_template", "bait_change_title.png"),
+            "bait_change_region": self._coerce_region(
+                payload.get("bait_change_region") or (260, 190, 760, 160)
+            ),
+            "bait_change_match_threshold": self._profile_threshold(
+                payload,
+                "bait_change_match_threshold",
+                0.78,
+            ),
         }
         self._profile_cache[resolved_name] = normalized
         return dict(normalized)
@@ -350,6 +491,130 @@ class YihuanFishingService:
             "mask_path": str(mask_path) if mask_path.is_file() else None,
             "backend": "vision",
             "debug_info": dict(match_result.debug_info or {}),
+        }
+
+    def match_template_with_vision(
+        self,
+        source_image: np.ndarray,
+        vision: Any,
+        *,
+        template_name: str,
+        region: Region,
+        threshold: float,
+        mask_name: str | None = None,
+        profile_name: str | None = None,
+    ) -> dict[str, Any]:
+        _ = self.load_profile(profile_name)
+        crop = self._crop_region(source_image, region)
+        template_path = self._resolve_template_path(template_name)
+        mask_path = self._resolve_template_path(mask_name) if mask_name else None
+        response = {
+            "found": False,
+            "confidence": 0.0,
+            "threshold": float(threshold),
+            "region": list(region),
+            "match_rect": None,
+            "template_path": str(template_path),
+            "mask_path": str(mask_path) if mask_path is not None and mask_path.is_file() else None,
+            "backend": "vision",
+            "debug_info": {},
+        }
+        if crop.size == 0:
+            response["debug_info"] = {"error": "empty_region"}
+            return response
+        if not template_path.is_file():
+            response["debug_info"] = {"error": "template_not_found"}
+            return response
+
+        match_result = vision.find_template(
+            source_image=crop,
+            template_image=str(template_path),
+            mask_image=str(mask_path) if mask_path is not None and mask_path.is_file() else None,
+            threshold=float(threshold),
+            use_grayscale=True,
+            match_method=cv2.TM_CCOEFF_NORMED,
+            preprocess="none",
+        )
+        rect = match_result.rect
+        top_left = match_result.top_left
+        match_rect = None
+        if rect is not None:
+            match_rect = [
+                int(region[0] + rect[0]),
+                int(region[1] + rect[1]),
+                int(rect[2]),
+                int(rect[3]),
+            ]
+        elif top_left is not None:
+            template = self._load_template(str(template_path.name))
+            match_rect = [
+                int(region[0] + top_left[0]),
+                int(region[1] + top_left[1]),
+                int(template.shape[1]),
+                int(template.shape[0]),
+            ]
+
+        response.update(
+            {
+                "found": bool(match_result.found),
+                "confidence": round(float(match_result.confidence), 4),
+                "match_rect": match_rect,
+                "debug_info": dict(match_result.debug_info or {}),
+            }
+        )
+        return response
+
+    def analyze_bait_shortage(
+        self,
+        source_image: np.ndarray,
+        vision: Any,
+        *,
+        profile_name: str | None = None,
+    ) -> dict[str, Any]:
+        profile = self.load_profile(profile_name)
+        if not bool(profile["bait_recovery_enabled"]):
+            return {
+                "found": False,
+                "reason": "disabled",
+                "template_match": None,
+                "dark_bar": None,
+                "confidence": 0.0,
+                "match_rect": None,
+            }
+
+        template_match = self.match_template_with_vision(
+            source_image,
+            vision,
+            template_name=str(profile["bait_shortage_template"]),
+            region=profile["bait_shortage_region"],
+            threshold=float(profile["bait_shortage_match_threshold"]),
+            mask_name=profile.get("bait_shortage_mask"),
+            profile_name=profile["profile_name"],
+        )
+        dark_bar = self._analyze_dark_bar(
+            source_image,
+            region=profile["bait_shortage_dark_bar_region"],
+            pixel_threshold=int(profile["bait_shortage_dark_pixel_threshold"]),
+            row_ratio=float(profile["bait_shortage_dark_row_ratio"]),
+            min_height_px=int(profile["bait_shortage_dark_min_height_px"]),
+        )
+
+        template_found = bool(template_match.get("found"))
+        dark_found = bool(dark_bar.get("found"))
+        found = template_found and dark_found
+        reason = "ok"
+        if not template_found:
+            reason = "template_missing"
+        elif not dark_found:
+            reason = "dark_bar_missing"
+
+        return {
+            "found": bool(found),
+            "reason": reason,
+            "template_match": template_match,
+            "dark_bar": dark_bar,
+            "confidence": float(template_match.get("confidence") or 0.0),
+            "match_rect": template_match.get("match_rect"),
         }
 
     def analyze_duel_meter(
@@ -1135,6 +1400,67 @@ class YihuanFishingService:
                 missing.append(token)
         return {"matched": not missing, "missing": missing}
 
+    def _analyze_dark_bar(
+        self,
+        source_image: np.ndarray,
+        *,
+        region: Region,
+        pixel_threshold: int,
+        row_ratio: float,
+        min_height_px: int,
+    ) -> dict[str, Any]:
+        crop = self._crop_region(source_image, region)
+        if crop.size == 0:
+            return {
+                "found": False,
+                "reason": "empty_region",
+                "region": list(region),
+                "pixel_threshold": int(pixel_threshold),
+                "row_ratio": float(row_ratio),
+                "min_height_px": int(min_height_px),
+                "max_run_height_px": 0,
+                "max_run_rect": None,
+            }
+
+        gray = cv2.cvtColor(crop, cv2.COLOR_RGB2GRAY) if crop.ndim == 3 else crop
+        dark_mask = gray < int(pixel_threshold)
+        per_row_ratio = np.mean(dark_mask, axis=1)
+        matching_rows = [int(row) for row in np.where(per_row_ratio >= float(row_ratio))[0]]
+        runs = self._contiguous_runs(matching_rows)
+        best_run: tuple[int, int] | None = None
+        best_height = 0
+        for start, end in runs:
+            height = int(end - start + 1)
+            if height <= best_height:
+                continue
+            best_height = height
+            best_run = (int(start), int(end))
+
+        found = best_height >= int(min_height_px)
+        max_run_rect = None
+        if best_run is not None:
+            max_run_rect = [int(region[0]), int(region[1] + best_run[0]), int(region[2]), int(best_height)]
+        return {
+            "found": bool(found),
+            "reason": "ok" if found else "height_below_threshold",
+            "region": list(region),
+            "pixel_threshold": int(pixel_threshold),
+            "row_ratio": float(row_ratio),
+            "min_height_px": int(min_height_px),
+            "max_run_height_px": int(best_height),
+            "max_run_rect": max_run_rect,
+            "matching_row_count": len(matching_rows),
+        }
+
+    def _resolve_template_path(self, name: str | None) -> Path:
+        raw_name = str(name or "").strip()
+        if not raw_name:
+            return self._template_dir / ""
+        path = Path(raw_name)
+        if path.is_absolute():
+            return path
+        return self._template_dir / path
+
     def _load_template(self, name: str) -> np.ndarray:
         cached = self._template_cache.get(name)
         if cached is not None:
@@ -1251,6 +1577,35 @@ class YihuanFishingService:
         if value is None:
             value = default
         return float(value)
+
+    def _profile_bool(self, payload: dict[str, Any], key: str, default: bool) -> bool:
+        value = payload.get(key, default)
+        if value is None:
+            return bool(default)
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"1", "true", "yes", "on"}:
+                return True
+            if normalized in {"0", "false", "no", "off"}:
+                return False
+        return bool(value)
+
+    def _profile_str(self, payload: dict[str, Any], key: str, default: str) -> str:
+        value = payload.get(key, default)
+        if value is None:
+            value = default
+        return str(value).strip() or str(default)
+
+    def _profile_optional_str(self, payload: dict[str, Any], key: str) -> str | None:
+        value = payload.get(key)
+        if value is None:
+            return None
+        normalized = str(value).strip()
+        return normalized or None
+
+    def _profile_threshold(self, payload: dict[str, Any], key: str, default: float) -> float:
+        value = self._profile_float(payload, key, default)
+        return max(min(float(value), 1.0), 0.0)
 
 
     def _coerce_hsv_pair(

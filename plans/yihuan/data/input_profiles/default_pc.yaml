@@ -22,3 +22,33 @@ actions:
   fish_right:
     type: key
     key: d
+  fish_sell_shop:
+    type: key
+    key: q
+  fish_bait_shop:
+    type: key
+    key: r
+  fish_bait_change:
+    type: key
+    key: e
+  menu_back:
+    type: key
+    key: esc
+  tetrominoes_left:
+    type: key
+    key: a
+  tetrominoes_right:
+    type: key
+    key: d
+  tetrominoes_fast_drop:
+    type: key
+    key: space
+  tetrominoes_rotate_ccw:
+    type: key
+    key: j
+  tetrominoes_rotate_cw:
+    type: key
+    key: k
+  tetrominoes_soft_drop:
+    type: key
+    key: s

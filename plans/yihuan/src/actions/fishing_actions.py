@@ -826,8 +826,10 @@ def _wait_for_hook_success(
             vision=vision,
             yihuan_fishing=yihuan_fishing,
             profile_name=profile_name,
+            include_capture_image=True,
             enable_ocr=False,
         )
+        capture_image = state.pop("_capture_image", None)
         last_state = state
         _append_trace(phase_trace, start_time=start_time, state=state)
         _log_state_details("hook_wait", state)
@@ -858,6 +860,27 @@ def _wait_for_hook_success(
                 }
         else:
             success_streak = 0
+            if capture_image is not None:
+                bait_shortage = yihuan_fishing.analyze_bait_shortage(
+                    capture_image,
+                    vision,
+                    profile_name=profile_name,
+                )
+                if bool(bait_shortage.get("found")):
+                    logger.info(
+                        "Fishing[bait] shortage_detected confidence=%.4f dark_bar=%s",
+                        float(bait_shortage.get("confidence") or 0.0),
+                        bool((bait_shortage.get("dark_bar") or {}).get("found")),
+                    )
+                    _append_trace(phase_trace, start_time=start_time, state=state, note="bait_shortage")
+                    return {
+                        "ok": False,
+                        "failure_reason": "bait_shortage",
+                        "event": "bait_shortage",
+                        "state": state,
+                        "bait_shortage": bait_shortage,
+                        "elapsed_sec": round(time.monotonic() - hook_started_at, 3),
+                    }
 
         next_hook_poll_at = _sleep_for_target_period(next_hook_poll_at, hook_poll_sec)
 
@@ -869,6 +892,818 @@ def _has_ready_template(state: dict[str, Any] | None) -> bool:
     if ready_anchor:
         return bool(ready_anchor.get("found"))
     return str(state.get("phase") or "unknown") == "ready"
+
+
+def _bait_step_interval_sec(profile: dict[str, Any]) -> float:
+    return max(float(profile.get("bait_recovery_step_interval_ms") or 0) / 1000.0, 0.0)
+
+
+def _profile_interval_sec(profile: dict[str, Any], key: str) -> float:
+    fallback_ms = int(profile.get("bait_recovery_step_interval_ms") or 0)
+    return max(float(profile.get(key, fallback_ms) or 0) / 1000.0, 0.0)
+
+
+def _click_config_point(
+    app: Any,
+    profile: dict[str, Any],
+    point_key: str,
+    *,
+    phase_trace: list[dict[str, Any]],
+    start_time: float,
+    log_scope: str,
+    step: str,
+) -> tuple[int, int]:
+    x, y = profile[point_key]
+    app.click(x=x, y=y, button="left", clicks=1, interval=0.0)
+    _append_trace(phase_trace, start_time=start_time, note=f"{log_scope}_{step}")
+    logger.info("Fishing[%s] step=%s ok=True point=(%s,%s)", log_scope, step, x, y)
+    return int(x), int(y)
+
+
+def _press_config_action(
+    input_mapping: Any,
+    app: Any,
+    profile: dict[str, Any],
+    action_key: str,
+    *,
+    profile_name: str,
+    phase_trace: list[dict[str, Any]],
+    start_time: float,
+    log_scope: str,
+    step: str,
+) -> str:
+    action_name = str(profile.get(action_key) or action_key)
+    _press_input_action(input_mapping, app, action_name=action_name, profile_name=profile_name)
+    _append_trace(phase_trace, start_time=start_time, note=f"{log_scope}_{step}")
+    logger.info("Fishing[%s] step=%s ok=True action=%s phase=press", log_scope, step, action_name)
+    return action_name
+
+
+def _capture_and_match_profile_template(
+    app: Any,
+    vision: Any,
+    yihuan_fishing: YihuanFishingService,
+    profile: dict[str, Any],
+    *,
+    template_key: str,
+    region_key: str,
+    threshold_key: str,
+    profile_name: str,
+) -> dict[str, Any]:
+    template_name = str(profile.get(template_key) or "").strip()
+    if not template_name:
+        return {
+            "found": False,
+            "reason": "template_not_configured",
+            "confidence": 0.0,
+            "match_rect": None,
+        }
+    capture = app.capture()
+    if not capture.success or capture.image is None:
+        return {
+            "found": False,
+            "reason": "capture_failed",
+            "confidence": 0.0,
+            "match_rect": None,
+        }
+    return yihuan_fishing.match_template_with_vision(
+        capture.image,
+        vision,
+        template_name=template_name,
+        region=profile[region_key],
+        threshold=float(profile[threshold_key]),
+        profile_name=profile_name,
+    )
+
+
+def _wait_for_ready_template(
+    app: Any,
+    ocr: Any,
+    vision: Any,
+    yihuan_fishing: YihuanFishingService,
+    *,
+    profile_name: str,
+    timeout_sec: float,
+    phase_trace: list[dict[str, Any]],
+    start_time: float,
+    note: str,
+) -> dict[str, Any]:
+    deadline = time.monotonic() + max(float(timeout_sec), 0.1)
+    last_state: dict[str, Any] | None = None
+    while True:
+        state = _read_state_snapshot(
+            app,
+            ocr,
+            vision,
+            yihuan_fishing,
+            profile_name=profile_name,
+            enable_ocr=False,
+        )
+        last_state = state
+        if _has_ready_template(state):
+            _append_trace(phase_trace, start_time=start_time, state=state, note=note)
+            return {"ok": True, "state": state}
+        if time.monotonic() >= deadline:
+            return {"ok": False, "state": last_state}
+        time.sleep(0.1)
+
+
+def _wait_for_profile_template(
+    app: Any,
+    vision: Any,
+    yihuan_fishing: YihuanFishingService,
+    profile: dict[str, Any],
+    *,
+    template_key: str,
+    region_key: str,
+    threshold_key: str,
+    profile_name: str,
+    timeout_sec: float,
+    log_scope: str,
+    step: str,
+) -> dict[str, Any]:
+    deadline = time.monotonic() + max(float(timeout_sec), 0.1)
+    last_match: dict[str, Any] | None = None
+    while True:
+        match = _capture_and_match_profile_template(
+            app,
+            vision,
+            yihuan_fishing,
+            profile,
+            template_key=template_key,
+            region_key=region_key,
+            threshold_key=threshold_key,
+            profile_name=profile_name,
+        )
+        last_match = match
+        if bool(match.get("found")):
+            logger.info(
+                "Fishing[%s] step=%s ok=True confidence=%.4f",
+                log_scope,
+                step,
+                float(match.get("confidence") or 0.0),
+            )
+            return match
+        if time.monotonic() >= deadline:
+            logger.info(
+                "Fishing[%s] step=%s ok=False reason=timeout confidence=%.4f",
+                log_scope,
+                step,
+                float(match.get("confidence") or 0.0),
+            )
+            return last_match
+        time.sleep(0.1)
+
+
+def _click_repeated(
+    app: Any,
+    point: tuple[int, int],
+    *,
+    clicks: int,
+    interval_ms: int,
+    phase_trace: list[dict[str, Any]],
+    start_time: float,
+    log_scope: str,
+    step: str,
+) -> int:
+    x, y = int(point[0]), int(point[1])
+    total = max(int(clicks), 0)
+    interval_sec = max(float(interval_ms) / 1000.0, 0.0)
+    for index in range(total):
+        app.click(x=x, y=y, button="left", clicks=1, interval=0.0)
+        _append_trace(phase_trace, start_time=start_time, note=f"{log_scope}_{step}")
+        logger.info(
+            "Fishing[%s] step=%s ok=True point=(%s,%s) click_index=%s/%s",
+            log_scope,
+            step,
+            x,
+            y,
+            index + 1,
+            total,
+        )
+        if index + 1 < total and interval_sec > 0:
+            time.sleep(interval_sec)
+    return total
+
+
+def _click_config_point_repeated(
+    app: Any,
+    profile: dict[str, Any],
+    point_key: str,
+    *,
+    clicks: int,
+    interval_ms: int,
+    phase_trace: list[dict[str, Any]],
+    start_time: float,
+    log_scope: str,
+    step: str,
+) -> tuple[int, int, int]:
+    x, y = profile[point_key]
+    total = max(int(clicks), 1)
+    interval_sec = max(float(interval_ms) / 1000.0, 0.0)
+    for index in range(total):
+        app.click(x=x, y=y, button="left", clicks=1, interval=0.0)
+        _append_trace(phase_trace, start_time=start_time, note=f"{log_scope}_{step}")
+        logger.info(
+            "Fishing[%s] step=%s ok=True point=(%s,%s) click_index=%s/%s interval_ms=%s",
+            log_scope,
+            step,
+            x,
+            y,
+            index + 1,
+            total,
+            int(interval_ms),
+        )
+        if index + 1 < total and interval_sec > 0:
+            time.sleep(interval_sec)
+    return int(x), int(y), total
+
+
+def _run_sell_fish_before_buy_bait(
+    app: Any,
+    ocr: Any,
+    vision: Any,
+    input_mapping: Any,
+    yihuan_fishing: YihuanFishingService,
+    *,
+    profile: dict[str, Any],
+    profile_name: str,
+    phase_trace: list[dict[str, Any]],
+    start_time: float,
+) -> dict[str, Any]:
+    started_at = time.monotonic()
+    steps: list[dict[str, Any]] = []
+    step_interval_sec = _profile_interval_sec(profile, "sell_step_interval_ms")
+    result_status = "failed_not_ready"
+    confirm_match: dict[str, Any] | None = None
+    success_match: dict[str, Any] | None = None
+
+    try:
+        _press_config_action(
+            input_mapping,
+            app,
+            profile,
+            "sell_open_action",
+            profile_name=profile_name,
+            phase_trace=phase_trace,
+            start_time=start_time,
+            log_scope="sell",
+            step="open_shop",
+        )
+        time.sleep(step_interval_sec)
+        steps.append({"step": "open_shop", "ok": True, "action": profile["sell_open_action"]})
+
+        _click_config_point(
+            app,
+            profile,
+            "sell_tab_point",
+            phase_trace=phase_trace,
+            start_time=start_time,
+            log_scope="sell",
+            step="open_sell_tab",
+        )
+        time.sleep(step_interval_sec)
+        steps.append({"step": "open_sell_tab", "ok": True, "point": list(profile["sell_tab_point"])})
+
+        _click_config_point(
+            app,
+            profile,
+            "sell_one_click_point",
+            phase_trace=phase_trace,
+            start_time=start_time,
+            log_scope="sell",
+            step="one_click_sell",
+        )
+        time.sleep(step_interval_sec)
+        steps.append({"step": "one_click_sell", "ok": True, "point": list(profile["sell_one_click_point"])})
+
+        confirm_match = _wait_for_profile_template(
+            app,
+            vision,
+            yihuan_fishing,
+            profile,
+            template_key="sell_confirm_template",
+            region_key="sell_confirm_region",
+            threshold_key="sell_confirm_match_threshold",
+            profile_name=profile_name,
+            timeout_sec=float(profile["sell_confirm_wait_timeout_sec"]),
+            log_scope="sell",
+            step="confirm_template",
+        )
+        steps.append(
+            {
+                "step": "confirm_template",
+                "ok": bool(confirm_match.get("found")),
+                "confidence": float(confirm_match.get("confidence") or 0.0),
+            }
+        )
+
+        if bool(confirm_match.get("found")):
+            _click_config_point(
+                app,
+                profile,
+                "sell_confirm_point",
+                phase_trace=phase_trace,
+                start_time=start_time,
+                log_scope="sell",
+                step="confirm_sell",
+            )
+            time.sleep(step_interval_sec)
+            steps.append({"step": "confirm_sell", "ok": True, "point": list(profile["sell_confirm_point"])})
+            result_status = "sold"
+
+            success_match = _wait_for_profile_template(
+                app,
+                vision,
+                yihuan_fishing,
+                profile,
+                template_key="sell_success_template",
+                region_key="sell_success_region",
+                threshold_key="sell_success_match_threshold",
+                profile_name=profile_name,
+                timeout_sec=float(profile["sell_success_wait_timeout_sec"]),
+                log_scope="sell",
+                step="success_template",
+            )
+            steps.append(
+                {
+                    "step": "success_template",
+                    "ok": bool(success_match.get("found")),
+                    "confidence": float(success_match.get("confidence") or 0.0),
+                }
+            )
+            close_count = _click_repeated(
+                app,
+                profile["sell_success_close_point"],
+                clicks=int(profile["sell_success_close_clicks"]),
+                interval_ms=int(profile["sell_success_close_interval_ms"]),
+                phase_trace=phase_trace,
+                start_time=start_time,
+                log_scope="sell",
+                step="close_success",
+            )
+            steps.append({"step": "close_success", "ok": True, "clicks": close_count})
+            time.sleep(step_interval_sec)
+        else:
+            result_status = "no_fish_or_no_confirm"
+
+        _press_config_action(
+            input_mapping,
+            app,
+            profile,
+            "menu_back",
+            profile_name=profile_name,
+            phase_trace=phase_trace,
+            start_time=start_time,
+            log_scope="sell",
+            step="return_ready",
+        )
+        time.sleep(step_interval_sec)
+        ready = _wait_for_ready_template(
+            app,
+            ocr,
+            vision,
+            yihuan_fishing,
+            profile_name=profile_name,
+            timeout_sec=float(profile["bait_recovery_ready_timeout_sec"]),
+            phase_trace=phase_trace,
+            start_time=start_time,
+            note="sell_return_ready",
+        )
+        steps.append({"step": "return_ready", "ok": bool(ready["ok"])})
+        if not bool(ready["ok"]):
+            result_status = "failed_not_ready"
+        logger.info("Fishing[sell] done status=%s ready=%s", result_status, bool(ready["ok"]))
+        return {
+            "ok": result_status != "failed_not_ready",
+            "status": result_status,
+            "steps": steps,
+            "confirm_match": confirm_match,
+            "success_match": success_match,
+            "state": ready.get("state"),
+            "elapsed_sec": round(time.monotonic() - started_at, 3),
+        }
+    except Exception as exc:  # pragma: no cover - defensive runtime recovery path
+        logger.warning("Fishing[sell] failed exception=%s", exc)
+        steps.append({"step": "exception", "ok": False, "reason": str(exc)})
+        try:
+            _press_config_action(
+                input_mapping,
+                app,
+                profile,
+                "menu_back",
+                profile_name=profile_name,
+                phase_trace=phase_trace,
+                start_time=start_time,
+                log_scope="sell",
+                step="return_ready_after_error",
+            )
+        except Exception:
+            pass
+        ready = _wait_for_ready_template(
+            app,
+            ocr,
+            vision,
+            yihuan_fishing,
+            profile_name=profile_name,
+            timeout_sec=float(profile["bait_recovery_ready_timeout_sec"]),
+            phase_trace=phase_trace,
+            start_time=start_time,
+            note="sell_error_return_ready",
+        )
+        status = "failed_but_ready" if bool(ready["ok"]) else "failed_not_ready"
+        return {
+            "ok": bool(ready["ok"]),
+            "status": status,
+            "steps": steps,
+            "confirm_match": confirm_match,
+            "success_match": success_match,
+            "state": ready.get("state"),
+            "elapsed_sec": round(time.monotonic() - started_at, 3),
+        }
+
+
+def _run_buy_universal_bait(
+    app: Any,
+    ocr: Any,
+    vision: Any,
+    input_mapping: Any,
+    yihuan_fishing: YihuanFishingService,
+    *,
+    profile: dict[str, Any],
+    profile_name: str,
+    phase_trace: list[dict[str, Any]],
+    start_time: float,
+) -> dict[str, Any]:
+    started_at = time.monotonic()
+    steps: list[dict[str, Any]] = []
+    step_interval_sec = _profile_interval_sec(profile, "bait_step_interval_ms")
+    buy_confirm_match: dict[str, Any] | None = None
+    try:
+        _press_config_action(
+            input_mapping,
+            app,
+            profile,
+            "bait_shop_open_action",
+            profile_name=profile_name,
+            phase_trace=phase_trace,
+            start_time=start_time,
+            log_scope="bait",
+            step="open_shop",
+        )
+        time.sleep(step_interval_sec)
+        steps.append({"step": "open_shop", "ok": True, "action": profile["bait_shop_open_action"]})
+
+        _click_config_point(
+            app,
+            profile,
+            "bait_item_point",
+            phase_trace=phase_trace,
+            start_time=start_time,
+            log_scope="bait",
+            step="select_universal",
+        )
+        item_wait_sec = max(float(profile["bait_item_after_wait_ms"]) / 1000.0, step_interval_sec)
+        time.sleep(item_wait_sec)
+        steps.append(
+            {
+                "step": "select_universal",
+                "ok": True,
+                "point": list(profile["bait_item_point"]),
+                "after_wait_ms": int(round(item_wait_sec * 1000)),
+            }
+        )
+
+        _, _, max_clicks = _click_config_point_repeated(
+            app,
+            profile,
+            "bait_max_point",
+            clicks=int(profile["bait_max_clicks"]),
+            interval_ms=int(profile["bait_max_click_interval_ms"]),
+            phase_trace=phase_trace,
+            start_time=start_time,
+            log_scope="bait",
+            step="max_count",
+        )
+        max_after_wait_sec = max(float(profile["bait_max_after_wait_ms"]) / 1000.0, step_interval_sec)
+        time.sleep(max_after_wait_sec)
+        steps.append(
+            {
+                "step": "max_count",
+                "ok": True,
+                "point": list(profile["bait_max_point"]),
+                "clicks": max_clicks,
+                "click_interval_ms": int(profile["bait_max_click_interval_ms"]),
+                "after_wait_ms": int(round(max_after_wait_sec * 1000)),
+            }
+        )
+
+        _click_config_point(
+            app,
+            profile,
+            "bait_buy_point",
+            phase_trace=phase_trace,
+            start_time=start_time,
+            log_scope="bait",
+            step="buy",
+        )
+        time.sleep(step_interval_sec)
+        steps.append({"step": "buy", "ok": True, "point": list(profile["bait_buy_point"])})
+
+        buy_confirm_match = _wait_for_profile_template(
+            app,
+            vision,
+            yihuan_fishing,
+            profile,
+            template_key="bait_buy_confirm_template",
+            region_key="bait_buy_confirm_region",
+            threshold_key="bait_buy_confirm_match_threshold",
+            profile_name=profile_name,
+            timeout_sec=float(profile["bait_buy_confirm_timeout_sec"]),
+            log_scope="bait",
+            step="buy_confirm_template",
+        )
+        steps.append(
+            {
+                "step": "buy_confirm_template",
+                "ok": bool(buy_confirm_match.get("found")),
+                "confidence": float(buy_confirm_match.get("confidence") or 0.0),
+            }
+        )
+        if not bool(buy_confirm_match.get("found")):
+            return {
+                "ok": False,
+                "failure_reason": "buy_confirm_prompt_missing",
+                "steps": steps,
+                "buy_confirm_match": buy_confirm_match,
+                "state": None,
+                "elapsed_sec": round(time.monotonic() - started_at, 3),
+            }
+
+        _click_config_point(
+            app,
+            profile,
+            "bait_confirm_point",
+            phase_trace=phase_trace,
+            start_time=start_time,
+            log_scope="bait",
+            step="confirm",
+        )
+        time.sleep(step_interval_sec)
+        steps.append({"step": "confirm", "ok": True, "point": list(profile["bait_confirm_point"])})
+
+        close_count = _click_repeated(
+            app,
+            profile["bait_success_close_point"],
+            clicks=int(profile["bait_success_close_clicks"]),
+            interval_ms=int(profile["bait_success_close_interval_ms"]),
+            phase_trace=phase_trace,
+            start_time=start_time,
+            log_scope="bait",
+            step="close_success",
+        )
+        steps.append({"step": "close_success", "ok": True, "clicks": close_count})
+        time.sleep(step_interval_sec)
+
+        _press_config_action(
+            input_mapping,
+            app,
+            profile,
+            "menu_back",
+            profile_name=profile_name,
+            phase_trace=phase_trace,
+            start_time=start_time,
+            log_scope="bait",
+            step="return_ready",
+        )
+        time.sleep(step_interval_sec)
+        ready = _wait_for_ready_template(
+            app,
+            ocr,
+            vision,
+            yihuan_fishing,
+            profile_name=profile_name,
+            timeout_sec=float(profile["bait_recovery_ready_timeout_sec"]),
+            phase_trace=phase_trace,
+            start_time=start_time,
+            note="buy_bait_return_ready",
+        )
+        steps.append({"step": "return_ready", "ok": bool(ready["ok"])})
+        ok = bool(ready["ok"])
+        return {
+            "ok": ok,
+            "failure_reason": None if ok else "buy_bait_not_ready",
+            "steps": steps,
+            "buy_confirm_match": buy_confirm_match,
+            "state": ready.get("state"),
+            "elapsed_sec": round(time.monotonic() - started_at, 3),
+        }
+    except Exception as exc:  # pragma: no cover - defensive runtime recovery path
+        logger.warning("Fishing[bait] buy_failed exception=%s", exc)
+        steps.append({"step": "exception", "ok": False, "reason": str(exc)})
+        return {
+            "ok": False,
+            "failure_reason": "buy_bait_exception",
+            "steps": steps,
+            "buy_confirm_match": buy_confirm_match,
+            "state": None,
+            "elapsed_sec": round(time.monotonic() - started_at, 3),
+        }
+
+
+def _run_change_universal_bait(
+    app: Any,
+    ocr: Any,
+    vision: Any,
+    input_mapping: Any,
+    yihuan_fishing: YihuanFishingService,
+    *,
+    profile: dict[str, Any],
+    profile_name: str,
+    phase_trace: list[dict[str, Any]],
+    start_time: float,
+) -> dict[str, Any]:
+    started_at = time.monotonic()
+    steps: list[dict[str, Any]] = []
+    try:
+        logger.info("Fishing[bait] change_start")
+        _press_config_action(
+            input_mapping,
+            app,
+            profile,
+            "bait_change_open_action",
+            profile_name=profile_name,
+            phase_trace=phase_trace,
+            start_time=start_time,
+            log_scope="bait",
+            step="change_start",
+        )
+        time.sleep(float(profile["bait_change_open_wait_sec"]))
+        steps.append({"step": "change_start", "ok": True, "action": profile["bait_change_open_action"]})
+
+        title_match = _capture_and_match_profile_template(
+            app,
+            vision,
+            yihuan_fishing,
+            profile,
+            template_key="bait_change_template",
+            region_key="bait_change_region",
+            threshold_key="bait_change_match_threshold",
+            profile_name=profile_name,
+        )
+        logger.info(
+            "Fishing[bait] step=change_title ok=%s confidence=%.4f",
+            bool(title_match.get("found")),
+            float(title_match.get("confidence") or 0.0),
+        )
+        steps.append(
+            {
+                "step": "change_title",
+                "ok": bool(title_match.get("found")),
+                "confidence": float(title_match.get("confidence") or 0.0),
+            }
+        )
+
+        _click_config_point(
+            app,
+            profile,
+            "bait_change_confirm_point",
+            phase_trace=phase_trace,
+            start_time=start_time,
+            log_scope="bait",
+            step="change_confirm",
+        )
+        logger.info("Fishing[bait] change_confirm")
+        steps.append({"step": "change_confirm", "ok": True, "point": list(profile["bait_change_confirm_point"])})
+        time.sleep(float(profile["bait_change_after_click_wait_sec"]))
+
+        ready = _wait_for_ready_template(
+            app,
+            ocr,
+            vision,
+            yihuan_fishing,
+            profile_name=profile_name,
+            timeout_sec=float(profile["bait_recovery_ready_timeout_sec"]),
+            phase_trace=phase_trace,
+            start_time=start_time,
+            note="change_bait_return_ready",
+        )
+        steps.append({"step": "change_done", "ok": bool(ready["ok"])})
+        logger.info("Fishing[bait] change_done ok=%s", bool(ready["ok"]))
+        ok = bool(ready["ok"])
+        return {
+            "ok": ok,
+            "failure_reason": None if ok else "change_bait_not_ready",
+            "steps": steps,
+            "title_match": title_match,
+            "state": ready.get("state"),
+            "elapsed_sec": round(time.monotonic() - started_at, 3),
+        }
+    except Exception as exc:  # pragma: no cover - defensive runtime recovery path
+        logger.warning("Fishing[bait] change_failed exception=%s", exc)
+        steps.append({"step": "exception", "ok": False, "reason": str(exc)})
+        return {
+            "ok": False,
+            "failure_reason": "change_bait_exception",
+            "steps": steps,
+            "title_match": None,
+            "state": None,
+            "elapsed_sec": round(time.monotonic() - started_at, 3),
+        }
+
+
+def _run_bait_recovery(
+    app: Any,
+    ocr: Any,
+    vision: Any,
+    input_mapping: Any,
+    yihuan_fishing: YihuanFishingService,
+    *,
+    profile: dict[str, Any],
+    profile_name: str,
+    phase_trace: list[dict[str, Any]],
+    start_time: float,
+) -> dict[str, Any]:
+    started_at = time.monotonic()
+    sell_result: dict[str, Any] | None = None
+    buy_bait_result: dict[str, Any] | None = None
+    change_bait_result: dict[str, Any] | None = None
+    sell_before_buy = bool(profile["sell_before_buy_bait"])
+    logger.info("Fishing[bait] recovery_start sell_before_buy=%s", sell_before_buy)
+    app.release_all()
+
+    if sell_before_buy:
+        sell_result = _run_sell_fish_before_buy_bait(
+            app,
+            ocr,
+            vision,
+            input_mapping,
+            yihuan_fishing,
+            profile=profile,
+            profile_name=profile_name,
+            phase_trace=phase_trace,
+            start_time=start_time,
+        )
+        if str(sell_result.get("status")) == "failed_not_ready":
+            elapsed = round(time.monotonic() - started_at, 3)
+            logger.info("Fishing[bait] recovery_done ok=False elapsed=%.3f", elapsed)
+            return {
+                "ok": False,
+                "failure_reason": "bait_recovery_not_ready",
+                "sell_result": sell_result,
+                "buy_bait_result": None,
+                "change_bait_result": None,
+                "state": sell_result.get("state"),
+                "elapsed_sec": elapsed,
+            }
+
+    buy_bait_result = _run_buy_universal_bait(
+        app,
+        ocr,
+        vision,
+        input_mapping,
+        yihuan_fishing,
+        profile=profile,
+        profile_name=profile_name,
+        phase_trace=phase_trace,
+        start_time=start_time,
+    )
+    if not bool(buy_bait_result.get("ok")):
+        elapsed = round(time.monotonic() - started_at, 3)
+        logger.info("Fishing[bait] recovery_done ok=False elapsed=%.3f", elapsed)
+        return {
+            "ok": False,
+            "failure_reason": str(buy_bait_result.get("failure_reason") or "buy_bait_failed"),
+            "sell_result": sell_result,
+            "buy_bait_result": buy_bait_result,
+            "change_bait_result": None,
+            "state": buy_bait_result.get("state"),
+            "elapsed_sec": elapsed,
+        }
+
+    change_bait_result = _run_change_universal_bait(
+        app,
+        ocr,
+        vision,
+        input_mapping,
+        yihuan_fishing,
+        profile=profile,
+        profile_name=profile_name,
+        phase_trace=phase_trace,
+        start_time=start_time,
+    )
+    elapsed = round(time.monotonic() - started_at, 3)
+    ok = bool(change_bait_result.get("ok"))
+    logger.info("Fishing[bait] recovery_done ok=%s elapsed=%.3f", ok, elapsed)
+    return {
+        "ok": ok,
+        "failure_reason": None if ok else str(change_bait_result.get("failure_reason") or "change_bait_failed"),
+        "sell_result": sell_result,
+        "buy_bait_result": buy_bait_result,
+        "change_bait_result": change_bait_result,
+        "state": change_bait_result.get("state"),
+        "elapsed_sec": elapsed,
+    }
 
 
 def _run_post_duel_cleanup(
@@ -993,6 +1828,14 @@ def _run_fishing_round_impl(
     last_detection_status: dict[str, Any] | None = None
     last_detection_sample_at: float | None = None
     control_memory: dict[str, Any] = {}
+    round_extra: dict[str, Any] = {
+        "bait_recovery_count": 0,
+        "sell_result": None,
+        "buy_bait_result": None,
+        "change_bait_result": None,
+        "bait_recovery_result": None,
+        "bait_shortage": None,
+    }
 
     try:
         state = _read_state_snapshot(app, ocr, vision, yihuan_fishing, profile_name=resolved_profile)
@@ -1011,45 +1854,116 @@ def _run_fishing_round_impl(
             )
             if not cleanup_result["ok"]:
                 failure_reason = "result_close_timeout"
-                return _round_result("failed", round_index, phase_trace, failure_reason, timings, start_time)
+                return _round_result(
+                    "failed",
+                    round_index,
+                    phase_trace,
+                    failure_reason,
+                    timings,
+                    start_time,
+                    extra=round_extra,
+                )
             state = dict(cleanup_result["final_state"] or {})
 
-        ready_wait_started = time.monotonic()
-        ready_deadline = ready_wait_started + 5.0
-        next_ready_poll_at: float | None = None
-        while state["phase"] != "ready":
-            if time.monotonic() > ready_deadline:
-                failure_reason = "not_ready"
-                logger.info("Fishing[ready_wait] timed_out phase=%s", state.get("phase"))
-                return _round_result("failed", round_index, phase_trace, failure_reason, timings, start_time)
-            next_ready_poll_at = _sleep_for_target_period(next_ready_poll_at, poll_sec)
-            state = _read_state_snapshot(app, ocr, vision, yihuan_fishing, profile_name=resolved_profile)
-            _append_trace(phase_trace, start_time=start_time, state=state)
-            _log_state_details("ready_wait", state)
-        timings["ready_wait_sec"] = round(time.monotonic() - ready_wait_started, 3)
+        max_recovery_attempts = int(profile["bait_recovery_max_attempts_per_round"])
+        while True:
+            ready_wait_started = time.monotonic()
+            ready_deadline = ready_wait_started + 5.0
+            next_ready_poll_at: float | None = None
+            while state["phase"] != "ready":
+                if time.monotonic() > ready_deadline:
+                    failure_reason = "not_ready"
+                    logger.info("Fishing[ready_wait] timed_out phase=%s", state.get("phase"))
+                    return _round_result(
+                        "failed",
+                        round_index,
+                        phase_trace,
+                        failure_reason,
+                        timings,
+                        start_time,
+                        extra=round_extra,
+                    )
+                next_ready_poll_at = _sleep_for_target_period(next_ready_poll_at, poll_sec)
+                state = _read_state_snapshot(app, ocr, vision, yihuan_fishing, profile_name=resolved_profile)
+                _append_trace(phase_trace, start_time=start_time, state=state)
+                _log_state_details("ready_wait", state)
+            timings["ready_wait_sec"] = round(float(timings["ready_wait_sec"]) + time.monotonic() - ready_wait_started, 3)
 
-        _press_input_action(input_mapping, app, action_name="fish_interact", profile_name=resolved_profile)
-        _append_trace(phase_trace, start_time=start_time, state=state, note="cast")
-        logger.info("Fishing[input] action=fish_interact phase=press note=cast")
-        logger.info("Fishing[hook_wait] starting_immediately_after_cast")
+            _press_input_action(input_mapping, app, action_name="fish_interact", profile_name=resolved_profile)
+            _append_trace(phase_trace, start_time=start_time, state=state, note="cast")
+            logger.info("Fishing[input] action=fish_interact phase=press note=cast")
+            logger.info("Fishing[hook_wait] starting_immediately_after_cast")
 
-        hook_result = _wait_for_hook_success(
-            app,
-            vision,
-            input_mapping,
-            yihuan_fishing,
-            profile=profile,
-            profile_name=resolved_profile,
-            phase_trace=phase_trace,
-            start_time=start_time,
-            poll_sec=poll_sec,
-        )
-        timings["hook_wait_sec"] = float(hook_result["elapsed_sec"])
-        state = dict(hook_result.get("state") or state)
-        if not bool(hook_result["ok"]):
+            hook_result = _wait_for_hook_success(
+                app,
+                vision,
+                input_mapping,
+                yihuan_fishing,
+                profile=profile,
+                profile_name=resolved_profile,
+                phase_trace=phase_trace,
+                start_time=start_time,
+                poll_sec=poll_sec,
+            )
+            timings["hook_wait_sec"] = round(
+                float(timings["hook_wait_sec"]) + float(hook_result["elapsed_sec"]),
+                3,
+            )
+            state = dict(hook_result.get("state") or state)
+            if bool(hook_result["ok"]):
+                break
+
             failure_reason = str(hook_result["failure_reason"] or "hook_timeout")
+            round_extra["bait_shortage"] = hook_result.get("bait_shortage")
+            if (
+                failure_reason == "bait_shortage"
+                and bool(profile["bait_recovery_enabled"])
+                and int(round_extra["bait_recovery_count"]) < max_recovery_attempts
+            ):
+                round_extra["bait_recovery_count"] = int(round_extra["bait_recovery_count"]) + 1
+                recovery_result = _run_bait_recovery(
+                    app,
+                    ocr,
+                    vision,
+                    input_mapping,
+                    yihuan_fishing,
+                    profile=profile,
+                    profile_name=resolved_profile,
+                    phase_trace=phase_trace,
+                    start_time=start_time,
+                )
+                round_extra["bait_recovery_result"] = recovery_result
+                round_extra["sell_result"] = recovery_result.get("sell_result")
+                round_extra["buy_bait_result"] = recovery_result.get("buy_bait_result")
+                round_extra["change_bait_result"] = recovery_result.get("change_bait_result")
+                state = dict(recovery_result.get("state") or state)
+                if bool(recovery_result.get("ok")):
+                    logger.info("Fishing[bait] recovery_ok retrying_round=%s", round_index)
+                    continue
+                failure_reason = str(recovery_result.get("failure_reason") or "bait_recovery_failed")
+                logger.info("Fishing[bait] recovery_failed reason=%s", failure_reason)
+                return _round_result(
+                    "failed",
+                    round_index,
+                    phase_trace,
+                    failure_reason,
+                    timings,
+                    start_time,
+                    duel_debug_artifact,
+                    extra=round_extra,
+                )
+
             logger.info("Fishing[hook_wait] failed reason=%s", failure_reason)
-            return _round_result("failed", round_index, phase_trace, failure_reason, timings, start_time, duel_debug_artifact)
+            return _round_result(
+                "failed",
+                round_index,
+                phase_trace,
+                failure_reason,
+                timings,
+                start_time,
+                duel_debug_artifact,
+                extra=round_extra,
+            )
 
         duel_deadline = time.monotonic() + duel_timeout
         duel_started = bool((state.get("duel") or {}).get("found"))
@@ -1085,6 +1999,7 @@ def _run_fishing_round_impl(
                         previous_status=last_detection_status,
                         previous_sample_at=last_detection_sample_at,
                     ),
+                    extra=round_extra,
                 )
 
             state = _read_duel_snapshot_fast(
@@ -1336,6 +2251,7 @@ def _run_fishing_round_impl(
                                     previous_status=last_detection_status,
                                     previous_sample_at=last_detection_sample_at,
                                 ),
+                                extra=round_extra,
                             )
                         return _round_result(
                             "success",
@@ -1350,6 +2266,7 @@ def _run_fishing_round_impl(
                                 previous_status=last_detection_status,
                                 previous_sample_at=last_detection_sample_at,
                             ),
+                            extra=round_extra,
                         )
 
             if show_debug_window and capture_image is not None:
@@ -1377,9 +2294,10 @@ def _round_result(
     start_time: float,
     duel_debug_artifact: dict[str, Any] | None = None,
     detection_stats: dict[str, Any] | None = None,
+    extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     timings["total_sec"] = round(time.monotonic() - start_time, 3)
-    return {
+    result = {
         "status": status,
         "round_index": int(round_index),
         "phase_trace": phase_trace,
@@ -1388,6 +2306,9 @@ def _round_result(
         "duel_debug_artifact": duel_debug_artifact,
         "detection_stats": detection_stats,
     }
+    if extra:
+        result.update(extra)
+    return result
 
 
 @action_info(

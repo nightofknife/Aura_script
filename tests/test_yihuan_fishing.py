@@ -9,6 +9,7 @@ import cv2
 import numpy as np
 
 from plans.aura_base.src.platform.contracts import CaptureResult
+from plans.aura_base.src.services.vision_service import MatchResult
 from plans.yihuan.src.actions import fishing_actions
 from plans.yihuan.src.services.fishing_service import YihuanFishingService
 
@@ -41,6 +42,59 @@ class _FakeInputMapping:
 class _FakeVision:
     def find_template(self, *args, **kwargs):
         raise AssertionError("find_template should not be called in patched action tests.")
+
+
+class _CvTemplateVision:
+    def find_template(
+        self,
+        *,
+        source_image,
+        template_image,
+        mask_image=None,
+        threshold=0.8,
+        use_grayscale=True,
+        match_method=cv2.TM_CCOEFF_NORMED,
+        preprocess="none",
+    ):
+        if isinstance(source_image, np.ndarray):
+            source = source_image.copy()
+        else:
+            source = cv2.imread(str(source_image), cv2.IMREAD_UNCHANGED)
+            source = cv2.cvtColor(source, cv2.COLOR_BGR2RGB)
+        template = cv2.imread(str(template_image), cv2.IMREAD_UNCHANGED)
+        if template is None:
+            return MatchResult(found=False, debug_info={"error": "template_not_found"})
+        template = cv2.cvtColor(template, cv2.COLOR_BGR2RGB)
+        mask = None
+        if mask_image is not None:
+            mask = cv2.imread(str(mask_image), cv2.IMREAD_GRAYSCALE)
+        if use_grayscale:
+            source = cv2.cvtColor(source, cv2.COLOR_RGB2GRAY)
+            template = cv2.cvtColor(template, cv2.COLOR_RGB2GRAY)
+        result = cv2.matchTemplate(source, template, match_method, mask=mask)
+        min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
+        if match_method in (cv2.TM_SQDIFF, cv2.TM_SQDIFF_NORMED):
+            raw_score = min_val
+            top_left = min_loc
+            confidence = 1.0 - float(raw_score) if match_method == cv2.TM_SQDIFF_NORMED else 1.0 / (1.0 + float(raw_score))
+        else:
+            confidence = float(max_val)
+            top_left = max_loc
+        height, width = template.shape[:2]
+        if confidence >= float(threshold):
+            return MatchResult(
+                found=True,
+                top_left=top_left,
+                center_point=(top_left[0] + width // 2, top_left[1] + height // 2),
+                rect=(top_left[0], top_left[1], width, height),
+                confidence=confidence,
+                debug_info={"preprocess": preprocess},
+            )
+        return MatchResult(
+            found=False,
+            confidence=confidence,
+            debug_info={"best_match_rect_on_fail": (top_left[0], top_left[1], width, height)},
+        )
 
 
 class TestYihuanFishingDetection(unittest.TestCase):
@@ -232,6 +286,56 @@ class TestYihuanFishingDetection(unittest.TestCase):
         self.assertEqual(result["indicator_x"], 499)
         self.assertEqual(result["boundary_error_px"], -6)
         self.assertEqual(result["control_advice"], "hold_d")
+
+    def test_bait_shortage_detector_matches_only_shortage_prompt(self):
+        desktop_root = Path("C:/Users/356/Desktop")
+        screenshot_names = [
+            "QQ20260430-004142.png",
+            "QQ20260430-004159.png",
+            "QQ20260430-004208.png",
+            "QQ20260430-004213.png",
+            "QQ20260430-004220.png",
+            "QQ20260430-004226.png",
+            "QQ20260430-004237.png",
+        ]
+        if not all((desktop_root / name).is_file() for name in screenshot_names):
+            self.skipTest("Yihuan bait recovery desktop screenshots are not available.")
+
+        vision = _CvTemplateVision()
+        results = {}
+        for name in screenshot_names:
+            image = cv2.imread(str(desktop_root / name))
+            client = cv2.cvtColor(image[55:775, 26:1306], cv2.COLOR_BGR2RGB)
+            results[name] = self.service.analyze_bait_shortage(
+                client,
+                vision,
+                profile_name=self.profile["profile_name"],
+            )
+
+        self.assertTrue(results["QQ20260430-004142.png"]["found"])
+        self.assertGreaterEqual(results["QQ20260430-004142.png"]["confidence"], 0.78)
+        for name in screenshot_names[1:]:
+            self.assertFalse(results[name]["found"], name)
+
+    def test_bait_buy_confirm_template_matches_prompt(self):
+        screenshot_path = Path("C:/Users/356/Desktop/QQ20260430-021016.png")
+        if not screenshot_path.is_file():
+            self.skipTest("Yihuan bait buy confirmation screenshot is not available.")
+
+        image = cv2.imread(str(screenshot_path))
+        client = cv2.cvtColor(image[55:775, 26:1306], cv2.COLOR_BGR2RGB)
+        profile = self.service.load_profile()
+        match = self.service.match_template_with_vision(
+            client,
+            _CvTemplateVision(),
+            template_name=profile["bait_buy_confirm_template"],
+            region=profile["bait_buy_confirm_region"],
+            threshold=profile["bait_buy_confirm_match_threshold"],
+            profile_name=profile["profile_name"],
+        )
+
+        self.assertTrue(match["found"])
+        self.assertGreaterEqual(match["confidence"], profile["bait_buy_confirm_match_threshold"])
 
 
 class TestYihuanFishingActions(unittest.TestCase):
@@ -745,6 +849,127 @@ class TestYihuanFishingActions(unittest.TestCase):
         self.assertEqual(result["failure_reason"], None)
         fish_interact_calls = [call for call in self.input_mapping.calls if call[0] == "fish_interact"]
         self.assertEqual(len(fish_interact_calls), 1)
+
+    def test_hook_wait_returns_bait_shortage_event(self):
+        state = {
+            "phase": "ready",
+            "control_advice": "none",
+            "duel": {"found": False, "reason": "zone_missing"},
+            "_capture_image": np.zeros((720, 1280, 3), dtype=np.uint8),
+        }
+        bait_shortage = {
+            "found": True,
+            "confidence": 0.91,
+            "dark_bar": {"found": True},
+            "match_rect": [420, 325, 450, 75],
+        }
+
+        with patch("plans.yihuan.src.actions.fishing_actions._read_state_snapshot", return_value=dict(state)):
+            with patch.object(self.service, "analyze_bait_shortage", return_value=bait_shortage):
+                result = fishing_actions._wait_for_hook_success(
+                    self.app,
+                    self.vision,
+                    self.input_mapping,
+                    self.service,
+                    profile=self.service.load_profile(),
+                    profile_name="default_1280x720_cn",
+                    phase_trace=[],
+                    start_time=0.0,
+                    poll_sec=0.08,
+                )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["failure_reason"], "bait_shortage")
+        self.assertEqual(result["event"], "bait_shortage")
+        self.assertEqual(result["bait_shortage"], bait_shortage)
+
+    def test_bait_recovery_can_skip_sell_before_buy(self):
+        profile = dict(self.service.load_profile())
+        profile["sell_before_buy_bait"] = False
+        buy_result = {"ok": True, "failure_reason": None, "state": {"phase": "ready"}}
+        change_result = {"ok": True, "failure_reason": None, "state": {"phase": "ready"}}
+
+        with patch("plans.yihuan.src.actions.fishing_actions._run_sell_fish_before_buy_bait") as sell:
+            with patch("plans.yihuan.src.actions.fishing_actions._run_buy_universal_bait", return_value=buy_result) as buy:
+                with patch(
+                    "plans.yihuan.src.actions.fishing_actions._run_change_universal_bait",
+                    return_value=change_result,
+                ) as change:
+                    result = fishing_actions._run_bait_recovery(
+                        self.app,
+                        ocr=None,
+                        vision=self.vision,
+                        input_mapping=self.input_mapping,
+                        yihuan_fishing=self.service,
+                        profile=profile,
+                        profile_name="default_1280x720_cn",
+                        phase_trace=[],
+                        start_time=0.0,
+                    )
+
+        sell.assert_not_called()
+        buy.assert_called_once()
+        change.assert_called_once()
+        self.assertTrue(result["ok"])
+        self.assertEqual(self.app.release_all_calls, 1)
+
+    @patch("plans.yihuan.src.actions.fishing_actions.time.sleep", return_value=None)
+    def test_buy_universal_bait_retries_max_count_click(self, _sleep):
+        profile = dict(self.service.load_profile())
+        profile["bait_max_clicks"] = 3
+        profile["bait_max_click_interval_ms"] = 350
+        profile["bait_item_after_wait_ms"] = 800
+        profile["bait_max_after_wait_ms"] = 800
+
+        with patch("plans.yihuan.src.actions.fishing_actions._wait_for_profile_template") as wait_template:
+            wait_template.return_value = {"found": True, "confidence": 0.91}
+            with patch("plans.yihuan.src.actions.fishing_actions._wait_for_ready_template") as wait_ready:
+                wait_ready.return_value = {"ok": True, "state": {"phase": "ready"}}
+                result = fishing_actions._run_buy_universal_bait(
+                    self.app,
+                    ocr=None,
+                    vision=self.vision,
+                    input_mapping=self.input_mapping,
+                    yihuan_fishing=self.service,
+                    profile=profile,
+                    profile_name="default_1280x720_cn",
+                    phase_trace=[],
+                    start_time=0.0,
+                )
+
+        self.assertTrue(result["ok"])
+        max_clicks = [call for call in self.app.click_calls if call[:2] == tuple(profile["bait_max_point"])]
+        self.assertEqual(len(max_clicks), 3)
+        max_step = next(step for step in result["steps"] if step["step"] == "max_count")
+        self.assertEqual(max_step["clicks"], 3)
+        self.assertEqual(max_step["click_interval_ms"], 350)
+        self.assertEqual(max_step["after_wait_ms"], 800)
+        wait_template.assert_called_once()
+        confirm_index = self.app.click_calls.index((profile["bait_confirm_point"][0], profile["bait_confirm_point"][1], "left"))
+        buy_index = self.app.click_calls.index((profile["bait_buy_point"][0], profile["bait_buy_point"][1], "left"))
+        self.assertGreater(confirm_index, buy_index)
+
+    @patch("plans.yihuan.src.actions.fishing_actions.time.sleep", return_value=None)
+    def test_buy_universal_bait_fails_when_confirm_prompt_missing(self, _sleep):
+        profile = dict(self.service.load_profile())
+
+        with patch("plans.yihuan.src.actions.fishing_actions._wait_for_profile_template") as wait_template:
+            wait_template.return_value = {"found": False, "confidence": 0.12}
+            result = fishing_actions._run_buy_universal_bait(
+                self.app,
+                ocr=None,
+                vision=self.vision,
+                input_mapping=self.input_mapping,
+                yihuan_fishing=self.service,
+                profile=profile,
+                profile_name="default_1280x720_cn",
+                phase_trace=[],
+                start_time=0.0,
+            )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["failure_reason"], "buy_confirm_prompt_missing")
+        self.assertNotIn((profile["bait_confirm_point"][0], profile["bait_confirm_point"][1], "left"), self.app.click_calls)
 
     def test_run_session_ignores_consecutive_failures_and_stops_at_max_rounds(self):
         round_results = [
