@@ -10,7 +10,7 @@ runtime:
       - Unreal Engine
     allow_borderless: true
   capture:
-    backend: gdi
+    backend: wgc
   input:
     backend: sendinput
   window_spec:
@@ -21,4 +21,6 @@ input:
 fishing:
   profile_name: default_1280x720_cn
 cafe:
+  profile_name: default_1280x720_cn
+mahjong:
   profile_name: default_1280x720_cn

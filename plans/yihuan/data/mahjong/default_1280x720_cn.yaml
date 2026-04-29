@@ -1,0 +1,185 @@
+profile_name: default_1280x720_cn
+client_size:
+  - 1280
+  - 720
+
+# v1 assumes the runtime captures the game client area. The QQ reference images
+# include a window frame, but the Aura Windows runtime captures client pixels.
+ready_button_region:
+  - 1045
+  - 610
+  - 165
+  - 100
+ready_button_point:
+  - 1100
+  - 650
+ready_min_bright_ratio: 0.10
+ready_min_green_ratio: 0.01
+ready_bright_s_max: 80
+ready_bright_v_min: 150
+ready_green_hsv_lower:
+  - 35
+  - 45
+  - 70
+ready_green_hsv_upper:
+  - 90
+  - 255
+  - 255
+
+dingque_buttons:
+  wan:
+    point:
+      - 540
+      - 493
+    region:
+      - 510
+      - 465
+      - 90
+      - 95
+    hsv_bounds:
+      - [0, 60, 80]
+      - [12, 255, 255]
+    hsv_bounds_2:
+      - [165, 60, 80]
+      - [179, 255, 255]
+  tong:
+    point:
+      - 637
+      - 493
+    region:
+      - 602
+      - 465
+      - 90
+      - 95
+    hsv_bounds:
+      - [14, 60, 90]
+      - [36, 255, 255]
+  tiao:
+    point:
+      - 735
+      - 493
+    region:
+      - 695
+      - 465
+      - 90
+      - 95
+    hsv_bounds:
+      - [38, 60, 70]
+      - [95, 255, 255]
+dingque_button_min_dark_ratio: 0.18
+dingque_button_min_color_ratio: 0.025
+dingque_required_button_count: 3
+
+hand_region:
+  - 315
+  - 612
+  - 690
+  - 105
+hand_tile_min_width: 24
+hand_tile_max_width: 78
+hand_tile_expected_width: 46
+hand_tile_min_height: 34
+hand_tile_s_max: 95
+hand_tile_v_min: 125
+hand_tile_projection_min_ratio: 0.22
+suit_hsv_bounds:
+  wan:
+    - [[0, 65, 70], [12, 255, 255]]
+    - [[165, 65, 70], [179, 255, 255]]
+  tong:
+    - [[100, 35, 55], [145, 255, 255]]
+  tiao:
+    - [[35, 35, 45], [95, 255, 230]]
+suit_min_pixels: 22
+suit_min_ratio: 0.012
+missing_suit_tie_break_order:
+  - tong
+  - tiao
+  - wan
+
+auto_switches:
+  hu:
+    point:
+      - 56
+      - 310
+    region:
+      - 28
+      - 290
+      - 68
+      - 58
+    enabled_hsv_bounds:
+      - [14, 50, 70]
+      - [38, 255, 255]
+  peng:
+    point:
+      - 56
+      - 377
+    region:
+      - 28
+      - 357
+      - 68
+      - 58
+    enabled_hsv_bounds:
+      - [38, 50, 70]
+      - [95, 255, 255]
+  discard:
+    point:
+      - 56
+      - 444
+    region:
+      - 28
+      - 424
+      - 68
+      - 58
+    enabled_hsv_bounds:
+      - [85, 45, 70]
+      - [115, 255, 255]
+switch_stack_region:
+  - 20
+  - 280
+  - 90
+  - 235
+switch_min_present_dark_ratio: 0.45
+switch_min_enabled_color_ratio: 0.018
+switch_retry_limit: 2
+switch_verify_delay_ms: 120
+
+result_panel_region:
+  - 565
+  - 80
+  - 690
+  - 575
+result_first_row_region:
+  - 590
+  - 145
+  - 640
+  - 95
+result_buttons_region:
+  - 675
+  - 575
+  - 500
+  - 70
+result_auto_exit_region:
+  - 820
+  - 645
+  - 270
+  - 55
+result_panel_min_dark_ratio: 0.42
+result_first_row_min_cyan_ratio: 0.08
+result_buttons_min_white_ratio: 0.18
+result_auto_exit_min_white_ratio: 0.015
+result_cyan_hsv_lower:
+  - 78
+  - 35
+  - 80
+result_cyan_hsv_upper:
+  - 105
+  - 255
+  - 255
+
+poll_ms: 120
+post_click_delay_ms: 250
+start_wait_timeout_sec: 12
+dingque_wait_timeout_sec: 8
+phase_timeout_sec: 20
+debug_snapshot_dir: tmp/mahjong_debug

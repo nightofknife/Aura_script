@@ -1,0 +1,67 @@
+profile_name: default_1280x720_cn
+client_size:
+  - 1280
+  - 720
+board_origin:
+  - 473.0
+  - 50.0
+board_cell_size:
+  - 29.4
+  - 29.4
+board_rows: 20
+board_cols: 10
+sample_inner_ratio: 0.48
+occupied_s_min: 55
+occupied_v_min: 150
+occupied_min_ratio: 0.18
+board_confidence_min: 0.55
+solver: bcts
+top_out_min_top_cells: 4
+max_seconds: 180
+start_game_point:
+  - 1120
+  - 670
+start_game_delay_ms: 6000
+start_timeout_sec: 8
+start_poll_ms: 120
+start_piece_max_origin_row: 4
+recognition_retry_count: 8
+recognition_retry_interval_ms: 80
+inter_key_delay_ms: 300
+key_press_ms: 100
+post_drop_delay_ms: 250
+debug_snapshot_dir: tmp/tetrominoes_debug
+result_panel_region:
+  - 420
+  - 40
+  - 435
+  - 635
+result_exit_button_region:
+  - 540
+  - 590
+  - 210
+  - 52
+result_exit_point:
+  - 645
+  - 616
+result_exit_delay_ms: 1000
+recognition_timeout_result_wait_sec: 5
+recognition_timeout_result_poll_ms: 150
+result_purple_hsv_lower:
+  - 105
+  - 35
+  - 45
+result_purple_hsv_upper:
+  - 150
+  - 255
+  - 255
+result_panel_min_purple_ratio: 0.45
+result_exit_white_s_max: 60
+result_exit_white_v_min: 130
+result_exit_min_white_ratio: 0.35
+next_regions:
+  - [790, 100, 48, 36]
+  - [790, 162, 48, 36]
+  - [790, 224, 48, 36]
+  - [790, 286, 48, 36]
+  - [790, 348, 48, 36]

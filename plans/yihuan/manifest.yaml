@@ -28,6 +28,20 @@ exports:
     replace: null
     description: Provide fishing calibration loading and state detection for the Yihuan
       plan.
+  - name: yihuan_mahjong
+    module: plans.yihuan.src.services.mahjong_service
+    class: YihuanMahjongService
+    public: true
+    singleton: true
+    replace: null
+    description: Recognize and plan basic actions for the Yihuan Mahjong mini-game.
+  - name: yihuan_tetrominoes
+    module: plans.yihuan.src.services.tetrominoes_service
+    class: YihuanTetrominoesService
+    public: true
+    singleton: true
+    replace: null
+    description: Recognize and plan moves for the Yihuan Tetrominoes mini-game.
   - name: yihuan_plan
     module: plans.yihuan.src.services.yihuan_plan_service
     class: YihuanPlanService
@@ -65,6 +79,10 @@ exports:
       type: Any
       required: false
       default: true
+    - name: full_assist_auto_hammer_mode
+      type: Any
+      required: false
+      default: false
     - name: min_order_interval_sec
       type: Any
       required: false
@@ -139,6 +157,46 @@ exports:
       type: Any
       required: false
       default: default_1280x720_cn
+  - name: yihuan_mahjong_run_session
+    module: plans.yihuan.src.actions.mahjong_actions
+    function: yihuan_mahjong_run_session
+    public: false
+    read_only: false
+    timeout: null
+    description: Run the Yihuan Mahjong mini-game loop using the built-in auto switches.
+    parameters:
+    - name: profile_name
+      type: Any
+      required: false
+      default: default_1280x720_cn
+    - name: max_seconds
+      type: Any
+      required: false
+      default: 0
+    - name: start_game
+      type: Any
+      required: false
+      default: true
+    - name: auto_hu
+      type: Any
+      required: false
+      default: true
+    - name: auto_peng
+      type: Any
+      required: false
+      default: true
+    - name: auto_discard
+      type: Any
+      required: false
+      default: true
+    - name: dry_run
+      type: Any
+      required: false
+      default: false
+    - name: debug_enabled
+      type: Any
+      required: false
+      default: false
   - name: yihuan_plan_info
     module: plans.yihuan.src.actions.package_actions
     function: yihuan_plan_info
@@ -167,6 +225,50 @@ exports:
     timeout: null
     description: 基于当前方案上下文探测异环运行时目标。
     parameters: []
+  - name: yihuan_tetrominoes_analyze_screen
+    module: plans.yihuan.src.actions.tetrominoes_actions
+    function: yihuan_tetrominoes_analyze_screen
+    public: true
+    read_only: true
+    timeout: null
+    description: Capture and analyze one Yihuan Tetrominoes screen.
+    parameters:
+    - name: profile_name
+      type: Any
+      required: false
+      default: default_1280x720_cn
+  - name: yihuan_tetrominoes_run_session
+    module: plans.yihuan.src.actions.tetrominoes_actions
+    function: yihuan_tetrominoes_run_session
+    public: false
+    read_only: false
+    timeout: null
+    description: Run the Yihuan Tetrominoes mini-game loop with survival-first planning.
+    parameters:
+    - name: profile_name
+      type: Any
+      required: false
+      default: default_1280x720_cn
+    - name: max_seconds
+      type: Any
+      required: false
+      default: 0.0
+    - name: max_pieces
+      type: Any
+      required: false
+      default: 0
+    - name: start_game
+      type: Any
+      required: false
+      default: true
+    - name: dry_run
+      type: Any
+      required: false
+      default: false
+    - name: debug_enabled
+      type: Any
+      required: false
+      default: false
   tasks:
   - id: bootstrap/plan_ready/plan_ready
     title: 异环方案包信息
@@ -216,6 +318,30 @@ exports:
     title: 钓鱼实时监视
     source: tasks/fishing/live_monitor.yaml
     description: 持续显示钓鱼条原图与处理后的识别画面，紫框标注蓝绿区域，红线标注指示线。
+  - id: mahjong/auto_loop/auto_loop
+    title: 自动麻将
+    source: tasks/mahjong/auto_loop.yaml
+    description: 使用异环内置胡/碰/出自动开关完成麻将局，并在结算排行页出现时结束任务。
+  - id: mahjong/auto_loop
+    title: 自动麻将
+    source: tasks/mahjong/auto_loop.yaml
+    description: 使用异环内置胡/碰/出自动开关完成麻将局，并在结算排行页出现时结束任务。
+  - id: tetrominoes/analyze_screen/analyze_screen
+    title: Tetrominoes screen analysis
+    source: tasks/tetrominoes/analyze_screen.yaml
+    description: Capture and analyze the current Yihuan Tetrominoes board.
+  - id: tetrominoes/analyze_screen
+    title: Tetrominoes screen analysis
+    source: tasks/tetrominoes/analyze_screen.yaml
+    description: Capture and analyze the current Yihuan Tetrominoes board.
+  - id: tetrominoes/auto_loop/auto_loop
+    title: Tetrominoes auto loop
+    source: tasks/tetrominoes/auto_loop.yaml
+    description: Run the Yihuan Tetrominoes mini-game with survival-first planning.
+  - id: tetrominoes/auto_loop
+    title: Tetrominoes auto loop
+    source: tasks/tetrominoes/auto_loop.yaml
+    description: Run the Yihuan Tetrominoes mini-game with survival-first planning.
 metadata:
   generated_by: ManifestGenerator
-  generated_at: '2026-04-26T02:25:57Z'
+  generated_at: '2026-04-29T05:43:39Z'

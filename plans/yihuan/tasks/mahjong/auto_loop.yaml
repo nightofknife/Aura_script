@@ -1,0 +1,42 @@
+auto_loop:
+  meta:
+    title: 自动麻将
+    description: 使用异环内置胡/碰/出自动开关完成麻将局，并在结算排行页出现时结束任务。
+    inputs:
+      - name: profile_name
+        type: string
+        default: default_1280x720_cn
+      - name: max_seconds
+        type: number
+        default: 0
+      - name: start_game
+        type: boolean
+        default: true
+      - name: auto_hu
+        type: boolean
+        default: true
+      - name: auto_peng
+        type: boolean
+        default: true
+      - name: auto_discard
+        type: boolean
+        default: true
+      - name: dry_run
+        type: boolean
+        default: false
+      - name: debug_enabled
+        type: boolean
+        default: false
+  steps:
+    run:
+      action: yihuan_mahjong_run_session
+      params:
+        profile_name: "{{ inputs.profile_name }}"
+        max_seconds: "{{ inputs.max_seconds }}"
+        start_game: "{{ inputs.start_game }}"
+        auto_hu: "{{ inputs.auto_hu }}"
+        auto_peng: "{{ inputs.auto_peng }}"
+        auto_discard: "{{ inputs.auto_discard }}"
+        dry_run: "{{ inputs.dry_run }}"
+        debug_enabled: "{{ inputs.debug_enabled }}"
+  returns: "{{ nodes.run.output }}"

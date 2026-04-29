@@ -1,0 +1,14 @@
+analyze_screen:
+  meta:
+    title: Tetrominoes screen analysis
+    description: Capture and analyze the current Yihuan Tetrominoes board.
+    inputs:
+      - name: profile_name
+        type: string
+        default: default_1280x720_cn
+  steps:
+    analyze:
+      action: yihuan_tetrominoes_analyze_screen
+      params:
+        profile_name: "{{ inputs.profile_name }}"
+  returns: "{{ nodes.analyze.output }}"
