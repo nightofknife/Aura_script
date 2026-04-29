@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import multiprocessing
 import queue
 import time
@@ -234,6 +235,10 @@ class EmbeddedGameRunner:
 
         raise TimeoutError(f"Timed out waiting for run '{cid}' after {timeout_sec} seconds.")
 
+    def cancel_task(self, cid: str) -> Dict[str, Any]:
+        runtime = self._ensure_runtime()
+        return runtime.cancel_task(str(cid))
+
     def get_run(self, cid: str) -> Dict[str, Any]:
         runtime = self._ensure_runtime()
         return _normalize_run_row(runtime.get_run_detail(cid))
@@ -417,6 +422,9 @@ class SubprocessGameRunner:
 
     def get_run(self, cid: str) -> Dict[str, Any]:
         return self._request("get_run", cid=cid)
+
+    def cancel_task(self, cid: str) -> Dict[str, Any]:
+        return self._request("cancel_task", cid=cid)
 
     def list_runs(
         self,

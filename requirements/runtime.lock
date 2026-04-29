@@ -30,3 +30,4 @@ tzdata==2026.1
 watchdog==6.0.0
 wcwidth==0.6.0
 wheel==0.46.3
+windows-capture==2.0.0

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from packages.aura_core.runtime import AdminPrivilegeRequiredError
 from packages.aura_game import EmbeddedGameRunner, SubprocessGameRunner
@@ -48,6 +48,16 @@ class TestGameRunners(unittest.TestCase):
         finally:
             runner.close()
 
+    def test_embedded_runner_cancel_task_delegates_to_runtime(self):
+        runner = EmbeddedGameRunner()
+        fake_runtime = Mock()
+        fake_runtime.cancel_task.return_value = {"status": "success", "message": "cancelled"}
+        with patch("packages.aura_game.runner.create_runtime", return_value=fake_runtime):
+            result = runner.cancel_task("cid-123")
+
+        self.assertEqual(result["status"], "success")
+        fake_runtime.cancel_task.assert_called_once_with("cid-123")
+
     def test_subprocess_runner_start_stop_lifecycle(self):
         runner = SubprocessGameRunner()
         try:
@@ -65,6 +75,14 @@ class TestGameRunners(unittest.TestCase):
             self.assertIn("aura_benchmark", names)
         finally:
             runner.close()
+
+    def test_subprocess_runner_cancel_task_uses_request_channel(self):
+        runner = SubprocessGameRunner()
+        with patch.object(runner, "_request", return_value={"status": "success"}) as request:
+            result = runner.cancel_task("cid-123")
+
+        self.assertEqual(result["status"], "success")
+        request.assert_called_once_with("cancel_task", cid="cid-123")
 
     def test_embedded_runner_requires_admin_startup(self):
         runner = EmbeddedGameRunner()

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ctypes
 import importlib
+import threading
 from typing import Any
 
 import cv2
@@ -92,6 +93,9 @@ class WindowsWgcCaptureBackend(BaseWindowsCaptureBackend):
         super().__init__(target, config)
         module_name = str(self.config.get("module_name") or "windows_capture")
         self.capture_cursor = bool(self.config.get("capture_cursor", False))
+        self.frame_timeout_ms = max(int(self.config.get("frame_timeout_ms") or 2000), 100)
+        self._api_style = ""
+        self._windows_capture_cls = None
         try:
             self._module = importlib.import_module(module_name)
         except Exception as exc:
@@ -107,6 +111,7 @@ class WindowsWgcCaptureBackend(BaseWindowsCaptureBackend):
         # Preferred style: windows_capture.WindowsGraphicsCapture(...)
         capture_cls = getattr(self._module, "WindowsGraphicsCapture", None)
         if callable(capture_cls):
+            self._api_style = "windows_graphics_capture"
             try:
                 return capture_cls(capture_cursor=self.capture_cursor)
             except TypeError:
@@ -121,6 +126,14 @@ class WindowsWgcCaptureBackend(BaseWindowsCaptureBackend):
         # Function style fallback: module.capture_window(hwnd=...)
         capture_fn = getattr(self._module, "capture_window", None)
         if callable(capture_fn):
+            self._api_style = "capture_window_function"
+            return None
+
+        # windows-capture>=2 exposes WindowsCapture(window_hwnd=...) with frame callbacks.
+        capture_cls = getattr(self._module, "WindowsCapture", None)
+        if callable(capture_cls):
+            self._api_style = "windows_capture_v2"
+            self._windows_capture_cls = capture_cls
             return None
 
         raise TargetRuntimeError(
@@ -129,7 +142,7 @@ class WindowsWgcCaptureBackend(BaseWindowsCaptureBackend):
             {
                 "backend": self.backend_name,
                 "module_name": getattr(self._module, "__name__", None),
-                "expected": ["WindowsGraphicsCapture", "capture_window"],
+                "expected": ["WindowsGraphicsCapture", "capture_window", "WindowsCapture"],
             },
         )
 
@@ -139,6 +152,9 @@ class WindowsWgcCaptureBackend(BaseWindowsCaptureBackend):
         return frame[y : y + height, x : x + width].copy()
 
     def _capture_full_client_frame(self) -> np.ndarray:
+        if self._api_style == "windows_capture_v2":
+            return self._capture_windows_capture_v2_client_frame()
+
         hwnd = self.target.hwnd
         frame = None
 
@@ -171,6 +187,129 @@ class WindowsWgcCaptureBackend(BaseWindowsCaptureBackend):
                 {"backend": self.backend_name, "hwnd": hwnd},
             )
         return _coerce_rgb_frame(frame, backend=self.backend_name)
+
+    def _capture_windows_capture_v2_client_frame(self) -> np.ndarray:
+        if self._windows_capture_cls is None:
+            raise TargetRuntimeError(
+                "windows_capture_init_failed",
+                "WGC WindowsCapture API was selected but no capture class is available.",
+                {"backend": self.backend_name},
+            )
+
+        frame_event = threading.Event()
+        state: dict[str, Any] = {"frame": None, "error": None}
+
+        try:
+            capturer = self._windows_capture_cls(
+                cursor_capture=self.capture_cursor,
+                draw_border=False,
+                window_hwnd=int(self.target.hwnd),
+            )
+        except TypeError:
+            capturer = self._windows_capture_cls(
+                cursor_capture=self.capture_cursor,
+                window_hwnd=int(self.target.hwnd),
+            )
+        except Exception as exc:
+            raise TargetRuntimeError(
+                "windows_capture_init_failed",
+                f"Failed to initialize the configured WGC WindowsCapture class: {exc}",
+                {"backend": self.backend_name, "hwnd": int(self.target.hwnd)},
+            ) from exc
+
+        @capturer.event
+        def on_frame_arrived(frame, control):  # noqa: ANN001
+            try:
+                frame_buffer = getattr(frame, "frame_buffer", frame)
+                state["frame"] = np.asarray(frame_buffer).copy()
+                control.stop()
+            except Exception as exc:  # noqa: BLE001
+                state["error"] = str(exc)
+            finally:
+                frame_event.set()
+
+        @capturer.event
+        def on_closed():
+            frame_event.set()
+
+        control = None
+        try:
+            control = capturer.start_free_threaded()
+            if not frame_event.wait(float(self.frame_timeout_ms) / 1000.0):
+                raise TargetRuntimeError(
+                    "windows_capture_failed",
+                    "WGC WindowsCapture did not deliver a frame before timeout.",
+                    {
+                        "backend": self.backend_name,
+                        "hwnd": int(self.target.hwnd),
+                        "timeout_ms": int(self.frame_timeout_ms),
+                    },
+                )
+            if state.get("error"):
+                raise TargetRuntimeError(
+                    "windows_capture_failed",
+                    f"WGC WindowsCapture frame callback failed: {state['error']}",
+                    {"backend": self.backend_name, "hwnd": int(self.target.hwnd)},
+                )
+            frame = state.get("frame")
+            if frame is None:
+                raise TargetRuntimeError(
+                    "windows_capture_failed",
+                    "WGC WindowsCapture returned no frame.",
+                    {"backend": self.backend_name, "hwnd": int(self.target.hwnd)},
+                )
+            rgb = _coerce_rgb_frame(frame, backend=self.backend_name)
+            return self._crop_wgc_frame_to_client(rgb)
+        except TargetRuntimeError:
+            raise
+        except Exception as exc:
+            raise TargetRuntimeError(
+                "windows_capture_failed",
+                f"WGC WindowsCapture failed for hwnd={self.target.hwnd}: {exc}",
+                {"backend": self.backend_name, "hwnd": int(self.target.hwnd)},
+            ) from exc
+        finally:
+            if control is not None:
+                try:
+                    control.stop()
+                except Exception:
+                    pass
+                try:
+                    control.wait()
+                except Exception:
+                    pass
+
+    def _crop_wgc_frame_to_client(self, frame: np.ndarray) -> np.ndarray:
+        _, _, client_width, client_height = self.target.get_client_rect()
+        frame_height, frame_width = frame.shape[:2]
+        if frame_width == client_width and frame_height == client_height:
+            return frame.copy()
+
+        client_left, client_top, _, _ = self.target.get_client_rect_screen()
+        frame_bounds = _get_dwm_extended_frame_bounds(self.target.hwnd) or self.target.get_window_rect_screen()
+        frame_left, frame_top, _, _ = frame_bounds
+        offset_x = int(client_left) - int(frame_left)
+        offset_y = int(client_top) - int(frame_top)
+
+        if (
+            offset_x >= 0
+            and offset_y >= 0
+            and offset_x + client_width <= frame_width
+            and offset_y + client_height <= frame_height
+        ):
+            return frame[offset_y : offset_y + client_height, offset_x : offset_x + client_width].copy()
+
+        raise TargetRuntimeError(
+            "windows_capture_failed",
+            "WGC captured frame could not be mapped back to the target client area.",
+            {
+                "backend": self.backend_name,
+                "frame_shape": list(frame.shape),
+                "client_rect_screen": [int(client_left), int(client_top), int(client_width), int(client_height)],
+                "frame_bounds_screen": list(frame_bounds),
+                "client_offset": [int(offset_x), int(offset_y)],
+            },
+        )
 
     def self_check(self) -> dict[str, Any]:
         payload = super().self_check()
@@ -348,3 +487,31 @@ def _coerce_rgb_frame(frame: Any, *, backend: str) -> np.ndarray:
     if array.shape[2] == 4:
         return cv2.cvtColor(array, cv2.COLOR_BGRA2RGB)
     return np.asarray(array).copy()
+
+
+class _RECT(ctypes.Structure):
+    _fields_ = (
+        ("left", ctypes.c_long),
+        ("top", ctypes.c_long),
+        ("right", ctypes.c_long),
+        ("bottom", ctypes.c_long),
+    )
+
+
+def _get_dwm_extended_frame_bounds(hwnd: int) -> tuple[int, int, int, int] | None:
+    dwmapi = getattr(ctypes.windll, "dwmapi", None)
+    get_attribute = getattr(dwmapi, "DwmGetWindowAttribute", None) if dwmapi else None
+    if not callable(get_attribute):
+        return None
+    rect = _RECT()
+    try:
+        result = int(get_attribute(int(hwnd), 9, ctypes.byref(rect), ctypes.sizeof(rect)))
+    except Exception:
+        return None
+    if result != 0:
+        return None
+    width = int(rect.right - rect.left)
+    height = int(rect.bottom - rect.top)
+    if width <= 0 or height <= 0:
+        return None
+    return int(rect.left), int(rect.top), width, height
