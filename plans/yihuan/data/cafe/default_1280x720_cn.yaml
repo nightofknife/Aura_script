@@ -89,11 +89,22 @@ fake_customer_region:
 fake_customer_hammer_point:
   - 70
   - 325
-fake_customer_hammer_debug_enabled: true
+fake_customer_hammer_debug_enabled: false
 fake_customer_hammer_debug_dir: tmp/cafe_fake_customer_hammers
+fake_customer_max_hammers_per_scan: 3
+fake_customer_multi_hammer_interval_ms: 120
+full_assist_hammer_interval_sec: 1.0
+order_decision_debug_enabled: false
+order_decision_debug_dir: tmp/cafe_order_decisions
+fake_customer_order_guard_enabled: true
+fake_customer_order_guard_distance_px: 85
+fake_customer_order_guard_confirm_ttl_sec: 0.6
+fake_customer_order_guard_cooldown_ttl_sec: 0.6
+fake_customer_order_guard_after_hammer_ttl_sec: 0.8
+fake_customer_order_guard_poll_ms: 40
 fake_customer_after_drive_ms: 200
 fake_customer_global_cooldown_sec: 0
-fake_customer_same_spot_cooldown_sec: 3.0
+fake_customer_same_spot_cooldown_sec: 0.8
 fake_customer_same_spot_distance_px: 85
 fake_customer_red_hsv_lower_1:
   - 0
@@ -130,18 +141,18 @@ fake_customer_confirm_frames: 2
 fake_customer_clear_frames: 2
 fake_customer_after_hammer_suppress_sec: 0
 order_search_region:
-  - 220
+  - 120
   - 60
-  - 720
-  - 250
+  - 980
+  - 255
 order_locator_enabled: true
-order_locator_fallback_full_scan: true
+order_locator_fallback_full_scan: false
 order_locator_fallback_every_no_order_scans: 10
 order_locator_region:
-  - 160
+  - 120
   - 75
-  - 820
-  - 190
+  - 980
+  - 210
 order_locator_hough_dp: 1.0
 order_locator_hough_min_dist: 45
 order_locator_hough_param1: 80
@@ -300,6 +311,6 @@ single_click_notes:
 step_delay_ms: 100
 craft_delay_ms: 100
 poll_ms: 40
-min_order_interval_sec: 0.5
+min_order_interval_sec: 0.3
 min_order_duration_sec: 0
 max_seconds: 130

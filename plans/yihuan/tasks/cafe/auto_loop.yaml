@@ -18,9 +18,12 @@ auto_loop:
       - name: wait_level_started
         type: boolean
         default: true
+      - name: full_assist_auto_hammer_mode
+        type: boolean
+        default: false
       - name: min_order_interval_sec
         type: number
-        default: 0.5
+        default: 0.3
       - name: min_order_duration_sec
         type: number
         default: 0
@@ -33,6 +36,7 @@ auto_loop:
         max_orders: "{{ inputs.max_orders }}"
         start_game: "{{ inputs.start_game }}"
         wait_level_started: "{{ inputs.wait_level_started }}"
+        full_assist_auto_hammer_mode: "{{ inputs.full_assist_auto_hammer_mode }}"
         min_order_interval_sec: "{{ inputs.min_order_interval_sec }}"
         min_order_duration_sec: "{{ inputs.min_order_duration_sec }}"
   returns: "{{ nodes.run.output }}"

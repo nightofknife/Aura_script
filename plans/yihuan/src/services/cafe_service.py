@@ -153,16 +153,55 @@ class YihuanCafeService:
             "fake_customer_hammer_debug_dir": str(
                 payload.get("fake_customer_hammer_debug_dir") or "tmp/cafe_fake_customer_hammers"
             ),
+            "fake_customer_max_hammers_per_scan": max(
+                self._coerce_int(payload.get("fake_customer_max_hammers_per_scan", 3), 3),
+                1,
+            ),
+            "fake_customer_multi_hammer_interval_ms": max(
+                self._coerce_int(payload.get("fake_customer_multi_hammer_interval_ms", 120), 120),
+                0,
+            ),
+            "full_assist_hammer_interval_sec": max(
+                self._coerce_float(payload.get("full_assist_hammer_interval_sec", 1.0), 1.0),
+                0.05,
+            ),
+            "order_decision_debug_enabled": self._coerce_bool(
+                payload.get("order_decision_debug_enabled", False)
+            ),
+            "order_decision_debug_dir": str(payload.get("order_decision_debug_dir") or "tmp/cafe_order_decisions"),
+            "fake_customer_order_guard_enabled": self._coerce_bool(
+                payload.get("fake_customer_order_guard_enabled", True)
+            ),
+            "fake_customer_order_guard_distance_px": max(
+                int(payload.get("fake_customer_order_guard_distance_px", 85) or 85),
+                1,
+            ),
+            "fake_customer_order_guard_confirm_ttl_sec": max(
+                self._coerce_float(payload.get("fake_customer_order_guard_confirm_ttl_sec", 0.6), 0.6),
+                0.0,
+            ),
+            "fake_customer_order_guard_cooldown_ttl_sec": max(
+                self._coerce_float(payload.get("fake_customer_order_guard_cooldown_ttl_sec", 0.6), 0.6),
+                0.0,
+            ),
+            "fake_customer_order_guard_after_hammer_ttl_sec": max(
+                self._coerce_float(payload.get("fake_customer_order_guard_after_hammer_ttl_sec", 0.8), 0.8),
+                0.0,
+            ),
+            "fake_customer_order_guard_poll_ms": max(
+                self._coerce_int(payload.get("fake_customer_order_guard_poll_ms", 40), 40),
+                0,
+            ),
             "fake_customer_after_drive_ms": max(
-                int(payload.get("fake_customer_after_drive_ms", 200) or 200),
+                self._coerce_int(payload.get("fake_customer_after_drive_ms", 200), 200),
                 0,
             ),
             "fake_customer_global_cooldown_sec": max(
-                float(payload.get("fake_customer_global_cooldown_sec", 1.0) or 1.0),
+                self._coerce_float(payload.get("fake_customer_global_cooldown_sec", 1.0), 1.0),
                 0.0,
             ),
             "fake_customer_same_spot_cooldown_sec": max(
-                float(payload.get("fake_customer_same_spot_cooldown_sec", 3.0) or 3.0),
+                self._coerce_float(payload.get("fake_customer_same_spot_cooldown_sec", 3.0), 3.0),
                 0.0,
             ),
             "fake_customer_same_spot_distance_px": max(
@@ -321,13 +360,13 @@ class YihuanCafeService:
                 1,
             ),
             "fake_customer_after_hammer_suppress_sec": max(
-                float(payload.get("fake_customer_after_hammer_suppress_sec", 2.0) or 2.0),
+                self._coerce_float(payload.get("fake_customer_after_hammer_suppress_sec", 2.0), 2.0),
                 0.0,
             ),
-            "order_search_region": self._coerce_region(payload.get("order_search_region"), default=(220, 60, 720, 250)),
+            "order_search_region": self._coerce_region(payload.get("order_search_region"), default=(120, 60, 980, 255)),
             "order_locator_enabled": self._coerce_bool(payload.get("order_locator_enabled", True)),
             "order_locator_fallback_full_scan": self._coerce_bool(
-                payload.get("order_locator_fallback_full_scan", True)
+                payload.get("order_locator_fallback_full_scan", False)
             ),
             "order_locator_fallback_every_no_order_scans": max(
                 int(payload.get("order_locator_fallback_every_no_order_scans", 10) or 10),
@@ -335,7 +374,7 @@ class YihuanCafeService:
             ),
             "order_locator_region": self._coerce_region(
                 payload.get("order_locator_region"),
-                default=(160, 75, 820, 190),
+                default=(120, 75, 980, 210),
             ),
             "order_locator_hough_dp": max(float(payload.get("order_locator_hough_dp", 1.0) or 1.0), 0.1),
             "order_locator_hough_min_dist": max(
@@ -455,12 +494,24 @@ class YihuanCafeService:
             "classification_sec": 0.0,
             "fallback_sec": 0.0,
             "total_sec": 0.0,
+            "order_locator_region": list(profile["order_locator_region"]),
+            "order_search_region": list(profile["order_search_region"]),
+            "locator_centers": [],
         }
         if bool(profile["order_locator_enabled"]):
             locator_start = time.perf_counter()
             locators = self.detect_order_candidates(source_image, profile_name=profile_name)
             debug["locator_sec"] = time.perf_counter() - locator_start
             debug["locator_count"] = len(locators)
+            debug["locator_centers"] = [
+                {
+                    "x": int(locator["center_x"]),
+                    "y": int(locator["center_y"]),
+                    "r": int(locator.get("radius", 0) or 0),
+                    "yellow": int(locator.get("yellow_pixels", 0) or 0),
+                }
+                for locator in locators
+            ]
             if locators:
                 candidates: list[dict[str, Any]] = []
                 classify_start = time.perf_counter()
@@ -811,15 +862,17 @@ class YihuanCafeService:
         if crop.size == 0:
             return []
 
+        crop_gray = cv2.cvtColor(self._ensure_rgb(crop), cv2.COLOR_RGB2GRAY)
         candidates: list[dict[str, Any]] = []
         for recipe_id, template_name in profile["order_templates"].items():
-            template, mask = self._load_template(template_name)
+            template, mask = self._load_template_gray(template_name)
             candidates.extend(
-                self._match_template_multiscale(
-                    crop,
+                self._match_template_multiscale_gray(
+                    crop_gray,
                     template,
                     mask,
                     recipe_id=recipe_id,
+                    template_name=template_name,
                     region=region,
                     profile=profile,
                 )
@@ -1223,6 +1276,141 @@ class YihuanCafeService:
         cv2.imwrite(str(output_path), cv2.cvtColor(combined, cv2.COLOR_RGB2BGR))
         return str(output_path)
 
+    def save_order_decision_debug_image(
+        self,
+        source_image: np.ndarray,
+        orders: list[dict[str, Any]],
+        fake_detection: dict[str, Any],
+        *,
+        selected_order: dict[str, Any] | None = None,
+        profile_name: str | None = None,
+        sequence: int | None = None,
+        output_dir: str | Path | None = None,
+    ) -> str | None:
+        """Save the exact frame used for order selection plus the fake-customer HSV mask."""
+        if source_image is None or source_image.size == 0:
+            return None
+
+        profile = self.load_profile(profile_name)
+        fake_region = self._coerce_region(
+            profile.get("fake_customer_region"),
+            default=(360, 220, 570, 70),
+        )
+        order_region = self._coerce_region(
+            profile.get("order_search_region"),
+            default=(220, 60, 720, 250),
+        )
+        image_rgb = np.ascontiguousarray(self._ensure_rgb(source_image).copy())
+        fake_crop = self._crop_region(image_rgb, fake_region)
+        if fake_crop.size == 0:
+            return None
+
+        hsv = cv2.cvtColor(self._ensure_rgb(fake_crop), cv2.COLOR_RGB2HSV)
+        mask = self._red_mask_for_hsv(hsv, profile)
+
+        original_panel = image_rgb.copy()
+        mask_panel = np.zeros_like(image_rgb)
+        fake_x, fake_y, fake_width, fake_height = fake_region
+        order_x, order_y, order_width, order_height = order_region
+        mask_rgb = cv2.cvtColor(mask, cv2.COLOR_GRAY2RGB)
+        mask_panel[fake_y : fake_y + fake_crop.shape[0], fake_x : fake_x + fake_crop.shape[1]] = mask_rgb
+
+        fake_roi_color = (180, 0, 255)
+        order_roi_color = (0, 200, 255)
+        fake_color = (255, 0, 0)
+        order_color = (0, 255, 255)
+        selected_color = (255, 255, 0)
+        for panel in (original_panel, mask_panel):
+            cv2.rectangle(
+                panel,
+                (fake_x, fake_y),
+                (fake_x + fake_width, fake_y + fake_height),
+                fake_roi_color,
+                2,
+            )
+            cv2.rectangle(
+                panel,
+                (order_x, order_y),
+                (order_x + order_width, order_y + order_height),
+                order_roi_color,
+                2,
+            )
+
+        def draw_center(panel: np.ndarray, center_x: int, center_y: int, color: tuple[int, int, int]) -> None:
+            cv2.line(panel, (center_x - 9, center_y), (center_x + 9, center_y), color, 2)
+            cv2.line(panel, (center_x, center_y - 9), (center_x, center_y + 9), color, 2)
+
+        def draw_bbox_or_center(panel: np.ndarray, item: dict[str, Any], color: tuple[int, int, int]) -> None:
+            bbox = item.get("bbox")
+            if isinstance(bbox, (list, tuple)) and len(bbox) >= 4:
+                left, top, width, height = [int(value) for value in bbox[:4]]
+                cv2.rectangle(panel, (left, top), (left + width, top + height), color, 2)
+            center_x = int(item.get("center_x", 0) or 0)
+            center_y = int(item.get("center_y", 0) or 0)
+            if center_x > 0 and center_y > 0:
+                draw_center(panel, center_x, center_y, color)
+
+        for candidate in list(fake_detection.get("all_candidates") or fake_detection.get("candidates") or []):
+            for panel in (original_panel, mask_panel):
+                draw_bbox_or_center(panel, candidate, fake_color)
+
+        selected_track_id = None if selected_order is None else selected_order.get("track_id")
+        selected_center = None
+        if selected_order is not None:
+            selected_center = (
+                int(selected_order.get("center_x", 0) or 0),
+                int(selected_order.get("center_y", 0) or 0),
+            )
+
+        for order in orders:
+            is_selected = False
+            if selected_order is not None:
+                is_selected = order is selected_order
+                if not is_selected and selected_track_id is not None:
+                    is_selected = order.get("track_id") == selected_track_id
+                if not is_selected and selected_center is not None:
+                    is_selected = (
+                        int(order.get("center_x", 0) or 0),
+                        int(order.get("center_y", 0) or 0),
+                    ) == selected_center
+            color = selected_color if is_selected else order_color
+            for panel in (original_panel, mask_panel):
+                draw_bbox_or_center(panel, order, color)
+
+        reason = str(fake_detection.get("reason") or ("detected" if fake_detection.get("detected") else "none"))
+        order_label = "none" if selected_order is None else str(selected_order.get("recipe_id") or "unknown")
+        cv2.putText(
+            original_panel,
+            f"original fake={reason} selected={order_label}",
+            (12, 28),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            (255, 255, 255),
+            2,
+        )
+        cv2.putText(
+            mask_panel,
+            "fake red mask + order markers",
+            (12, 28),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            (255, 255, 255),
+            2,
+        )
+        combined = np.concatenate([original_panel, mask_panel], axis=1)
+
+        raw_output_dir = Path(output_dir or profile.get("order_decision_debug_dir") or "tmp/cafe_order_decisions")
+        if not raw_output_dir.is_absolute():
+            repo_root = self._plan_root.parents[1]
+            raw_output_dir = repo_root / raw_output_dir
+        raw_output_dir.mkdir(parents=True, exist_ok=True)
+
+        index = 0 if sequence is None else int(sequence)
+        filename = f"order_decision_{time.strftime('%Y%m%d-%H%M%S')}_{index:03d}.png"
+        output_path = raw_output_dir / filename
+        cv2.imwrite(str(output_path), cv2.cvtColor(combined, cv2.COLOR_RGB2BGR))
+        return str(output_path)
+
     def _fake_customer_body_region_from_order(
         self,
         locator: dict[str, Any],
@@ -1513,6 +1701,69 @@ class YihuanCafeService:
     def _slice_mask(mask: np.ndarray, bounds: tuple[int, int, int, int]) -> np.ndarray:
         left, top, right, bottom = bounds
         return mask[top:bottom, left:right]
+
+    def _match_template_multiscale_gray(
+        self,
+        crop_gray: np.ndarray,
+        template: np.ndarray,
+        mask: np.ndarray,
+        *,
+        recipe_id: str,
+        template_name: str,
+        region: Region,
+        profile: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        threshold = float(profile["template_threshold"])
+        peak_window = int(profile["match_peak_window_px"])
+        max_candidates = int(profile["max_candidates_per_template_scale"])
+        region_x, region_y, _, _ = region
+        candidates: list[dict[str, Any]] = []
+
+        for scale in profile["template_scales"]:
+            template_width = max(int(round(template.shape[1] * float(scale))), 4)
+            template_height = max(int(round(template.shape[0] * float(scale))), 4)
+            if template_width >= crop_gray.shape[1] or template_height >= crop_gray.shape[0]:
+                continue
+
+            scaled_template, scaled_mask = self._load_scaled_template_gray(
+                template_name,
+                scale=float(scale),
+            )
+            if int(np.count_nonzero(scaled_mask)) < 20:
+                continue
+
+            result = cv2.matchTemplate(
+                crop_gray,
+                scaled_template,
+                cv2.TM_CCOEFF_NORMED,
+                mask=scaled_mask,
+            )
+            result = np.nan_to_num(result, nan=-1.0, posinf=-1.0, neginf=-1.0)
+            peak_mask = result >= threshold
+            if peak_window > 1:
+                kernel = np.ones((peak_window, peak_window), dtype=np.uint8)
+                peak_mask &= result == cv2.dilate(result, kernel)
+
+            ys, xs = np.where(peak_mask)
+            scale_candidates: list[dict[str, Any]] = []
+            for y, x in zip(ys.tolist(), xs.tolist()):
+                score = float(result[int(y), int(x)])
+                bbox = [int(region_x + x), int(region_y + y), int(template_width), int(template_height)]
+                scale_candidates.append(
+                    {
+                        "recipe_id": recipe_id,
+                        "score": round(score, 4),
+                        "center_x": int(round(bbox[0] + bbox[2] / 2.0)),
+                        "center_y": int(round(bbox[1] + bbox[3] / 2.0)),
+                        "bbox": bbox,
+                        "scale": round(float(scale), 3),
+                    }
+                )
+
+            scale_candidates.sort(key=lambda item: float(item["score"]), reverse=True)
+            candidates.extend(scale_candidates[:max_candidates])
+
+        return candidates
 
     def _match_template_multiscale(
         self,
@@ -1943,6 +2194,20 @@ class YihuanCafeService:
                 max(min(int(value[2]), 255), 0),
             )
         return default
+
+    @staticmethod
+    def _coerce_float(value: Any, default: float) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _coerce_int(value: Any, default: int) -> int:
+        try:
+            return int(float(value))
+        except (TypeError, ValueError):
+            return default
 
     @staticmethod
     def _coerce_choice(value: Any, *, default: str, allowed: set[str]) -> str:

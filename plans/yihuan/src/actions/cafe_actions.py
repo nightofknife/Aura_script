@@ -42,6 +42,14 @@ def _coerce_int(value: Any, default: int) -> int:
         return default
 
 
+def _profile_float(profile: dict[str, Any], key: str, default: float) -> float:
+    return _coerce_float(profile.get(key, default), default)
+
+
+def _profile_int(profile: dict[str, Any], key: str, default: int) -> int:
+    return _coerce_int(profile.get(key, default), default)
+
+
 def _click_point(app: Any, point: tuple[int, int], *, note: str, profile: dict[str, Any]) -> None:
     x, y = int(point[0]), int(point[1])
     repeat_count = max(int(profile.get("click_repeat_count", 2) or 2), 1)
@@ -428,6 +436,290 @@ def _candidate_brief(candidate: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _order_brief(order: dict[str, Any]) -> dict[str, Any]:
+    recipe_id = str(order.get("recipe_id") or "")
+    score = order.get("score")
+    return {
+        "recipe_id": recipe_id,
+        "score": round(float(score), 4) if score is not None else None,
+        "center_x": order.get("center_x"),
+        "center_y": order.get("center_y"),
+        "bbox": order.get("bbox"),
+        "track_id": order.get("track_id"),
+        "arrival_index": order.get("arrival_index"),
+        "stock_id": RECIPE_STOCK.get(recipe_id),
+    }
+
+
+def _recent_hammers_brief(fake_customer_state: dict[str, Any]) -> list[dict[str, Any]]:
+    now = time.monotonic()
+    result: list[dict[str, Any]] = []
+    for item in list(fake_customer_state.get("recent_hammers") or []):
+        try:
+            hammered_at = float(item.get("at", 0.0) or 0.0)
+        except AttributeError:
+            continue
+        result.append(
+            {
+                "center_x": item.get("center_x"),
+                "center_y": item.get("center_y"),
+                "age_sec": round(max(now - hammered_at, 0.0), 3),
+            }
+        )
+    return result
+
+
+def _fake_detection_brief(
+    detection: dict[str, Any],
+    fake_customer_state: dict[str, Any],
+) -> dict[str, Any]:
+    candidates = list(detection.get("all_candidates") or detection.get("candidates") or [])
+    reason = str(detection.get("reason") or ("detected" if detection.get("detected") else "none"))
+    return {
+        "detected": bool(detection.get("detected")),
+        "reason": reason,
+        "red_pixels": detection.get("red_pixels"),
+        "component_count": detection.get("component_count"),
+        "kept_count": detection.get("kept_count"),
+        "candidates": [_candidate_brief(candidate) for candidate in candidates],
+        "cooldown_matches": detection.get("cooldown_matches") or detection.get("same_spot_cooldown_matches") or [],
+        "reject_counts": detection.get("reject_counts") or {},
+        "visible_frames": int(fake_customer_state.get("visible_frames", 0) or 0),
+        "clear_frames": int(fake_customer_state.get("clear_frames", 0) or 0),
+        "last_signature": list(fake_customer_state.get("last_signature") or []),
+        "recent_hammers": _recent_hammers_brief(fake_customer_state),
+    }
+
+
+def _nearest_fake_candidate_to_order(
+    order: dict[str, Any],
+    detection: dict[str, Any],
+) -> dict[str, Any] | None:
+    candidates = list(detection.get("all_candidates") or detection.get("candidates") or [])
+    if not candidates:
+        return None
+
+    try:
+        order_x = int(order.get("center_x", 0) or 0)
+        order_y = int(order.get("center_y", 0) or 0)
+    except (TypeError, ValueError):
+        return None
+
+    best: dict[str, Any] | None = None
+    best_distance_sq: int | None = None
+    for candidate in candidates:
+        try:
+            candidate_x = int(candidate.get("center_x", 0) or 0)
+            candidate_y = int(candidate.get("center_y", 0) or 0)
+        except (TypeError, ValueError, AttributeError):
+            continue
+        dx = order_x - candidate_x
+        dy = order_y - candidate_y
+        distance_sq = dx * dx + dy * dy
+        if best is None or distance_sq < int(best_distance_sq or 0):
+            best_distance_sq = distance_sq
+            best = {
+                "candidate": _candidate_brief(candidate),
+                "dx": dx,
+                "dy": dy,
+                "abs_dx": abs(dx),
+                "distance_sq": distance_sq,
+            }
+    return best
+
+
+def _order_block_brief(block: dict[str, Any], *, now: float | None = None) -> dict[str, Any]:
+    current = time.monotonic() if now is None else float(now)
+    expires_at = float(block.get("expires_at", current) or current)
+    return {
+        "center_x": block.get("center_x"),
+        "center_y": block.get("center_y"),
+        "reason": block.get("reason"),
+        "source": block.get("source"),
+        "remaining_sec": round(max(expires_at - current, 0.0), 3),
+    }
+
+
+def _prune_fake_order_blocks(
+    fake_customer_state: dict[str, Any],
+    *,
+    now: float | None = None,
+) -> list[dict[str, Any]]:
+    current = time.monotonic() if now is None else float(now)
+    active: list[dict[str, Any]] = []
+    for item in list(fake_customer_state.get("order_blocks") or []):
+        try:
+            expires_at = float(item.get("expires_at", 0.0) or 0.0)
+        except AttributeError:
+            continue
+        if expires_at <= current:
+            continue
+        active.append(
+            {
+                "center_x": int(item.get("center_x", 0) or 0),
+                "center_y": int(item.get("center_y", 0) or 0),
+                "reason": str(item.get("reason") or "unknown"),
+                "source": str(item.get("source") or "unknown"),
+                "created_at": float(item.get("created_at", current) or current),
+                "expires_at": expires_at,
+            }
+        )
+    fake_customer_state["order_blocks"] = active
+    return active
+
+
+def _register_fake_order_blocks(
+    fake_customer_state: dict[str, Any],
+    candidates: list[dict[str, Any]],
+    *,
+    reason: str,
+    ttl_sec: float,
+    source: str,
+    now: float | None = None,
+) -> list[dict[str, Any]]:
+    if ttl_sec <= 0:
+        return _prune_fake_order_blocks(fake_customer_state, now=now)
+
+    current = time.monotonic() if now is None else float(now)
+    blocks = _prune_fake_order_blocks(fake_customer_state, now=current)
+    expires_at = current + float(ttl_sec)
+    registered: list[dict[str, Any]] = []
+    for candidate in candidates:
+        try:
+            center_x = int(candidate.get("center_x", 0) or 0)
+            center_y = int(candidate.get("center_y", 0) or 0)
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if center_x <= 0:
+            continue
+        block = {
+            "center_x": center_x,
+            "center_y": center_y,
+            "reason": str(reason),
+            "source": str(source),
+            "created_at": current,
+            "expires_at": expires_at,
+        }
+        blocks.append(block)
+        registered.append(block)
+
+    fake_customer_state["order_blocks"] = blocks
+    if registered:
+        logger.info(
+            "Cafe[order_guard] block_registered reason=%s source=%s ttl_sec=%.3f blocks=%s",
+            reason,
+            source,
+            ttl_sec,
+            [_order_block_brief(block, now=current) for block in registered],
+        )
+    return blocks
+
+
+def _active_fake_order_blocks(
+    fake_customer_state: dict[str, Any],
+    profile: dict[str, Any],
+    *,
+    now: float | None = None,
+) -> list[dict[str, Any]]:
+    if not bool(profile.get("fake_customer_order_guard_enabled", True)):
+        fake_customer_state["order_blocks"] = []
+        return []
+    return _prune_fake_order_blocks(fake_customer_state, now=now)
+
+
+def _matching_order_block(
+    order: dict[str, Any],
+    blocks: list[dict[str, Any]],
+    *,
+    distance_px: int,
+) -> dict[str, Any] | None:
+    try:
+        order_x = int(order.get("center_x", 0) or 0)
+    except (TypeError, ValueError):
+        return None
+
+    reason_priority = {
+        "same_spot_cooldown": 0,
+        "confirming": 1,
+        "hammer_clicked": 2,
+    }
+    best: dict[str, Any] | None = None
+    best_key: tuple[int, int, float] | None = None
+    for block in blocks:
+        try:
+            block_x = int(block.get("center_x", 0) or 0)
+        except (TypeError, ValueError, AttributeError):
+            continue
+        abs_dx = abs(order_x - block_x)
+        if abs_dx > int(distance_px):
+            continue
+        priority = int(reason_priority.get(str(block.get("reason") or ""), 99))
+        created_at = float(block.get("created_at", 0.0) or 0.0)
+        match_key = (abs_dx, priority, -created_at)
+        if best is None or match_key < tuple(best_key or (0, 0, 0.0)):
+            best = block
+            best_key = match_key
+    return best
+
+
+def _partition_orders_by_fake_blocks(
+    orders: list[dict[str, Any]],
+    blocks: list[dict[str, Any]],
+    *,
+    distance_px: int,
+    now: float | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    safe_orders: list[dict[str, Any]] = []
+    blocked_orders: list[dict[str, Any]] = []
+    current = time.monotonic() if now is None else float(now)
+    for order in orders:
+        block = _matching_order_block(order, blocks, distance_px=distance_px)
+        if block is None:
+            safe_orders.append(order)
+            continue
+        try:
+            dx = int(order.get("center_x", 0) or 0) - int(block.get("center_x", 0) or 0)
+        except (TypeError, ValueError):
+            dx = 0
+        blocked_orders.append(
+            {
+                "order": _order_brief(order),
+                "block": _order_block_brief(block, now=current),
+                "dx": dx,
+                "abs_dx": abs(dx),
+            }
+        )
+    return safe_orders, blocked_orders
+
+
+def _save_order_decision_debug(
+    yihuan_cafe: YihuanCafeService,
+    fake_customer_state: dict[str, Any],
+    profile: dict[str, Any],
+    image: Any,
+    orders: list[dict[str, Any]],
+    fake_detection: dict[str, Any],
+    *,
+    selected_order: dict[str, Any] | None,
+    profile_name: str,
+) -> str | None:
+    if not bool(profile.get("order_decision_debug_enabled", False)):
+        return None
+    if not hasattr(yihuan_cafe, "save_order_decision_debug_image"):
+        return None
+
+    debug_sequence = int(fake_customer_state.get("order_decision_debug_index", 0) or 0) + 1
+    fake_customer_state["order_decision_debug_index"] = debug_sequence
+    return yihuan_cafe.save_order_decision_debug_image(
+        image,
+        orders,
+        fake_detection,
+        selected_order=selected_order,
+        profile_name=profile_name,
+        sequence=debug_sequence,
+    )
+
+
 def _candidate_center(candidate: dict[str, Any]) -> tuple[int, int]:
     return int(candidate.get("center_x", 0) or 0), int(candidate.get("center_y", 0) or 0)
 
@@ -521,8 +813,8 @@ def _drive_fake_customer_if_needed(
         [int(candidate.get("center_x", 0) or 0), int(candidate.get("center_y", 0) or 0)]
         for candidate in raw_candidates
     ]
-    same_spot_cooldown_sec = max(float(profile.get("fake_customer_same_spot_cooldown_sec", 3.0) or 3.0), 0.0)
-    same_spot_distance_px = max(int(profile.get("fake_customer_same_spot_distance_px", 85) or 85), 1)
+    same_spot_cooldown_sec = max(_profile_float(profile, "fake_customer_same_spot_cooldown_sec", 3.0), 0.0)
+    same_spot_distance_px = max(_profile_int(profile, "fake_customer_same_spot_distance_px", 85), 1)
     recent_hammers = _prune_recent_fake_hammers(
         fake_customer_state,
         now=now,
@@ -532,6 +824,15 @@ def _drive_fake_customer_if_needed(
     confirm_frames = max(int(profile.get("fake_customer_confirm_frames", 2) or 2), 1)
     if int(fake_customer_state["visible_frames"]) < confirm_frames:
         detection["reason"] = "confirming"
+        if bool(profile.get("fake_customer_order_guard_enabled", True)):
+            _register_fake_order_blocks(
+                fake_customer_state,
+                raw_candidates,
+                reason="confirming",
+                ttl_sec=max(_profile_float(profile, "fake_customer_order_guard_confirm_ttl_sec", 0.6), 0.0),
+                source="fake_detection",
+                now=now,
+            )
         logger.info(
             "Cafe[fake_customer] skipped reason=confirming visible_frames=%s/%s candidates=%s",
             int(fake_customer_state["visible_frames"]),
@@ -563,6 +864,15 @@ def _drive_fake_customer_if_needed(
     if not actionable_candidates:
         detection["reason"] = "same_spot_cooldown"
         detection["cooldown_matches"] = cooldown_matches
+        if bool(profile.get("fake_customer_order_guard_enabled", True)):
+            _register_fake_order_blocks(
+                fake_customer_state,
+                raw_candidates,
+                reason="same_spot_cooldown",
+                ttl_sec=max(_profile_float(profile, "fake_customer_order_guard_cooldown_ttl_sec", 0.6), 0.0),
+                source="fake_detection",
+                now=now,
+            )
         logger.info(
             "Cafe[fake_customer] skipped reason=same_spot_cooldown distance_px=%s matches=%s",
             same_spot_distance_px,
@@ -570,17 +880,20 @@ def _drive_fake_customer_if_needed(
         )
         return detection, False
 
-    selected_candidate = actionable_candidates[0]
-    candidates = [selected_candidate]
+    max_hammers_per_scan = max(_profile_int(profile, "fake_customer_max_hammers_per_scan", 3), 1)
+    multi_hammer_interval_ms = max(_profile_int(profile, "fake_customer_multi_hammer_interval_ms", 120), 0)
+    candidates = actionable_candidates[:max_hammers_per_scan]
     if len(actionable_candidates) < len(raw_candidates):
         detection["same_spot_cooldown_matches"] = cooldown_matches
     detection["all_candidates"] = raw_candidates
     detection["candidates"] = candidates
     hammer_point = tuple(profile.get("fake_customer_hammer_point") or (70, 325))
     logger.info(
-        "Cafe[fake_customer] detected actionable=%s raw=%s candidates=%s; clicking hammer point=%s",
+        "Cafe[fake_customer] detected actionable=%s raw=%s selected=%s candidates=%s; "
+        "clicking hammer point=%s hammer_clicks=%s interval_ms=%s",
         len(actionable_candidates),
         len(raw_candidates),
+        len(candidates),
         [
             {
                 "center_x": candidate.get("center_x"),
@@ -595,6 +908,8 @@ def _drive_fake_customer_if_needed(
             for candidate in candidates
         ],
         list(hammer_point),
+        len(candidates),
+        multi_hammer_interval_ms,
     )
     debug_image_path = None
     if bool(profile.get("fake_customer_hammer_debug_enabled", True)) and hasattr(
@@ -616,20 +931,34 @@ def _drive_fake_customer_if_needed(
         except Exception as exc:  # pragma: no cover - diagnostics must never block gameplay.
             logger.warning("Cafe[fake_customer] failed to save hammer debug image: %s", exc)
 
-    _click_point(app, hammer_point, note="fake_customer_hammer", profile=profile)
+    for index, _candidate in enumerate(candidates):
+        _click_point(app, hammer_point, note="fake_customer_hammer", profile=profile)
+        if index < len(candidates) - 1:
+            _sleep_ms(multi_hammer_interval_ms)
     fake_customer_state["last_hammer_at"] = now
     fake_customer_state["last_hammer_center"] = [
-        int(selected_candidate.get("center_x", 0) or 0),
-        int(selected_candidate.get("center_y", 0) or 0),
+        int(candidates[-1].get("center_x", 0) or 0),
+        int(candidates[-1].get("center_y", 0) or 0),
     ]
-    recent_hammers.append(
-        {
-            "center_x": int(selected_candidate.get("center_x", 0) or 0),
-            "center_y": int(selected_candidate.get("center_y", 0) or 0),
-            "at": now,
-        }
-    )
+    if bool(profile.get("fake_customer_order_guard_enabled", True)):
+        _register_fake_order_blocks(
+            fake_customer_state,
+            candidates,
+            reason="hammer_clicked",
+            ttl_sec=max(_profile_float(profile, "fake_customer_order_guard_after_hammer_ttl_sec", 0.8), 0.0),
+            source="hammer",
+            now=now,
+        )
+    for candidate in candidates:
+        recent_hammers.append(
+            {
+                "center_x": int(candidate.get("center_x", 0) or 0),
+                "center_y": int(candidate.get("center_y", 0) or 0),
+                "at": now,
+            }
+        )
     fake_customer_state["recent_hammers"] = recent_hammers
+    detection["hammer_click_count"] = len(candidates)
     _append_trace(
         phase_trace,
         start_time=start_time,
@@ -639,6 +968,9 @@ def _drive_fake_customer_if_needed(
             "candidate_count": len(candidates),
             "candidates": candidates,
             "all_candidate_count": len(raw_candidates),
+            "actionable_candidate_count": len(actionable_candidates),
+            "hammer_click_count": len(candidates),
+            "multi_hammer_interval_ms": multi_hammer_interval_ms,
             "red_pixels": detection.get("red_pixels"),
             "component_count": detection.get("component_count"),
             "debug_image_path": debug_image_path,
@@ -835,6 +1167,7 @@ def yihuan_cafe_run_session(
     max_orders: int | str = 0,
     start_game: bool | str = True,
     wait_level_started: bool | str = True,
+    full_assist_auto_hammer_mode: bool | str = False,
     min_order_interval_sec: float | int | str | None = None,
     min_order_duration_sec: float | int | str | None = None,
 ) -> dict[str, Any]:
@@ -843,11 +1176,10 @@ def yihuan_cafe_run_session(
     if hasattr(yihuan_cafe, "reset_order_scan_state"):
         yihuan_cafe.reset_order_scan_state(resolved_profile)
     max_seconds_value = _coerce_float(max_seconds, 0.0)
-    if max_seconds_value <= 0:
-        max_seconds_value = float(profile["max_seconds"])
     max_orders_value = max(_coerce_int(max_orders, 0), 0)
     start_game_value = _coerce_bool(start_game)
     wait_level_started_value = _coerce_bool(wait_level_started)
+    full_assist_auto_hammer_mode_value = _coerce_bool(full_assist_auto_hammer_mode)
     profile_order_interval_sec = float(profile.get("min_order_interval_sec", 0.0) or 0.0)
     min_order_interval_sec_value = max(
         _coerce_float(min_order_interval_sec, profile_order_interval_sec),
@@ -860,7 +1192,7 @@ def yihuan_cafe_run_session(
     )
 
     start_time = time.monotonic()
-    deadline = start_time + max_seconds_value
+    deadline = float("inf") if max_seconds_value <= 0 else start_time + max_seconds_value
     phase_trace: list[dict[str, Any]] = []
     stock_profiles = _enabled_stock_profiles(profile)
     stocks = {stock_id: 0 for stock_id in stock_profiles}
@@ -881,6 +1213,7 @@ def yihuan_cafe_run_session(
         "clear_frames": 0,
         "last_hammer_at": 0.0,
         "recent_hammers": [],
+        "order_blocks": [],
     }
     perf_stats: dict[str, Any] = {
         "time_sec": {},
@@ -926,6 +1259,7 @@ def yihuan_cafe_run_session(
             "phase_trace": phase_trace,
             "elapsed_sec": round(time.monotonic() - start_time, 3),
             "profile_name": resolved_profile,
+            "full_assist_auto_hammer_mode": full_assist_auto_hammer_mode_value,
             "min_order_interval_sec": min_order_interval_sec_value,
             "min_order_duration_sec": min_order_duration_sec_value,
         }
@@ -934,12 +1268,14 @@ def yihuan_cafe_run_session(
 
     logger.info(
         "Cafe[session] start profile=%s max_seconds=%.3f max_orders=%s start_game=%s "
-        "wait_level_started=%s min_order_interval_sec=%.3f min_order_duration_sec=%.3f stocks=%s",
+        "wait_level_started=%s full_assist_auto_hammer_mode=%s "
+        "min_order_interval_sec=%.3f min_order_duration_sec=%.3f stocks=%s",
         resolved_profile,
         max_seconds_value,
         max_orders_value,
         start_game_value,
         wait_level_started_value,
+        full_assist_auto_hammer_mode_value,
         min_order_interval_sec_value,
         min_order_duration_sec_value,
         list(stock_profiles),
@@ -979,6 +1315,126 @@ def yihuan_cafe_run_session(
                     failure_reason_value=failure_reason,
                     extra={"level_start_detection": detection},
                 )
+
+        if full_assist_auto_hammer_mode_value:
+            hammer_point = tuple(profile.get("fake_customer_hammer_point") or (70, 325))
+            hammer_interval_sec = max(
+                _profile_float(profile, "full_assist_hammer_interval_sec", 1.0),
+                0.05,
+            )
+            level_end_poll_sec = max(
+                float(_profile_int(profile, "level_end_poll_ms", 120)) / 1000.0,
+                0.05,
+            )
+            next_hammer_at = time.monotonic()
+            stopped_reason = "max_seconds"
+            logger.info(
+                "Cafe[full_assist_hammer] start point=%s interval_sec=%.3f level_end_poll_sec=%.3f",
+                list(hammer_point),
+                hammer_interval_sec,
+                level_end_poll_sec,
+            )
+            _append_trace(
+                phase_trace,
+                start_time=start_time,
+                event="full_assist_hammer_mode_started",
+                payload={
+                    "hammer_point": list(hammer_point),
+                    "interval_sec": hammer_interval_sec,
+                },
+            )
+
+            while True:
+                now = time.monotonic()
+                if now >= deadline:
+                    stopped_reason = "max_seconds"
+                    break
+
+                capture_start = time.monotonic()
+                capture = app.capture()
+                _perf_time(perf_stats, "full_assist_capture", time.monotonic() - capture_start)
+                _perf_count(perf_stats, "capture_count")
+                if not capture.success or capture.image is None:
+                    failure_reason = "capture_failed"
+                    logger.error("Cafe[full_assist_hammer] capture failed")
+                    return result_payload(
+                        status="failed",
+                        stopped_reason="failure",
+                        failure_reason_value=failure_reason,
+                    )
+
+                level_end_start = time.monotonic()
+                level_end_stable_count, should_stop, pending_level_end, detection = _check_level_end(
+                    yihuan_cafe,
+                    profile,
+                    capture.image,
+                    profile_name=resolved_profile,
+                    stable_count=level_end_stable_count,
+                    phase_trace=phase_trace,
+                    start_time=start_time,
+                )
+                _perf_time(perf_stats, "level_end_check_full_assist", time.monotonic() - level_end_start)
+                _perf_count(perf_stats, "level_end_check_count")
+                level_end_detection = detection
+                if should_stop:
+                    level_outcome = str(detection.get("outcome") or "unknown")
+                    stopped_reason = "level_end"
+                    break
+
+                if pending_level_end:
+                    sleep_sec = min(level_end_poll_sec, max(deadline - time.monotonic(), 0.0))
+                    if sleep_sec > 0:
+                        sleep_start = time.monotonic()
+                        time.sleep(sleep_sec)
+                        _perf_time(perf_stats, "full_assist_wait", time.monotonic() - sleep_start)
+                    continue
+
+                now = time.monotonic()
+                if now >= next_hammer_at:
+                    _click_point(app, hammer_point, note="fake_customer_hammer", profile=profile)
+                    fake_customers_driven += 1
+                    _perf_count(perf_stats, "full_assist_hammer_click_count")
+                    _perf_count(perf_stats, "fake_customer_hammer_click_count")
+                    _append_trace(
+                        phase_trace,
+                        start_time=start_time,
+                        event="full_assist_hammer_clicked",
+                        payload={
+                            "hammer_point": list(hammer_point),
+                            "interval_sec": hammer_interval_sec,
+                        },
+                    )
+                    next_hammer_at = time.monotonic() + hammer_interval_sec
+
+                sleep_sec = min(
+                    max(next_hammer_at - time.monotonic(), 0.0),
+                    level_end_poll_sec,
+                    max(deadline - time.monotonic(), 0.0),
+                )
+                if sleep_sec > 0:
+                    sleep_start = time.monotonic()
+                    time.sleep(sleep_sec)
+                    _perf_time(perf_stats, "full_assist_wait", time.monotonic() - sleep_start)
+
+            logger.info(
+                "Cafe[full_assist_hammer] stopped reason=%s hammer_clicks=%s",
+                stopped_reason,
+                int(dict(perf_stats.get("counts") or {}).get("full_assist_hammer_click_count", 0)),
+            )
+            logger.info(
+                "Cafe[session] stopped reason=%s orders_completed=%s stocks=%s batches=%s",
+                stopped_reason,
+                orders_completed,
+                dict(stocks),
+                dict(batches_made),
+            )
+            logger.info("Cafe[perf] summary=%s", _round_perf_stats(perf_stats))
+            return result_payload(
+                status="success",
+                stopped_reason=stopped_reason,
+                failure_reason_value=None,
+                extra={"full_assist_hammer_interval_sec": hammer_interval_sec},
+            )
 
         while True:
             now = time.monotonic()
@@ -1129,10 +1585,11 @@ def yihuan_cafe_run_session(
             last_fake_customer_detection = fake_detection
             if fake_driven:
                 candidates = list(fake_detection.get("candidates") or [])
+                hammer_click_count = max(int(fake_detection.get("hammer_click_count") or len(candidates) or 1), 1)
                 fake_customers_detected += len(candidates)
-                fake_customers_driven += 1
+                fake_customers_driven += hammer_click_count
                 _perf_count(perf_stats, "fake_customer_detected_count", len(candidates))
-                _perf_count(perf_stats, "fake_customer_hammer_click_count")
+                _perf_count(perf_stats, "fake_customer_hammer_click_count", hammer_click_count)
                 continue
             if str(fake_detection.get("reason") or "") in {
                 "confirming",
@@ -1180,18 +1637,21 @@ def yihuan_cafe_run_session(
                     restock_elapsed,
                 )
 
-            capture_start = time.monotonic()
-            capture = app.capture()
-            _perf_time(perf_stats, "capture_before_scan", time.monotonic() - capture_start)
-            _perf_count(perf_stats, "capture_count")
-            if not capture.success or capture.image is None:
-                failure_reason = "capture_failed"
-                logger.error("Cafe[session] capture failed")
-                return result_payload(
-                    status="failed",
-                    stopped_reason="failure",
-                    failure_reason_value=failure_reason,
-                )
+            if started_stocks:
+                capture_start = time.monotonic()
+                capture = app.capture()
+                _perf_time(perf_stats, "capture_before_scan", time.monotonic() - capture_start)
+                _perf_count(perf_stats, "capture_count")
+                if not capture.success or capture.image is None:
+                    failure_reason = "capture_failed"
+                    logger.error("Cafe[session] capture failed")
+                    return result_payload(
+                        status="failed",
+                        stopped_reason="failure",
+                        failure_reason_value=failure_reason,
+                    )
+            else:
+                _perf_count(perf_stats, "capture_reuse_before_scan_count")
 
             level_end_start = time.monotonic()
             level_end_stable_count, should_stop, pending_level_end, detection = _check_level_end(
@@ -1232,16 +1692,25 @@ def yihuan_cafe_run_session(
             last_fake_customer_detection = fake_detection
             if fake_driven:
                 candidates = list(fake_detection.get("candidates") or [])
+                hammer_click_count = max(int(fake_detection.get("hammer_click_count") or len(candidates) or 1), 1)
                 fake_customers_detected += len(candidates)
-                fake_customers_driven += 1
+                fake_customers_driven += hammer_click_count
                 _perf_count(perf_stats, "fake_customer_detected_count", len(candidates))
-                _perf_count(perf_stats, "fake_customer_hammer_click_count")
+                _perf_count(perf_stats, "fake_customer_hammer_click_count", hammer_click_count)
                 continue
             if str(fake_detection.get("reason") or "") in {
                 "confirming",
                 "same_spot_cooldown",
             }:
                 _perf_count(perf_stats, "fake_customer_cooldown_skip_count")
+            fake_context = _fake_detection_brief(fake_detection, fake_customer_state)
+            if str(fake_context.get("reason") or "") in {"confirming", "same_spot_cooldown"}:
+                logger.info(
+                    "Cafe[decision] fake_pending_before_order fake_context=%s stocks=%s pending=%s",
+                    fake_context,
+                    dict(stocks),
+                    sorted(pending_batches),
+                )
 
             scan_start = time.monotonic()
             orders = yihuan_cafe.analyze_orders(capture.image, profile_name=resolved_profile)
@@ -1269,7 +1738,8 @@ def yihuan_cafe_run_session(
                 logger.info(
                     "Cafe[scan_debug] strategy=%s locators=%s classified=%s fallback_used=%s fallback_allowed=%s "
                     "fallback_reason=%s fallback_skipped_reason=%s miss_count=%s locator_ms=%.1f classify_ms=%.1f "
-                    "fallback_ms=%.1f total_ms=%.1f order_sort=%s track_count=%s returned_tracks=%s arrivals=%s",
+                    "fallback_ms=%.1f total_ms=%.1f order_sort=%s track_count=%s returned_tracks=%s arrivals=%s "
+                    "locator_region=%s search_region=%s locator_centers=%s",
                     scan_debug.get("strategy"),
                     scan_debug.get("locator_count"),
                     scan_debug.get("classified_count"),
@@ -1286,6 +1756,19 @@ def yihuan_cafe_run_session(
                     scan_debug.get("order_track_count"),
                     scan_debug.get("returned_track_ids"),
                     scan_debug.get("returned_arrival_indices"),
+                    scan_debug.get("order_locator_region"),
+                    scan_debug.get("order_search_region"),
+                    scan_debug.get("locator_centers"),
+                )
+            orders_brief = [_order_brief(order) for order in orders]
+            if orders or str(fake_context.get("reason") or "") in {"confirming", "same_spot_cooldown"}:
+                logger.info(
+                    "Cafe[decision] scan_context fake_context=%s orders=%s scan_elapsed_sec=%.3f stocks=%s pending=%s",
+                    fake_context,
+                    orders_brief,
+                    scan_elapsed,
+                    dict(stocks),
+                    sorted(pending_batches),
                 )
             if not orders:
                 unknown_scan_count += 1
@@ -1297,10 +1780,139 @@ def yihuan_cafe_run_session(
                 _perf_time(perf_stats, "no_order_sleep", time.monotonic() - sleep_start)
                 continue
 
-            selected = _select_order_with_ready_stock(orders, stocks=stocks)
+            orders_for_selection = orders
+            active_order_blocks: list[dict[str, Any]] = []
+            blocked_orders: list[dict[str, Any]] = []
+            guard_distance_px = max(int(profile.get("fake_customer_order_guard_distance_px", 85) or 85), 1)
+            if bool(profile.get("fake_customer_order_guard_enabled", True)):
+                guard_now = time.monotonic()
+                active_order_blocks = _active_fake_order_blocks(fake_customer_state, profile, now=guard_now)
+                safe_orders, blocked_orders = _partition_orders_by_fake_blocks(
+                    orders,
+                    active_order_blocks,
+                    distance_px=guard_distance_px,
+                    now=guard_now,
+                )
+                if active_order_blocks:
+                    logger.info(
+                        "Cafe[order_guard] active_blocks distance_px=%s blocks=%s",
+                        guard_distance_px,
+                        [_order_block_brief(block, now=guard_now) for block in active_order_blocks],
+                    )
+                    _perf_count(perf_stats, "order_guard_active_block_count", len(active_order_blocks))
+                if blocked_orders:
+                    logger.info(
+                        "Cafe[order_guard] blocked_orders blocked=%s safe=%s fake_context=%s",
+                        blocked_orders,
+                        [_order_brief(order) for order in safe_orders],
+                        fake_context,
+                    )
+                    _perf_count(perf_stats, "order_guard_blocked_order_count", len(blocked_orders))
+                    _append_trace(
+                        phase_trace,
+                        start_time=start_time,
+                        event="order_guard_blocked_orders",
+                        payload={
+                            "blocked": blocked_orders,
+                            "safe": [_order_brief(order) for order in safe_orders],
+                            "distance_px": guard_distance_px,
+                            "blocks": [_order_block_brief(block, now=guard_now) for block in active_order_blocks],
+                        },
+                    )
+                if blocked_orders and not safe_orders:
+                    order_decision_debug_path = None
+                    try:
+                        order_decision_debug_path = _save_order_decision_debug(
+                            yihuan_cafe,
+                            fake_customer_state,
+                            profile,
+                            capture.image,
+                            orders,
+                            fake_detection,
+                            selected_order=None,
+                            profile_name=resolved_profile,
+                        )
+                        if order_decision_debug_path:
+                            logger.info(
+                                "Cafe[order_guard] deferred_debug_image saved path=%s",
+                                order_decision_debug_path,
+                            )
+                    except Exception as exc:  # pragma: no cover - diagnostics must never block gameplay.
+                        logger.warning("Cafe[order_guard] failed to save deferred debug image: %s", exc)
+                    logger.info(
+                        "Cafe[order_guard] deferred_all reason=all_orders_blocked blocked=%s blocks=%s "
+                        "decision_image=%s",
+                        blocked_orders,
+                        [_order_block_brief(block, now=guard_now) for block in active_order_blocks],
+                        order_decision_debug_path,
+                    )
+                    _append_trace(
+                        phase_trace,
+                        start_time=start_time,
+                        event="order_guard_deferred_all",
+                        payload={
+                            "blocked": blocked_orders,
+                            "distance_px": guard_distance_px,
+                            "blocks": [_order_block_brief(block, now=guard_now) for block in active_order_blocks],
+                            "decision_image": order_decision_debug_path,
+                        },
+                    )
+                    _perf_count(perf_stats, "order_guard_deferred_all_count")
+                    sleep_start = time.monotonic()
+                    _sleep_ms(int(profile.get("fake_customer_order_guard_poll_ms", profile["poll_ms"]) or 0))
+                    _perf_time(perf_stats, "order_guard_sleep", time.monotonic() - sleep_start)
+                    continue
+                if blocked_orders:
+                    orders_for_selection = safe_orders
+                    _perf_count(perf_stats, "order_guard_safe_selection_count")
+
+            selected = _select_order_with_ready_stock(orders_for_selection, stocks=stocks)
             recipe_id = str(selected["recipe_id"])
             selected_index = orders.index(selected)
+            selected_pool_index = orders_for_selection.index(selected)
             selected_stock_id = _stock_id_for_recipe(recipe_id)
+            nearest_fake = _nearest_fake_candidate_to_order(selected, fake_detection)
+            order_decision_debug_path = None
+            if bool(profile.get("order_decision_debug_enabled", False)) and hasattr(
+                yihuan_cafe,
+                "save_order_decision_debug_image",
+            ):
+                try:
+                    order_decision_debug_path = _save_order_decision_debug(
+                        yihuan_cafe,
+                        fake_customer_state,
+                        profile,
+                        capture.image,
+                        orders,
+                        fake_detection,
+                        selected_order=selected,
+                        profile_name=resolved_profile,
+                    )
+                    if order_decision_debug_path:
+                        logger.info(
+                            "Cafe[decision] order_decision_debug_image saved path=%s",
+                            order_decision_debug_path,
+                        )
+                except Exception as exc:  # pragma: no cover - diagnostics must never block gameplay.
+                    logger.warning("Cafe[decision] failed to save order decision debug image: %s", exc)
+            logger.info(
+                "Cafe[decision] selected_context selected=%s selected_index=%s selected_pool_index=%s "
+                "blocked_orders=%s fake_context=%s nearest_fake=%s decision_image=%s",
+                _order_brief(selected),
+                selected_index,
+                selected_pool_index,
+                blocked_orders,
+                fake_context,
+                nearest_fake,
+                order_decision_debug_path,
+            )
+            if blocked_orders:
+                logger.info(
+                    "Cafe[order_guard] selected_safe_order selected=%s blocked=%s distance_px=%s",
+                    _order_brief(selected),
+                    blocked_orders,
+                    guard_distance_px,
+                )
             if selected_index > 0:
                 logger.info(
                     "Cafe[order] selected_ready_stock recipe=%s stock_id=%s selected_index=%s "

@@ -94,7 +94,7 @@ class _FakeCafeService:
             "level_end_button_min_count": 2,
             "level_end_stable_frames": 2,
             "level_end_poll_ms": 0,
-            "order_search_region": (220, 60, 720, 250),
+            "order_search_region": (120, 60, 980, 255),
             "stock_profiles": {
                 "bread": {
                     "station_point": (75, 665),
@@ -171,6 +171,9 @@ class _FakeCafeService:
             "fake_customer_enabled": True,
             "fake_customer_region": (360, 220, 570, 190),
             "fake_customer_hammer_point": (70, 325),
+            "fake_customer_max_hammers_per_scan": 3,
+            "fake_customer_multi_hammer_interval_ms": 0,
+            "full_assist_hammer_interval_sec": 1.0,
             "fake_customer_after_drive_ms": 0,
             "fake_customer_global_cooldown_sec": 1.0,
             "fake_customer_same_spot_cooldown_sec": 3.0,
@@ -214,6 +217,14 @@ class _FakeCafeService:
             "fake_customer_confirm_frames": 2,
             "fake_customer_clear_frames": 2,
             "fake_customer_after_hammer_suppress_sec": 2.0,
+            "order_decision_debug_enabled": False,
+            "order_decision_debug_dir": "tmp/cafe_order_decisions",
+            "fake_customer_order_guard_enabled": True,
+            "fake_customer_order_guard_distance_px": 85,
+            "fake_customer_order_guard_confirm_ttl_sec": 0.01,
+            "fake_customer_order_guard_cooldown_ttl_sec": 0.01,
+            "fake_customer_order_guard_after_hammer_ttl_sec": 0.0,
+            "fake_customer_order_guard_poll_ms": 0,
             "max_seconds": 130.0,
         }
 
@@ -338,6 +349,38 @@ class _LevelEndAfterThreeOrdersCafeService(_FakeCafeService):
         }
 
 
+class _HammerOnlyLevelEndCafeService(_FakeCafeService):
+    def __init__(self):
+        super().__init__([])
+        self.profile["level_end_stable_frames"] = 1
+        self.level_end_checks = 0
+        self.analyze_orders_called = 0
+
+    def detect_level_end(self, image, *, profile_name=None):
+        self.level_end_checks += 1
+        if self.level_end_checks < 3:
+            return super().detect_level_end(image, profile_name=profile_name)
+        return {
+            "ended": True,
+            "outcome": "success",
+            "reason": "ok",
+            "success_title": {"detected": True, "area": 12000, "bbox": [470, 107, 360, 76], "pixel_count": 14000},
+            "failure_title": {"detected": False, "area": 0, "bbox": None, "pixel_count": 0},
+            "buttons_count": 2,
+            "button_bboxes": [[415, 539, 184, 39], [682, 539, 184, 39]],
+        }
+
+    def detect_stock_status(self, image, *, profile_name=None):
+        raise AssertionError("full assist hammer mode must not scan stock status")
+
+    def detect_fake_customers(self, image, *, profile_name=None):
+        raise AssertionError("full assist hammer mode must not run fake-customer detection")
+
+    def analyze_orders(self, image, *, profile_name=None):
+        self.analyze_orders_called += 1
+        raise AssertionError("full assist hammer mode must not analyze orders")
+
+
 class _VisualBreadEmptyCafeService(_FakeCafeService):
     def __init__(self):
         super().__init__(["bacon_bread", "cream_coffee"])
@@ -459,6 +502,113 @@ class _ConsecutiveDifferentFakeCustomersCafeService(_FakeCafeService):
         }
 
 
+class _MultipleSameFrameFakeCustomersCafeService(_FakeCafeService):
+    def __init__(self):
+        super().__init__(["cream_coffee"])
+        self.profile["fake_customer_confirm_frames"] = 1
+        self.profile["fake_customer_max_hammers_per_scan"] = 3
+        self.profile["fake_customer_multi_hammer_interval_ms"] = 0
+        self.fake_scan_count = 0
+
+    def detect_fake_customers(self, image, *, profile_name=None):
+        self.fake_scan_count += 1
+        if self.fake_scan_count > 1:
+            return super().detect_fake_customers(image, profile_name=profile_name)
+        return {
+            "detected": True,
+            "reason": "ok",
+            "region": list(self.profile["fake_customer_region"]),
+            "red_pixels": 3600,
+            "component_count": 3,
+            "kept_count": 3,
+            "candidates": [
+                {
+                    "score": 900.0,
+                    "area": 900,
+                    "aspect_ratio": 0.8,
+                    "fill_ratio": 0.45,
+                    "center_x": center_x,
+                    "center_y": 270,
+                    "bbox": [center_x - 24, 253, 48, 34],
+                }
+                for center_x in (460, 640, 820)
+            ],
+        }
+
+
+class _OrderGuardConfirmingFakeCafeService(_FakeCafeService):
+    def __init__(self):
+        super().__init__([])
+        self.profile["fake_customer_confirm_frames"] = 2
+        self.profile["fake_customer_order_guard_confirm_ttl_sec"] = 0.05
+        self.fake_results = [False, True, True, False, False]
+        self.scan_count = 0
+
+    def detect_fake_customers(self, image, *, profile_name=None):
+        detected = self.fake_results.pop(0) if self.fake_results else False
+        if not detected:
+            return super().detect_fake_customers(image, profile_name=profile_name)
+        return _fake_customer_detection_payload(640, 270, self.profile)
+
+    def analyze_orders(self, image, *, profile_name=None):
+        self.scan_count += 1
+        return [_order_payload("bacon_bread", 640, 139)]
+
+
+class _OrderGuardSameSpotCooldownCafeService(_FakeCafeService):
+    def __init__(self):
+        super().__init__([])
+        self.profile["fake_customer_confirm_frames"] = 1
+        self.profile["fake_customer_order_guard_cooldown_ttl_sec"] = 0.05
+        self.fake_results = [True, True, False, False]
+        self.scan_count = 0
+
+    def detect_fake_customers(self, image, *, profile_name=None):
+        detected = self.fake_results.pop(0) if self.fake_results else False
+        if not detected:
+            return super().detect_fake_customers(image, profile_name=profile_name)
+        return _fake_customer_detection_payload(640, 270, self.profile)
+
+    def analyze_orders(self, image, *, profile_name=None):
+        self.scan_count += 1
+        return [_order_payload("bacon_bread", 640, 139)]
+
+
+def _fake_customer_detection_payload(center_x: int, center_y: int, profile: dict[str, object]) -> dict[str, object]:
+    return {
+        "detected": True,
+        "reason": "ok",
+        "region": list(profile["fake_customer_region"]),
+        "red_pixels": 1800,
+        "component_count": 1,
+        "kept_count": 1,
+        "candidates": [
+            {
+                "score": 1000.0,
+                "area": 900,
+                "aspect_ratio": 0.8,
+                "fill_ratio": 0.45,
+                "center_x": center_x,
+                "center_y": center_y,
+                "bbox": [center_x - 24, center_y - 17, 48, 34],
+            }
+        ],
+    }
+
+
+def _order_payload(recipe_id: str, center_x: int, center_y: int) -> dict[str, object]:
+    return {
+        "recipe_id": recipe_id,
+        "score": 0.9,
+        "center_x": center_x,
+        "center_y": center_y,
+        "bbox": [center_x - 24, center_y - 15, 48, 30],
+        "scale": 1.0,
+        "track_id": center_x,
+        "arrival_index": center_x,
+    }
+
+
 class TestYihuanCafeDetection(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -514,6 +664,11 @@ class TestYihuanCafeDetection(unittest.TestCase):
 
     def test_empty_order_fallback_is_throttled(self):
         service = YihuanCafeService()
+        profile = service.load_profile("default_1280x720_cn")
+        service._profile_cache["default_1280x720_cn"] = {
+            **profile,
+            "order_locator_fallback_full_scan": True,
+        }
         service.reset_order_scan_state("default_1280x720_cn")
         blank = np.zeros((720, 1280, 3), dtype=np.uint8)
         fallback_calls = 0
@@ -705,6 +860,35 @@ class TestYihuanCafeDetection(unittest.TestCase):
 
 
 class TestYihuanCafeActions(unittest.TestCase):
+    def test_order_guard_partitions_same_slot_orders_only(self):
+        now = 100.0
+        blocks = [
+            {
+                "center_x": 640,
+                "center_y": 270,
+                "reason": "same_spot_cooldown",
+                "source": "fake_detection",
+                "created_at": now,
+                "expires_at": now + 1.0,
+            }
+        ]
+        orders = [
+            _order_payload("bacon_bread", 640, 139),
+            _order_payload("jam_cake", 820, 139),
+        ]
+
+        safe_orders, blocked_orders = cafe_actions._partition_orders_by_fake_blocks(
+            orders,
+            blocks,
+            distance_px=85,
+            now=now,
+        )
+
+        self.assertEqual([order["center_x"] for order in safe_orders], [820])
+        self.assertEqual(len(blocked_orders), 1)
+        self.assertEqual(blocked_orders[0]["order"]["center_x"], 640)
+        self.assertEqual(blocked_orders[0]["block"]["reason"], "same_spot_cooldown")
+
     @patch("plans.yihuan.src.actions.cafe_actions.time.sleep", return_value=None)
     def test_run_session_maintains_coffee_stock_and_recipe_order(self, _sleep):
         app = _FakeApp()
@@ -950,6 +1134,59 @@ class TestYihuanCafeActions(unittest.TestCase):
         )
 
     @patch("plans.yihuan.src.actions.cafe_actions.time.sleep", return_value=None)
+    def test_order_guard_defers_same_slot_order_while_fake_customer_is_confirming(self, _sleep):
+        app = _FakeApp()
+        service = _OrderGuardConfirmingFakeCafeService()
+
+        result = cafe_actions.yihuan_cafe_run_session(
+            app=app,
+            yihuan_cafe=service,
+            max_seconds=30,
+            max_orders=1,
+            start_game=False,
+            wait_level_started=False,
+        )
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["orders_completed"], 1)
+        trace_events = [entry["event"] for entry in result["phase_trace"]]
+        self.assertIn("order_guard_deferred_all", trace_events)
+        self.assertLess(trace_events.index("order_guard_deferred_all"), trace_events.index("fake_customer_hammer_clicked"))
+        self.assertLess(trace_events.index("fake_customer_hammer_clicked"), trace_events.index("order_selected"))
+        self.assertGreaterEqual(result["perf_stats"]["counts"]["order_guard_deferred_all_count"], 1)
+
+    @patch("plans.yihuan.src.actions.cafe_actions.time.sleep", return_value=None)
+    def test_order_guard_defers_same_slot_order_during_same_spot_cooldown(self, _sleep):
+        app = _FakeApp()
+        service = _OrderGuardSameSpotCooldownCafeService()
+
+        result = cafe_actions.yihuan_cafe_run_session(
+            app=app,
+            yihuan_cafe=service,
+            max_seconds=30,
+            max_orders=1,
+            start_game=False,
+            wait_level_started=False,
+        )
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["orders_completed"], 1)
+        guard_events = [
+            entry for entry in result["phase_trace"]
+            if entry["event"] == "order_guard_deferred_all"
+        ]
+        self.assertTrue(guard_events, result["phase_trace"])
+        blocked_reasons = {
+            item["block"]["reason"]
+            for event in guard_events
+            for item in event["blocked"]
+        }
+        self.assertIn("same_spot_cooldown", blocked_reasons)
+        trace_events = [entry["event"] for entry in result["phase_trace"]]
+        self.assertLess(trace_events.index("fake_customer_hammer_clicked"), trace_events.index("order_guard_deferred_all"))
+        self.assertLess(trace_events.index("order_guard_deferred_all"), trace_events.index("order_selected"))
+
+    @patch("plans.yihuan.src.actions.cafe_actions.time.sleep", return_value=None)
     def test_run_session_does_not_repeat_hammer_for_same_persistent_detection(self, _sleep):
         app = _FakeApp()
         service = _PersistentFakeCustomerCafeService()
@@ -1002,6 +1239,33 @@ class TestYihuanCafeActions(unittest.TestCase):
         self.assertEqual(result["perf_stats"]["counts"]["fake_customer_hammer_click_count"], 2)
 
     @patch("plans.yihuan.src.actions.cafe_actions.time.sleep", return_value=None)
+    def test_run_session_clicks_hammer_for_all_same_frame_fake_customers(self, _sleep):
+        app = _FakeApp()
+        service = _MultipleSameFrameFakeCustomersCafeService()
+
+        result = cafe_actions.yihuan_cafe_run_session(
+            app=app,
+            yihuan_cafe=service,
+            max_seconds=30,
+            max_orders=1,
+            start_game=False,
+            wait_level_started=False,
+        )
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["fake_customers_detected"], 3)
+        self.assertEqual(result["fake_customers_driven"], 3)
+        self.assertEqual(result["perf_stats"]["counts"]["fake_customer_hammer_click_count"], 3)
+        self.assertEqual(app.click_calls[:3], [(70, 325, "left")] * 3)
+        hammer_events = [
+            entry for entry in result["phase_trace"]
+            if entry["event"] == "fake_customer_hammer_clicked"
+        ]
+        self.assertEqual(len(hammer_events), 1)
+        self.assertEqual(hammer_events[0]["candidate_count"], 3)
+        self.assertEqual(hammer_events[0]["hammer_click_count"], 3)
+
+    @patch("plans.yihuan.src.actions.cafe_actions.time.sleep", return_value=None)
     def test_run_session_stops_on_level_end_before_restocking(self, _sleep):
         app = _FakeApp()
         service = _LevelEndAfterThreeOrdersCafeService()
@@ -1042,6 +1306,37 @@ class TestYihuanCafeActions(unittest.TestCase):
                 ]
             ),
         )
+
+    @patch("plans.yihuan.src.actions.cafe_actions.time.sleep", return_value=None)
+    def test_full_assist_auto_hammer_mode_only_clicks_hammer_until_level_end(self, _sleep):
+        app = _FakeApp()
+        service = _HammerOnlyLevelEndCafeService()
+
+        result = cafe_actions.yihuan_cafe_run_session(
+            app=app,
+            yihuan_cafe=service,
+            max_seconds=30,
+            max_orders=0,
+            start_game=False,
+            wait_level_started=False,
+            full_assist_auto_hammer_mode=True,
+        )
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["stopped_reason"], "level_end")
+        self.assertEqual(result["level_outcome"], "success")
+        self.assertTrue(result["full_assist_auto_hammer_mode"])
+        self.assertEqual(result["orders_completed"], 0)
+        self.assertEqual(result["fake_customers_detected"], 0)
+        self.assertEqual(result["fake_customers_driven"], 1)
+        self.assertEqual(service.analyze_orders_called, 0)
+        self.assertEqual(app.click_calls, [(70, 325, "left")])
+        self.assertEqual(result["perf_stats"]["counts"]["full_assist_hammer_click_count"], 1)
+        self.assertEqual(result["perf_stats"]["counts"]["fake_customer_hammer_click_count"], 1)
+        trace_events = [entry["event"] for entry in result["phase_trace"]]
+        self.assertIn("full_assist_hammer_mode_started", trace_events)
+        self.assertIn("full_assist_hammer_clicked", trace_events)
+        self.assertIn("level_end_detected", trace_events)
 
     @patch("plans.yihuan.src.actions.cafe_actions.time.sleep", return_value=None)
     def test_run_session_executes_non_coffee_recipes(self, _sleep):
