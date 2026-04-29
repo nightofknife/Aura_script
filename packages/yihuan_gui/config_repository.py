@@ -7,12 +7,23 @@ import yaml
 
 from plans.aura_base.src.platform.runtime_config import WINDOWS_CAPTURE_BACKENDS, WINDOWS_INPUT_BACKENDS
 
-from .logic import CafeRunDefaults, FishingRunDefaults, GuiPreferences, RuntimeSettings, extract_cafe_loop_defaults
+from .logic import (
+    CafeRunDefaults,
+    FishingRunDefaults,
+    GuiPreferences,
+    MahjongRunDefaults,
+    RuntimeSettings,
+    extract_cafe_loop_defaults,
+    extract_mahjong_loop_defaults,
+)
 
 
 DEFAULT_HISTORY_LIMIT = 50
 DEFAULT_AUTO_RUNTIME_PROBE = True
 DEFAULT_EXPAND_DEVELOPER_TOOLS = False
+DEFAULT_TASK_START_DELAY_SEC = 5
+DEFAULT_QUICK_STOP_HOTKEY = "F8"
+QUICK_STOP_HOTKEY_OPTIONS = ("F6", "F7", "F8", "F9", "F10", "F11", "F12")
 
 
 class YihuanConfigRepository:
@@ -24,6 +35,7 @@ class YihuanConfigRepository:
         self.input_profiles_dir = self.plan_root / "data" / "input_profiles"
         self.fishing_profiles_dir = self.plan_root / "data" / "fishing"
         self.cafe_profiles_dir = self.plan_root / "data" / "cafe"
+        self.mahjong_profiles_dir = self.plan_root / "data" / "mahjong"
         self._settings_store = settings_store
 
     def load_config(self) -> dict[str, Any]:
@@ -55,6 +67,12 @@ class YihuanConfigRepository:
         if not self.cafe_profiles_dir.exists():
             return []
         names = sorted(path.stem for path in self.cafe_profiles_dir.glob("*.yaml"))
+        return names
+
+    def list_mahjong_profiles(self) -> list[str]:
+        if not self.mahjong_profiles_dir.exists():
+            return []
+        names = sorted(path.stem for path in self.mahjong_profiles_dir.glob("*.yaml"))
         return names
 
     def get_runtime_settings(self) -> RuntimeSettings:
@@ -105,6 +123,13 @@ class YihuanConfigRepository:
             expand_developer_tools=self._coerce_bool(
                 self._settings_value("gui/expand_developer_tools", DEFAULT_EXPAND_DEVELOPER_TOOLS)
             ),
+            task_start_delay_sec=self._coerce_int(
+                self._settings_value("gui/task_start_delay_sec", DEFAULT_TASK_START_DELAY_SEC)
+            ),
+            quick_stop_hotkey=str(
+                self._settings_value("gui/quick_stop_hotkey", DEFAULT_QUICK_STOP_HOTKEY) or DEFAULT_QUICK_STOP_HOTKEY
+            ).strip()
+            or DEFAULT_QUICK_STOP_HOTKEY,
         )
 
     def save_ui_preferences(self, preferences: GuiPreferences) -> None:
@@ -118,6 +143,8 @@ class YihuanConfigRepository:
             "gui/expand_developer_tools",
             bool(preferences.expand_developer_tools),
         )
+        self._settings_set_value("gui/task_start_delay_sec", int(preferences.task_start_delay_sec))
+        self._settings_set_value("gui/quick_stop_hotkey", str(preferences.quick_stop_hotkey).strip().upper())
 
     def get_fishing_defaults(self, auto_loop_task: Mapping[str, Any] | None = None) -> FishingRunDefaults:
         return FishingRunDefaults(profile_name=self._resolve_auto_loop_profile_name(auto_loop_task))
@@ -140,6 +167,7 @@ class YihuanConfigRepository:
             max_orders=defaults.max_orders,
             start_game=defaults.start_game,
             wait_level_started=defaults.wait_level_started,
+            full_assist_auto_hammer_mode=defaults.full_assist_auto_hammer_mode,
             min_order_interval_sec=float(
                 profile_defaults.get("min_order_interval_sec", defaults.min_order_interval_sec)
             ),
@@ -156,6 +184,25 @@ class YihuanConfigRepository:
         payload["cafe"] = cafe
         self.save_config(payload)
 
+    def get_mahjong_defaults(self, mahjong_task: Mapping[str, Any] | None = None) -> MahjongRunDefaults:
+        defaults = extract_mahjong_loop_defaults(mahjong_task)
+        return MahjongRunDefaults(
+            profile_name=self._resolve_mahjong_profile_name(defaults.profile_name),
+            max_seconds=defaults.max_seconds,
+            start_game=defaults.start_game,
+            auto_hu=defaults.auto_hu,
+            auto_peng=defaults.auto_peng,
+            auto_discard=defaults.auto_discard,
+        )
+
+    def update_mahjong_defaults(self, defaults: MahjongRunDefaults) -> None:
+        self.validate_mahjong_defaults(defaults)
+        payload = self.load_config()
+        mahjong = dict(payload.get("mahjong") or {})
+        mahjong["profile_name"] = defaults.profile_name
+        payload["mahjong"] = mahjong
+        self.save_config(payload)
+
     def get_cafe_profile_runtime_defaults(self, profile_name: str) -> dict[str, Any]:
         profile_name = str(profile_name or "").strip()
         if not profile_name:
@@ -170,7 +217,13 @@ class YihuanConfigRepository:
             return {}
 
         result: dict[str, Any] = {}
-        for key in ("max_seconds", "min_order_interval_sec", "min_order_duration_sec"):
+        for key in (
+            "max_seconds",
+            "min_order_interval_sec",
+            "min_order_duration_sec",
+            "fake_customer_order_guard_distance_px",
+            "fake_customer_max_hammers_per_scan",
+        ):
             try:
                 value = float(payload.get(key))
             except (TypeError, ValueError):
@@ -178,7 +231,12 @@ class YihuanConfigRepository:
             if value >= 0:
                 result[key] = value
 
-        for key in ("fake_customer_enabled", "fake_customer_hammer_debug_enabled"):
+        for key in (
+            "fake_customer_enabled",
+            "fake_customer_hammer_debug_enabled",
+            "fake_customer_order_guard_enabled",
+            "order_decision_debug_enabled",
+        ):
             if key in payload:
                 result[key] = self._coerce_bool(payload.get(key))
         return result
@@ -214,6 +272,12 @@ class YihuanConfigRepository:
     def validate_ui_preferences(self, preferences: GuiPreferences) -> None:
         if int(preferences.history_limit) <= 0:
             raise ValueError("历史记录显示条数必须大于 0。")
+        delay_sec = int(preferences.task_start_delay_sec)
+        if delay_sec < 0 or delay_sec > 60:
+            raise ValueError("任务启动延迟秒数必须在 0 到 60 之间。")
+        hotkey = str(preferences.quick_stop_hotkey or "").strip().upper()
+        if hotkey not in QUICK_STOP_HOTKEY_OPTIONS:
+            raise ValueError("快捷停止键必须是 F6 到 F12。")
 
     def validate_fishing_defaults(self, defaults: FishingRunDefaults) -> None:
         profile_name = str(defaults.profile_name).strip()
@@ -230,6 +294,14 @@ class YihuanConfigRepository:
         available_profiles = self.list_cafe_profiles()
         if available_profiles and profile_name not in available_profiles:
             raise ValueError(f"沙威玛识别档案不存在：{profile_name}")
+
+    def validate_mahjong_defaults(self, defaults: MahjongRunDefaults) -> None:
+        profile_name = str(defaults.profile_name).strip()
+        if not profile_name:
+            raise ValueError("麻将识别档案不能为空。")
+        available_profiles = self.list_mahjong_profiles()
+        if available_profiles and profile_name not in available_profiles:
+            raise ValueError(f"麻将识别档案不存在：{profile_name}")
 
     @staticmethod
     def exclude_titles_to_text(exclude_titles: Iterable[Any]) -> str:
@@ -262,6 +334,12 @@ class YihuanConfigRepository:
         cafe = dict(payload.get("cafe") or {})
         configured_profile = str(cafe.get("profile_name") or cafe.get("profile") or "").strip()
         return configured_profile or str(fallback_profile or CafeRunDefaults().profile_name)
+
+    def _resolve_mahjong_profile_name(self, fallback_profile: str) -> str:
+        payload = self.load_config()
+        mahjong = dict(payload.get("mahjong") or {})
+        configured_profile = str(mahjong.get("profile_name") or mahjong.get("profile") or "").strip()
+        return configured_profile or str(fallback_profile or MahjongRunDefaults().profile_name)
 
     def _settings_value(self, key: str, default_value: Any) -> Any:
         if self._settings_store is None:

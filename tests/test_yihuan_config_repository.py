@@ -5,7 +5,13 @@ import tempfile
 import unittest
 
 from packages.yihuan_gui.config_repository import YihuanConfigRepository
-from packages.yihuan_gui.logic import CafeRunDefaults, FishingRunDefaults, GuiPreferences, RuntimeSettings
+from packages.yihuan_gui.logic import (
+    CafeRunDefaults,
+    FishingRunDefaults,
+    GuiPreferences,
+    MahjongRunDefaults,
+    RuntimeSettings,
+)
 
 
 class _MemorySettingsStore:
@@ -26,6 +32,7 @@ class TestYihuanConfigRepository(unittest.TestCase):
         (self.plan_root / "data" / "input_profiles").mkdir(parents=True)
         (self.plan_root / "data" / "fishing").mkdir(parents=True)
         (self.plan_root / "data" / "cafe").mkdir(parents=True)
+        (self.plan_root / "data" / "mahjong").mkdir(parents=True)
         (self.plan_root / "data" / "input_profiles" / "default_pc.yaml").write_text("actions: {}\n", encoding="utf-8")
         (self.plan_root / "data" / "input_profiles" / "gamepad.yaml").write_text("actions: {}\n", encoding="utf-8")
         (self.plan_root / "data" / "fishing" / "default_1280x720_cn.yaml").write_text(
@@ -45,6 +52,10 @@ class TestYihuanConfigRepository(unittest.TestCase):
                     "min_order_duration_sec: 0.2",
                     "fake_customer_enabled: true",
                     "fake_customer_hammer_debug_enabled: false",
+                    "fake_customer_order_guard_enabled: true",
+                    "fake_customer_order_guard_distance_px: 85",
+                    "fake_customer_max_hammers_per_scan: 3",
+                    "order_decision_debug_enabled: false",
                 ]
             )
             + "\n",
@@ -52,6 +63,14 @@ class TestYihuanConfigRepository(unittest.TestCase):
         )
         (self.plan_root / "data" / "cafe" / "custom_cafe.yaml").write_text(
             "profile_name: custom_cafe\n",
+            encoding="utf-8",
+        )
+        (self.plan_root / "data" / "mahjong" / "default_1280x720_cn.yaml").write_text(
+            "profile_name: default_1280x720_cn\n",
+            encoding="utf-8",
+        )
+        (self.plan_root / "data" / "mahjong" / "custom_mahjong.yaml").write_text(
+            "profile_name: custom_mahjong\n",
             encoding="utf-8",
         )
         (self.plan_root / "config.yaml").write_text(
@@ -140,19 +159,34 @@ class TestYihuanConfigRepository(unittest.TestCase):
             )
 
     def test_ui_preferences_round_trip(self):
-        prefs = GuiPreferences(history_limit=80, auto_runtime_probe_on_startup=False, expand_developer_tools=True)
+        prefs = GuiPreferences(
+            history_limit=80,
+            auto_runtime_probe_on_startup=False,
+            expand_developer_tools=True,
+            task_start_delay_sec=7,
+            quick_stop_hotkey="F9",
+        )
         self.repo.save_ui_preferences(prefs)
 
         loaded = self.repo.get_ui_preferences()
         self.assertEqual(loaded.history_limit, 80)
         self.assertFalse(loaded.auto_runtime_probe_on_startup)
         self.assertTrue(loaded.expand_developer_tools)
+        self.assertEqual(loaded.task_start_delay_sec, 7)
+        self.assertEqual(loaded.quick_stop_hotkey, "F9")
 
     def test_ui_preferences_validation_rejects_non_positive_history_limit(self):
         with self.assertRaisesRegex(ValueError, "历史记录显示条数必须大于 0"):
             self.repo.validate_ui_preferences(
                 GuiPreferences(history_limit=0, auto_runtime_probe_on_startup=True, expand_developer_tools=False)
             )
+
+    def test_ui_preferences_validation_rejects_invalid_delay_and_hotkey(self):
+        with self.assertRaisesRegex(ValueError, "任务启动延迟秒数必须在 0 到 60 之间"):
+            self.repo.validate_ui_preferences(GuiPreferences(task_start_delay_sec=61))
+
+        with self.assertRaisesRegex(ValueError, "快捷停止键必须是 F6 到 F12"):
+            self.repo.validate_ui_preferences(GuiPreferences(quick_stop_hotkey="ESC"))
 
     def test_fishing_defaults_round_trip_preserves_unedited_fields(self):
         self.repo.update_fishing_defaults(FishingRunDefaults(profile_name="custom_1280x720_cn"))
@@ -180,6 +214,19 @@ class TestYihuanConfigRepository(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "沙威玛识别档案不存在"):
             self.repo.validate_cafe_defaults(CafeRunDefaults(profile_name="missing_profile"))
 
+    def test_mahjong_defaults_round_trip_preserves_unedited_fields(self):
+        self.repo.update_mahjong_defaults(MahjongRunDefaults(profile_name="custom_mahjong"))
+
+        defaults = self.repo.get_mahjong_defaults()
+        payload = self.repo.load_config()
+        self.assertEqual(defaults.profile_name, "custom_mahjong")
+        self.assertEqual(payload["mahjong"]["profile_name"], "custom_mahjong")
+        self.assertEqual(payload["extra"]["keep"], True)
+
+    def test_mahjong_defaults_validation_rejects_unknown_profile(self):
+        with self.assertRaisesRegex(ValueError, "麻将识别档案不存在"):
+            self.repo.validate_mahjong_defaults(MahjongRunDefaults(profile_name="missing_profile"))
+
     def test_cafe_profile_default_seconds_reads_profile_yaml(self):
         self.assertEqual(self.repo.get_cafe_profile_default_seconds("default_1280x720_cn"), 130.0)
         self.assertIsNone(self.repo.get_cafe_profile_default_seconds("missing_profile"))
@@ -206,6 +253,10 @@ class TestYihuanConfigRepository(unittest.TestCase):
         self.assertEqual(defaults["min_order_duration_sec"], 0.2)
         self.assertTrue(defaults["fake_customer_enabled"])
         self.assertFalse(defaults["fake_customer_hammer_debug_enabled"])
+        self.assertTrue(defaults["fake_customer_order_guard_enabled"])
+        self.assertEqual(defaults["fake_customer_order_guard_distance_px"], 85.0)
+        self.assertEqual(defaults["fake_customer_max_hammers_per_scan"], 3.0)
+        self.assertFalse(defaults["order_decision_debug_enabled"])
 
 
 if __name__ == "__main__":

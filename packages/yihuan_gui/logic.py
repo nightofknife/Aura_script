@@ -13,6 +13,7 @@ TASK_RUNTIME_PROBE = "tasks:checks:runtime_probe.yaml"
 TASK_AUTO_LOOP = "tasks:fishing:auto_loop.yaml"
 TASK_LIVE_MONITOR = "tasks:fishing:live_monitor.yaml"
 TASK_CAFE_AUTO_LOOP = "tasks:cafe:auto_loop.yaml"
+TASK_MAHJONG_AUTO_LOOP = "tasks:mahjong:auto_loop.yaml"
 
 VISIBLE_HISTORY_TASK_REFS = (
     TASK_PLAN_READY,
@@ -31,6 +32,7 @@ TASK_DISPLAY_NAMES = {
     TASK_AUTO_LOOP: "自动循环钓鱼",
     TASK_LIVE_MONITOR: "钓鱼实时监视",
     TASK_CAFE_AUTO_LOOP: "沙威玛",
+    TASK_MAHJONG_AUTO_LOOP: "自动麻将",
 }
 
 STATUS_LABELS = {
@@ -55,6 +57,7 @@ STOP_REASON_LABELS = {
     "level_end": "关卡结束",
     "failure": "执行失败",
     "exception": "发生异常",
+    "phase_timeout": "等待阶段超时",
 }
 
 FAILURE_REASON_LABELS = {
@@ -67,6 +70,8 @@ FAILURE_REASON_LABELS = {
     "capture_failed": "截图失败",
     "level_start_capture_failed": "等待开局时截图失败",
     "level_start_timeout": "等待关卡开始超时",
+    "phase_timeout": "等待阶段超时",
+    "exception": "发生异常",
 }
 
 RECIPE_LABELS = {
@@ -84,6 +89,18 @@ STOCK_LABELS = {
     "coffee": "咖啡",
 }
 
+MAHJONG_SUIT_LABELS = {
+    "wan": "万",
+    "tong": "筒",
+    "tiao": "条",
+}
+
+MAHJONG_TOGGLE_LABELS = {
+    "hu": "胡",
+    "peng": "碰",
+    "discard": "出",
+}
+
 CAFE_EVENT_LABELS = {
     "start_game_clicked": "点击开始游戏",
     "level_start_waiting": "等待关卡开始",
@@ -92,6 +109,8 @@ CAFE_EVENT_LABELS = {
     "stock_batch_ready": "补货完成",
     "stock_visual_empty_correction": "视觉库存校正",
     "order_pacing_wait": "订单节奏等待",
+    "order_guard_blocked_orders": "订单守卫阻挡",
+    "order_guard_deferred_all": "订单守卫暂缓全部订单",
     "fake_customer_hammer_clicked": "敲走假顾客",
     "order_selected": "选择订单",
     "order_completed": "完成订单",
@@ -105,6 +124,8 @@ PHASE_LABELS = {
     "bite": "咬钩",
     "duel": "对抗中",
     "result": "结果页",
+    "dingque": "定缺中",
+    "playing": "行牌中",
     "unknown": "未知",
     "n/a": "-",
 }
@@ -116,6 +137,11 @@ TRACE_NOTE_LABELS = {
     "release_hold": "松开方向键",
     "post_duel_click": "点击清理结果",
     "post_duel_cleanup_done": "清理完成",
+    "after_ready": "准备后等待",
+    "after_dingque": "定缺后等待",
+    "switch_verify": "验证自动开关",
+    "phase_wait": "等待可识别阶段",
+    "monitor": "监控结算页",
 }
 
 CONTROL_REASON_LABELS = {
@@ -191,6 +217,8 @@ SETTING_LABELS = {
     "gui.history_limit": "历史记录显示条数",
     "gui.auto_runtime_probe_on_startup": "启动时自动执行运行时探针",
     "gui.expand_developer_tools": "默认展开开发者工具",
+    "gui.task_start_delay_sec": "任务启动延迟秒数",
+    "gui.quick_stop_hotkey": "快捷停止键",
 }
 
 
@@ -209,6 +237,8 @@ class GuiPreferences:
     history_limit: int = 50
     auto_runtime_probe_on_startup: bool = True
     expand_developer_tools: bool = False
+    task_start_delay_sec: int = 5
+    quick_stop_hotkey: str = "F8"
 
 
 @dataclass(frozen=True)
@@ -223,8 +253,19 @@ class CafeRunDefaults:
     max_orders: int = 0
     start_game: bool = True
     wait_level_started: bool = True
-    min_order_interval_sec: float = 0.5
+    full_assist_auto_hammer_mode: bool = False
+    min_order_interval_sec: float = 0.3
     min_order_duration_sec: float = 0.0
+
+
+@dataclass(frozen=True)
+class MahjongRunDefaults:
+    profile_name: str = "default_1280x720_cn"
+    max_seconds: int = 0
+    start_game: bool = True
+    auto_hu: bool = True
+    auto_peng: bool = True
+    auto_discard: bool = True
 
 
 @dataclass(frozen=True)
@@ -265,6 +306,7 @@ def build_cafe_loop_inputs(
     max_orders: Any,
     start_game: Any,
     wait_level_started: Any,
+    full_assist_auto_hammer_mode: Any,
     defaults: CafeRunDefaults,
 ) -> dict[str, Any]:
     return {
@@ -273,8 +315,29 @@ def build_cafe_loop_inputs(
         "max_orders": int(max_orders),
         "start_game": bool(start_game),
         "wait_level_started": bool(wait_level_started),
+        "full_assist_auto_hammer_mode": bool(full_assist_auto_hammer_mode),
         "min_order_interval_sec": float(defaults.min_order_interval_sec),
         "min_order_duration_sec": float(defaults.min_order_duration_sec),
+    }
+
+
+def build_mahjong_loop_inputs(
+    max_seconds: Any,
+    start_game: Any,
+    auto_hu: Any,
+    auto_peng: Any,
+    auto_discard: Any,
+    defaults: MahjongRunDefaults,
+) -> dict[str, Any]:
+    return {
+        "profile_name": str(defaults.profile_name),
+        "max_seconds": int(max_seconds),
+        "start_game": bool(start_game),
+        "auto_hu": bool(auto_hu),
+        "auto_peng": bool(auto_peng),
+        "auto_discard": bool(auto_discard),
+        "dry_run": False,
+        "debug_enabled": False,
     }
 
 
@@ -298,6 +361,7 @@ def extract_cafe_loop_defaults(task_row: Mapping[str, Any] | None) -> CafeRunDef
         "max_orders": CafeRunDefaults().max_orders,
         "start_game": CafeRunDefaults().start_game,
         "wait_level_started": CafeRunDefaults().wait_level_started,
+        "full_assist_auto_hammer_mode": CafeRunDefaults().full_assist_auto_hammer_mode,
         "min_order_interval_sec": CafeRunDefaults().min_order_interval_sec,
         "min_order_duration_sec": CafeRunDefaults().min_order_duration_sec,
     }
@@ -314,8 +378,35 @@ def extract_cafe_loop_defaults(task_row: Mapping[str, Any] | None) -> CafeRunDef
         max_orders=int(float(values["max_orders"] or 0)),
         start_game=_coerce_bool(values["start_game"]),
         wait_level_started=_coerce_bool(values["wait_level_started"]),
+        full_assist_auto_hammer_mode=_coerce_bool(values["full_assist_auto_hammer_mode"]),
         min_order_interval_sec=float(values["min_order_interval_sec"] or 0.0),
         min_order_duration_sec=float(values["min_order_duration_sec"] or 0.0),
+    )
+
+
+def extract_mahjong_loop_defaults(task_row: Mapping[str, Any] | None) -> MahjongRunDefaults:
+    values = {
+        "profile_name": MahjongRunDefaults().profile_name,
+        "max_seconds": MahjongRunDefaults().max_seconds,
+        "start_game": MahjongRunDefaults().start_game,
+        "auto_hu": MahjongRunDefaults().auto_hu,
+        "auto_peng": MahjongRunDefaults().auto_peng,
+        "auto_discard": MahjongRunDefaults().auto_discard,
+    }
+    for field in (task_row or {}).get("inputs") or []:
+        if not isinstance(field, Mapping):
+            continue
+        name = str(field.get("name") or "").strip()
+        if name not in values:
+            continue
+        values[name] = field.get("default", values[name])
+    return MahjongRunDefaults(
+        profile_name=str(values["profile_name"] or MahjongRunDefaults().profile_name),
+        max_seconds=int(float(values["max_seconds"] or 0)),
+        start_game=_coerce_bool(values["start_game"]),
+        auto_hu=_coerce_bool(values["auto_hu"]),
+        auto_peng=_coerce_bool(values["auto_peng"]),
+        auto_discard=_coerce_bool(values["auto_discard"]),
     )
 
 
@@ -391,6 +482,19 @@ def build_settings_sections(
                     value=ui_preferences.expand_developer_tools,
                     kind="bool",
                 ),
+                SettingsField(
+                    key="gui.task_start_delay_sec",
+                    label=SETTING_LABELS["gui.task_start_delay_sec"],
+                    value=ui_preferences.task_start_delay_sec,
+                    kind="number",
+                ),
+                SettingsField(
+                    key="gui.quick_stop_hotkey",
+                    label=SETTING_LABELS["gui.quick_stop_hotkey"],
+                    value=ui_preferences.quick_stop_hotkey,
+                    kind="choice",
+                    options=("F6", "F7", "F8", "F9", "F10", "F11", "F12"),
+                ),
             ),
         ),
     ]
@@ -398,7 +502,9 @@ def build_settings_sections(
 
 def is_runtime_interacting_task(task_ref: str | None) -> bool:
     normalized = str(task_ref or "").strip()
-    return normalized == TASK_RUNTIME_PROBE or normalized.startswith(("tasks:fishing:", "tasks:cafe:"))
+    return normalized == TASK_RUNTIME_PROBE or normalized.startswith(
+        ("tasks:fishing:", "tasks:cafe:", "tasks:mahjong:")
+    )
 
 
 def task_is_enabled(task_ref: str | None, active_runs: Mapping[str, Mapping[str, Any]]) -> bool:
@@ -622,6 +728,9 @@ def render_task_result_html(task_ref: str | None, detail: Mapping[str, Any] | No
     if task_name == TASK_CAFE_AUTO_LOOP and isinstance(user_data, Mapping):
         return render_cafe_loop_result_html(user_data)
 
+    if task_name == TASK_MAHJONG_AUTO_LOOP and isinstance(user_data, Mapping):
+        return render_mahjong_loop_result_html(user_data)
+
     if user_data is not None:
         return f"<pre>{html.escape(render_json(user_data))}</pre>"
     return "<p>当前没有可显示的任务输出。</p>"
@@ -657,6 +766,21 @@ def cafe_loop_business_status(detail: Mapping[str, Any] | None) -> str | None:
     return status or None
 
 
+def mahjong_loop_user_data(detail: Mapping[str, Any] | None) -> Mapping[str, Any] | None:
+    payload = dict(detail or {})
+    final_result = dict(payload.get("final_result") or {})
+    user_data = final_result.get("user_data")
+    return user_data if isinstance(user_data, Mapping) else None
+
+
+def mahjong_loop_business_status(detail: Mapping[str, Any] | None) -> str | None:
+    user_data = mahjong_loop_user_data(detail)
+    if not user_data:
+        return None
+    status = str(user_data.get("status") or "").strip().lower()
+    return status or None
+
+
 def render_auto_loop_brief_text(detail: Mapping[str, Any] | None) -> str:
     user_data = auto_loop_user_data(detail)
     if not user_data:
@@ -667,6 +791,21 @@ def render_auto_loop_brief_text(detail: Mapping[str, Any] | None) -> str:
         f"成功 {user_data.get('success_count', 0)} / "
         f"失败 {user_data.get('failure_count', 0)} / "
         f"停止原因 {stop_reason_display_name(user_data.get('stopped_reason'))}"
+    )
+
+
+def render_mahjong_loop_brief_text(detail: Mapping[str, Any] | None) -> str:
+    user_data = mahjong_loop_user_data(detail)
+    if not user_data:
+        return "暂无自动麻将结果。"
+    counts = dict(user_data.get("hand_suit_counts") or {})
+    selected = _mahjong_suit_display_name(user_data.get("selected_missing_suit"))
+    return (
+        f"{status_display_name(user_data.get('status'))} / "
+        f"缺门 {selected} / "
+        f"手牌 万{counts.get('wan', 0)} 筒{counts.get('tong', 0)} 条{counts.get('tiao', 0)} / "
+        f"停止原因 {stop_reason_display_name(user_data.get('stopped_reason'))} / "
+        f"耗时 {_format_seconds(user_data.get('elapsed_sec'))}"
     )
 
 
@@ -688,14 +827,35 @@ def render_auto_loop_result_html(user_data: Mapping[str, Any]) -> str:
     return "".join(lines)
 
 
+def render_mahjong_loop_result_html(user_data: Mapping[str, Any]) -> str:
+    lines = [
+        _kv_html("业务结果", status_display_name(user_data.get("status"))),
+        _kv_html("停止原因", stop_reason_display_name(user_data.get("stopped_reason"))),
+        _kv_html("失败原因", failure_reason_display_name(user_data.get("failure_reason"))),
+        _kv_html("识别档案", user_data.get("profile_name")),
+        _kv_html("选择缺门", _mahjong_suit_display_name(user_data.get("selected_missing_suit"))),
+        _render_mahjong_counts_table(user_data.get("hand_suit_counts")),
+        _render_mahjong_toggle_table(user_data.get("auto_toggles_enabled")),
+        _kv_html("总耗时", _format_seconds(user_data.get("elapsed_sec"))),
+        _render_mahjong_phase_trace_tail(user_data.get("phase_trace") or []),
+    ]
+    if user_data.get("failure_message"):
+        lines.insert(3, _kv_html("失败信息", user_data.get("failure_message")))
+    if user_data.get("planned_actions"):
+        lines.append(_kv_html("计划动作", user_data.get("planned_actions")))
+    return "".join(lines)
+
+
 def render_cafe_loop_brief_text(detail: Mapping[str, Any] | None) -> str:
     user_data = cafe_loop_user_data(detail)
     if not user_data:
         return "暂无沙威玛结果。"
+    perf_counts = dict(dict(user_data.get("perf_stats") or {}).get("counts") or {})
     return (
         f"{status_display_name(user_data.get('status'))} / "
         f"完成订单 {user_data.get('orders_completed', 0)} / "
         f"驱赶假顾客 {user_data.get('fake_customers_driven', 0)} / "
+        f"守卫暂缓 {perf_counts.get('order_guard_deferred_all_count', 0)} / "
         f"停止原因 {stop_reason_display_name(user_data.get('stopped_reason'))} / "
         f"关卡结果 {_cafe_level_outcome_display_name(user_data.get('level_outcome'))} / "
         f"耗时 {_format_seconds(user_data.get('elapsed_sec'))}"
@@ -710,6 +870,7 @@ def render_cafe_loop_result_html(user_data: Mapping[str, Any]) -> str:
         _kv_html("完成订单数", user_data.get("orders_completed")),
         _kv_html("检测到假顾客", user_data.get("fake_customers_detected")),
         _kv_html("驱赶假顾客", user_data.get("fake_customers_driven")),
+        _render_cafe_order_guard_summary(user_data.get("perf_stats")),
         _kv_html("关卡结果", _cafe_level_outcome_display_name(user_data.get("level_outcome"))),
         _kv_html("未知扫描次数", user_data.get("unknown_scan_count")),
         _kv_html("最小订单间隔", _format_seconds(user_data.get("min_order_interval_sec"))),
@@ -726,6 +887,85 @@ def render_cafe_loop_result_html(user_data: Mapping[str, Any]) -> str:
     if user_data.get("failure_message"):
         lines.insert(3, _kv_html("失败信息", user_data.get("failure_message")))
     return "".join(lines)
+
+
+def _mahjong_suit_display_name(suit: Any) -> str:
+    normalized = str(suit or "").strip().lower()
+    if not normalized:
+        return "-"
+    return MAHJONG_SUIT_LABELS.get(normalized, normalized)
+
+
+def _render_mahjong_counts_table(values: Any) -> str:
+    counts = dict(values or {}) if isinstance(values, Mapping) else {}
+    rows = []
+    for suit in ("wan", "tong", "tiao"):
+        rows.append(
+            "<tr>"
+            f"<td>{html.escape(_mahjong_suit_display_name(suit))}</td>"
+            f"<td>{html.escape(str(counts.get(suit, 0)))}</td>"
+            "</tr>"
+        )
+    return "<h3>定缺手牌统计</h3><table><tr><th>花色</th><th>数量</th></tr>" + "".join(rows) + "</table>"
+
+
+def _render_mahjong_toggle_table(values: Any) -> str:
+    toggles = dict(values or {}) if isinstance(values, Mapping) else {}
+    rows = []
+    for key in ("hu", "peng", "discard"):
+        value = toggles.get(key)
+        if value is True:
+            state = "已开启"
+        elif value is False:
+            state = "未确认开启"
+        else:
+            state = "-"
+        rows.append(
+            "<tr>"
+            f"<td>{html.escape(MAHJONG_TOGGLE_LABELS.get(key, key))}</td>"
+            f"<td>{html.escape(state)}</td>"
+            "</tr>"
+        )
+    return "<h3>自动开关</h3><table><tr><th>开关</th><th>状态</th></tr>" + "".join(rows) + "</table>"
+
+
+def _render_mahjong_phase_trace_tail(trace: Iterable[Mapping[str, Any]]) -> str:
+    rows = []
+    for entry in list(trace)[-12:]:
+        rows.append(
+            "<tr>"
+            f"<td>{html.escape(_format_seconds(entry.get('t')))}</td>"
+            f"<td>{html.escape(phase_display_name(entry.get('phase')))}</td>"
+            f"<td>{html.escape(_trace_note_display_name(entry.get('note')))}</td>"
+            f"<td>{html.escape(str(entry.get('enabled_switch_count', '-')))}</td>"
+            f"<td>{html.escape(str(entry.get('dingque_button_count', '-')))}</td>"
+            "</tr>"
+        )
+    if not rows:
+        return "<h3>阶段轨迹</h3><p>暂无阶段轨迹。</p>"
+    return (
+        "<h3>阶段轨迹</h3>"
+        "<table><tr><th>时间</th><th>阶段</th><th>备注</th><th>已开开关</th><th>定缺按钮</th></tr>"
+        + "".join(rows)
+        + "</table>"
+    )
+
+
+def _render_cafe_order_guard_summary(stats: Any) -> str:
+    counts = dict(dict(stats or {}).get("counts") or {}) if isinstance(stats, Mapping) else {}
+    rows = [
+        "<p><b>订单安全守卫</b></p><table border='1' cellspacing='0' cellpadding='4'>",
+        "<tr><th>项目</th><th>次数</th></tr>",
+    ]
+    for key, label in (
+        ("order_guard_active_block_count", "活跃阻挡点"),
+        ("order_guard_blocked_order_count", "被阻挡订单"),
+        ("order_guard_deferred_all_count", "全部订单暂缓"),
+        ("order_guard_safe_selection_count", "改选安全订单"),
+    ):
+        rows.append(f"<tr><td>{html.escape(label)}</td><td>{html.escape(str(counts.get(key, 0)))}</td></tr>")
+    rows.append("</table>")
+    return "".join(rows)
 
 
 def _render_cafe_counts_table(title: str, values: Any, labels: Mapping[str, str]) -> str:
@@ -966,6 +1206,7 @@ def _perf_label(key: Any) -> str:
         "capture_before_scan": "扫描前截图",
         "capture_after_order": "订单后截图",
         "capture_count": "截图次数",
+        "capture_reuse_before_scan_count": "复用扫描前截图次数",
         "level_end_check_count": "关卡结束检测次数",
         "level_end_check_before_stock": "补货前关卡结束检测",
         "level_end_check_before_scan": "扫描前关卡结束检测",
@@ -993,6 +1234,11 @@ def _perf_label(key: Any) -> str:
         "order_pacing_wait_count": "订单节奏等待次数",
         "min_order_interval_wait_count": "订单间隔等待次数",
         "min_order_duration_wait_count": "订单最短耗时等待次数",
+        "order_guard_active_block_count": "订单守卫活跃阻挡点",
+        "order_guard_blocked_order_count": "订单守卫阻挡订单",
+        "order_guard_deferred_all_count": "订单守卫暂缓全部订单",
+        "order_guard_safe_selection_count": "订单守卫改选安全订单",
+        "order_guard_sleep": "订单守卫暂缓等待",
         "fake_customer_scan_before_stock": "补货前假顾客扫描",
         "fake_customer_scan_before_order": "订单前假顾客扫描",
         "fake_customer_scan_count": "假顾客扫描次数",

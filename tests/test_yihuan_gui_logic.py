@@ -7,19 +7,26 @@ from packages.yihuan_gui.logic import (
     FishingRunDefaults,
     GuiPreferences,
     LiveUiState,
+    MahjongRunDefaults,
     RuntimeSettings,
     TASK_AUTO_LOOP,
     TASK_CAFE_AUTO_LOOP,
     TASK_LIVE_MONITOR,
+    TASK_MAHJONG_AUTO_LOOP,
+    VISIBLE_HISTORY_TASK_REFS,
     TASK_PLAN_READY,
     build_auto_loop_inputs,
     build_cafe_loop_inputs,
+    build_mahjong_loop_inputs,
     build_settings_sections,
     cafe_loop_business_status,
+    mahjong_loop_business_status,
     extract_auto_loop_defaults,
     extract_cafe_loop_defaults,
+    extract_mahjong_loop_defaults,
     render_auto_loop_brief_text,
     render_cafe_loop_brief_text,
+    render_mahjong_loop_brief_text,
     reduce_live_events,
     render_task_result_html,
     task_is_enabled,
@@ -56,6 +63,7 @@ class TestYihuanGuiLogic(unittest.TestCase):
             8,
             True,
             False,
+            False,
             CafeRunDefaults(profile_name="default_1280x720_cn"),
         )
 
@@ -67,7 +75,8 @@ class TestYihuanGuiLogic(unittest.TestCase):
                 "max_orders": 8,
                 "start_game": True,
                 "wait_level_started": False,
-                "min_order_interval_sec": 0.5,
+                "full_assist_auto_hammer_mode": False,
+                "min_order_interval_sec": 0.3,
                 "min_order_duration_sec": 0.0,
             },
         )
@@ -81,6 +90,7 @@ class TestYihuanGuiLogic(unittest.TestCase):
                     {"name": "max_orders", "type": "number", "default": 4},
                     {"name": "start_game", "type": "boolean", "default": False},
                     {"name": "wait_level_started", "type": "boolean", "default": True},
+                    {"name": "full_assist_auto_hammer_mode", "type": "boolean", "default": True},
                     {"name": "min_order_interval_sec", "type": "number", "default": 0.75},
                     {"name": "min_order_duration_sec", "type": "number", "default": 0.25},
                 ]
@@ -92,8 +102,54 @@ class TestYihuanGuiLogic(unittest.TestCase):
         self.assertEqual(defaults.max_orders, 4)
         self.assertFalse(defaults.start_game)
         self.assertTrue(defaults.wait_level_started)
+        self.assertTrue(defaults.full_assist_auto_hammer_mode)
         self.assertEqual(defaults.min_order_interval_sec, 0.75)
         self.assertEqual(defaults.min_order_duration_sec, 0.25)
+
+    def test_build_mahjong_loop_inputs_uses_page_values_and_defaults(self):
+        payload = build_mahjong_loop_inputs(
+            180,
+            True,
+            True,
+            False,
+            True,
+            MahjongRunDefaults(profile_name="default_1280x720_cn"),
+        )
+
+        self.assertEqual(
+            payload,
+            {
+                "profile_name": "default_1280x720_cn",
+                "max_seconds": 180,
+                "start_game": True,
+                "auto_hu": True,
+                "auto_peng": False,
+                "auto_discard": True,
+                "dry_run": False,
+                "debug_enabled": False,
+            },
+        )
+
+    def test_extract_mahjong_loop_defaults_uses_task_defaults(self):
+        defaults = extract_mahjong_loop_defaults(
+            {
+                "inputs": [
+                    {"name": "profile_name", "type": "string", "default": "custom_mahjong"},
+                    {"name": "max_seconds", "type": "number", "default": 60},
+                    {"name": "start_game", "type": "boolean", "default": False},
+                    {"name": "auto_hu", "type": "boolean", "default": True},
+                    {"name": "auto_peng", "type": "boolean", "default": False},
+                    {"name": "auto_discard", "type": "boolean", "default": True},
+                ]
+            }
+        )
+
+        self.assertEqual(defaults.profile_name, "custom_mahjong")
+        self.assertEqual(defaults.max_seconds, 60)
+        self.assertFalse(defaults.start_game)
+        self.assertTrue(defaults.auto_hu)
+        self.assertFalse(defaults.auto_peng)
+        self.assertTrue(defaults.auto_discard)
 
     def test_reduce_live_events_tracks_auto_loop_lifecycle(self):
         state, finished = reduce_live_events(
@@ -214,11 +270,23 @@ class TestYihuanGuiLogic(unittest.TestCase):
                     "elapsed_sec": 12.5,
                     "profile_name": "default_1280x720_cn",
                     "perf_stats": {
-                        "time_sec": {"order_scan": 0.2},
-                        "counts": {"order_scan_count": 3},
+                        "time_sec": {"order_scan": 0.2, "order_guard_sleep": 0.1},
+                        "counts": {
+                            "order_scan_count": 3,
+                            "order_guard_active_block_count": 2,
+                            "order_guard_blocked_order_count": 1,
+                            "order_guard_deferred_all_count": 1,
+                            "order_guard_safe_selection_count": 1,
+                        },
                     },
                     "phase_trace": [
                         {"t": 0.5, "event": "fake_customer_hammer_clicked", "candidate_count": 1},
+                        {
+                            "t": 0.8,
+                            "event": "order_guard_blocked_orders",
+                            "blocked": [{"order": {"recipe_id": "latte_coffee"}}],
+                        },
+                        {"t": 0.9, "event": "order_guard_deferred_all", "blocked": []},
                         {"t": 1.0, "event": "order_selected", "recipe_id": "latte_coffee"},
                         {"t": 2.0, "event": "order_completed", "recipe_id": "latte_coffee"},
                     ],
@@ -230,14 +298,50 @@ class TestYihuanGuiLogic(unittest.TestCase):
 
         self.assertIn("完成订单 3", render_cafe_loop_brief_text(detail))
         self.assertIn("驱赶假顾客 1", render_cafe_loop_brief_text(detail))
+        self.assertIn("守卫暂缓 1", render_cafe_loop_brief_text(detail))
         self.assertEqual(cafe_loop_business_status(detail), "success")
         self.assertIn("达到最大订单数", html)
         self.assertIn("拿铁咖啡", html)
         self.assertIn("驱赶假顾客", html)
+        self.assertIn("订单安全守卫", html)
+        self.assertIn("全部订单暂缓", html)
+        self.assertIn("订单守卫阻挡", html)
+        self.assertIn("订单守卫暂缓全部订单", html)
         self.assertIn("未完成补货", html)
         self.assertIn("敲走假顾客", html)
         self.assertIn("订单统计", html)
         self.assertIn("事件轨迹", html)
+
+    def test_task_result_renderer_handles_mahjong_loop(self):
+        detail = {
+            "task_name": TASK_MAHJONG_AUTO_LOOP,
+            "final_result": {
+                "user_data": {
+                    "status": "success",
+                    "stopped_reason": "level_end",
+                    "failure_reason": None,
+                    "profile_name": "default_1280x720_cn",
+                    "selected_missing_suit": "tong",
+                    "hand_suit_counts": {"wan": 4, "tong": 1, "tiao": 3},
+                    "auto_toggles_enabled": {"hu": True, "peng": True, "discard": True},
+                    "phase_trace": [
+                        {"t": 0.1, "phase": "ready", "note": "initial"},
+                        {"t": 0.5, "phase": "dingque", "note": "after_ready", "dingque_button_count": 3},
+                        {"t": 1.0, "phase": "playing", "note": "switch_verify", "enabled_switch_count": 3},
+                        {"t": 5.0, "phase": "result", "note": "monitor"},
+                    ],
+                    "elapsed_sec": 5.0,
+                }
+            },
+        }
+
+        html = render_task_result_html(TASK_MAHJONG_AUTO_LOOP, detail)
+
+        self.assertEqual(mahjong_loop_business_status(detail), "success")
+        self.assertIn("缺门 筒", render_mahjong_loop_brief_text(detail))
+        self.assertIn("自动开关", html)
+        self.assertIn("定缺手牌统计", html)
+        self.assertIn("验证自动开关", html)
 
     def test_runtime_task_guard_disables_auto_loop_when_fishing_task_active(self):
         active_runs = {
@@ -250,6 +354,7 @@ class TestYihuanGuiLogic(unittest.TestCase):
 
         self.assertFalse(task_is_enabled(TASK_AUTO_LOOP, active_runs))
         self.assertFalse(task_is_enabled(TASK_CAFE_AUTO_LOOP, active_runs))
+        self.assertFalse(task_is_enabled(TASK_MAHJONG_AUTO_LOOP, active_runs))
         self.assertTrue(task_is_enabled(TASK_PLAN_READY, active_runs))
 
     def test_runtime_task_guard_disables_fishing_when_cafe_task_active(self):
@@ -263,6 +368,21 @@ class TestYihuanGuiLogic(unittest.TestCase):
 
         self.assertFalse(task_is_enabled(TASK_AUTO_LOOP, active_runs))
         self.assertFalse(task_is_enabled(TASK_CAFE_AUTO_LOOP, active_runs))
+        self.assertFalse(task_is_enabled(TASK_MAHJONG_AUTO_LOOP, active_runs))
+        self.assertTrue(task_is_enabled(TASK_PLAN_READY, active_runs))
+
+    def test_runtime_task_guard_disables_other_runtime_tasks_when_mahjong_active(self):
+        active_runs = {
+            "cid-1": {
+                "cid": "cid-1",
+                "task_name": TASK_MAHJONG_AUTO_LOOP,
+                "status": "running",
+            }
+        }
+
+        self.assertFalse(task_is_enabled(TASK_AUTO_LOOP, active_runs))
+        self.assertFalse(task_is_enabled(TASK_CAFE_AUTO_LOOP, active_runs))
+        self.assertFalse(task_is_enabled(TASK_MAHJONG_AUTO_LOOP, active_runs))
         self.assertTrue(task_is_enabled(TASK_PLAN_READY, active_runs))
 
     def test_settings_sections_are_grouped_into_runtime_and_ui(self):
@@ -282,6 +402,14 @@ class TestYihuanGuiLogic(unittest.TestCase):
         self.assertEqual([section.title for section in sections], ["运行环境", "界面偏好"])
         self.assertEqual(sections[0].fields[0].key, "runtime.target.title_regex")
         self.assertEqual(sections[1].fields[0].key, "gui.history_limit")
+        self.assertEqual(sections[1].fields[-2].key, "gui.task_start_delay_sec")
+        self.assertEqual(sections[1].fields[-1].key, "gui.quick_stop_hotkey")
+
+    def test_visible_history_tasks_hide_non_workbench_gameplay_tasks(self):
+        self.assertIn(TASK_AUTO_LOOP, VISIBLE_HISTORY_TASK_REFS)
+        self.assertIn(TASK_CAFE_AUTO_LOOP, VISIBLE_HISTORY_TASK_REFS)
+        self.assertNotIn(TASK_LIVE_MONITOR, VISIBLE_HISTORY_TASK_REFS)
+        self.assertNotIn(TASK_MAHJONG_AUTO_LOOP, VISIBLE_HISTORY_TASK_REFS)
 
 
 if __name__ == "__main__":

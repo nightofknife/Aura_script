@@ -30,6 +30,7 @@ class RunnerBridge(QObject):
     plan_info_ready = Signal(object)
     runtime_probe_ready = Signal(object)
     doctor_ready = Signal(object)
+    control_message = Signal(object)
     error_occurred = Signal(object)
 
     def __init__(self, preferences: GuiPreferences) -> None:
@@ -44,9 +45,20 @@ class RunnerBridge(QObject):
     @Slot()
     def initialize(self) -> None:
         try:
+            self.status_changed.emit(
+                {
+                    "profile": "embedded_full",
+                    "scheduler_initialized": False,
+                    "scheduler_running": False,
+                    "ready": False,
+                    "message": "框架启动中",
+                }
+            )
+            self.control_message.emit({"level": "info", "message": "正在后台预热 Aura 框架。"})
             self._runner = SubprocessGameRunner()
             status = self._runner.start()
             self.status_changed.emit(status)
+            self.control_message.emit({"level": "info", "message": "Aura 框架预热完成。"})
             self.tasks_loaded.emit(self._runner.list_tasks(GAME_NAME))
             self.history_loaded.emit(self._runner.list_runs(limit=self._preferences.history_limit, game_name=GAME_NAME))
 
@@ -77,6 +89,13 @@ class RunnerBridge(QObject):
                 expand_developer_tools=bool(
                     payload.get("expand_developer_tools", self._preferences.expand_developer_tools)
                 ),
+                task_start_delay_sec=int(
+                    payload.get("task_start_delay_sec", self._preferences.task_start_delay_sec)
+                ),
+                quick_stop_hotkey=str(
+                    payload.get("quick_stop_hotkey", self._preferences.quick_stop_hotkey)
+                ).strip()
+                or self._preferences.quick_stop_hotkey,
             )
 
     @Slot(str, object)
@@ -104,6 +123,32 @@ class RunnerBridge(QObject):
         if cid:
             self._event_cache.setdefault(cid, [])
         self.task_dispatched.emit(dispatch)
+
+    @Slot(str)
+    def cancel_task(self, cid: str) -> None:
+        normalized = str(cid or "").strip()
+        if not normalized:
+            self.control_message.emit({"level": "warning", "message": "当前没有可取消的运行任务。"})
+            return
+        if self._runner is None:
+            self._emit_error("runtime", "取消任务失败", "后台运行器尚未完成初始化。")
+            return
+        try:
+            result = self._runner.cancel_task(normalized)
+        except Exception as exc:  # noqa: BLE001
+            self._emit_error("runtime", f"取消任务失败：{normalized}", str(exc))
+            return
+        status = str((result or {}).get("status") or "").strip().lower()
+        message = str((result or {}).get("message") or result or "已发送取消请求。")
+        level = "info" if status in {"success", "ok"} else "warning"
+        self.control_message.emit(
+            {
+                "level": level,
+                "cid": normalized,
+                "message": f"停止任务请求已发送：{message}",
+                "result": result,
+            }
+        )
 
     @Slot()
     def poll_events(self) -> None:
