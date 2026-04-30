@@ -86,9 +86,16 @@ jobs:
             }
 
             $destination = Join-Path $assetDir $AssetName
-            Invoke-WebRequest -Uri $asset.url -OutFile $destination
+            Write-Host "Downloading OCR model release asset: $AssetName"
+            & curl.exe -L --fail --retry 5 --retry-delay 2 --output $destination $asset.url
+            if ($LASTEXITCODE -ne 0) {
+              throw "curl failed with exit code $LASTEXITCODE while downloading release asset: $AssetName"
+            }
             if (-not (Test-Path $destination)) {
               throw "Failed to download release asset: $AssetName"
+            }
+            if ((Get-Item -LiteralPath $destination).Length -lt 1) {
+              throw "Downloaded release asset is empty: $AssetName"
             }
           }
 
@@ -263,9 +270,16 @@ jobs:
             }
 
             $destination = Join-Path $assetDir $AssetName
-            Invoke-WebRequest -Uri $asset.url -OutFile $destination
+            Write-Host "Downloading OCR model release asset: $AssetName"
+            & curl.exe -L --fail --retry 5 --retry-delay 2 --output $destination $asset.url
+            if ($LASTEXITCODE -ne 0) {
+              throw "curl failed with exit code $LASTEXITCODE while downloading release asset: $AssetName"
+            }
             if (-not (Test-Path $destination)) {
               throw "Failed to download release asset: $AssetName"
+            }
+            if ((Get-Item -LiteralPath $destination).Length -lt 1) {
+              throw "Downloaded release asset is empty: $AssetName"
             }
           }
 
