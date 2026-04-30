@@ -242,7 +242,7 @@ jobs:
           python -m venv .venv-release-gpu-onnx
           .\.venv-release-gpu-onnx\Scripts\python.exe -m pip install -U pip
           .\.venv-release-gpu-onnx\Scripts\python.exe -m pip install `
-            -r requirements\runtime.txt `
+            -r requirements\gui.txt `
             -r requirements\optional-vision-onnx-cuda.txt `
             "pyinstaller==$env:PYINSTALLER_VERSION"
 
@@ -340,6 +340,7 @@ jobs:
             -ReleaseName $env:GPU_RELEASE_NAME `
             -RuntimeRoot .runtime-gpu `
             -OnnxRuntimeProfile gpu `
+            -IncludeGui `
             -CreateZip
 
       - name: Validate GPU+CPU release
@@ -350,8 +351,11 @@ jobs:
             "models\ocr\ppocrv5_server\ocr.meta.json",
             "models\ocr\ppocrv5_server\det.onnx",
             "models\ocr\ppocrv5_server\rec.onnx",
+            "AuraYihuan.exe",
             "runtime\aura.exe",
+            "runtime\AuraYihuanRuntime.exe",
             "runtime\_internal\onnxruntime\capi\onnxruntime_providers_cuda.dll",
+            "runtime\_internal\PySide6",
             "run.ps1",
             "config.yaml",
             "BUILD-INFO.txt"
@@ -384,6 +388,12 @@ jobs:
           if ($buildInfo -notcontains "onnxruntime_distribution=onnxruntime-gpu") {
             throw "GPU release BUILD-INFO.txt must contain onnxruntime_distribution=onnxruntime-gpu."
           }
+          if ($buildInfo -notcontains "gui=true") {
+            throw "GPU release BUILD-INFO.txt must contain gui=true."
+          }
+          if ($buildInfo -notcontains "gui_entrypoint=AuraYihuan.exe") {
+            throw "GPU release BUILD-INFO.txt must contain gui_entrypoint=AuraYihuan.exe."
+          }
 
       - name: Smoke test GPU+CPU release CLI
         shell: pwsh
@@ -399,6 +409,17 @@ jobs:
           Invoke-ReleaseCli -CliArgs @("games", "--all")
           Invoke-ReleaseCli -CliArgs @("tasks", "yihuan")
           Invoke-ReleaseCli -CliArgs @("run", "yihuan", "tasks:checks:plan_loaded.yaml", "--timeout-sec", "120")
+
+      - name: Smoke test GPU+CPU GUI runtime
+        shell: pwsh
+        run: |
+          $release = Join-Path ".runtime-gpu\release" $env:GPU_RELEASE_NAME
+          $env:AURA_BASE_PATH = (Resolve-Path $release).Path
+          $env:PYTHONNOUSERSITE = "1"
+          & (Join-Path $release "runtime\AuraYihuanRuntime.exe") --self-check
+          if ($LASTEXITCODE -ne 0) {
+            throw "GPU GUI runtime self-check failed."
+          }
 
       - name: Upload GPU+CPU package artifact
         uses: actions/upload-artifact@v4
@@ -449,7 +470,7 @@ jobs:
       - name: Validate NVIDIA overlay
         shell: pwsh
         run: |
-          $overlay = Join-Path ".runtime-gpu-overlay\release" "$env:GPU_RELEASE_NAME-nvidia-overlay"
+          $overlay = Join-Path ".runtime-gpu-overlay\release" "$env:GPU_RELEASE_NAME-nvidia-overlay\$env:GPU_RELEASE_NAME"
           $mustExist = @(
             "runtime\_internal\nvidia\cuda_runtime\bin\cudart64_12.dll",
             "runtime\_internal\nvidia\cublas\bin\cublas64_12.dll",
@@ -575,7 +596,7 @@ jobs:
 
           Expand-Archive -LiteralPath ".runtime-artifacts\aura-release-gpu-onnx.zip" -DestinationPath $workDir -Force
           $release = Join-Path $workDir "aura-release-gpu-onnx"
-          Expand-Archive -LiteralPath ".runtime-artifacts\aura-release-gpu-onnx-nvidia-overlay.zip" -DestinationPath $release -Force
+          Expand-Archive -LiteralPath ".runtime-artifacts\aura-release-gpu-onnx-nvidia-overlay.zip" -DestinationPath $workDir -Force
 
           $configPath = Join-Path $release "config.yaml"
           $updatedConfig = Get-Content -LiteralPath $configPath | ForEach-Object {

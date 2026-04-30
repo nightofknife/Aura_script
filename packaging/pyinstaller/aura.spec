@@ -1,8 +1,9 @@
 # -*- mode: python ; coding: utf-8 -*-
 """PyInstaller spec for zero-framework-change Aura packaging.
 
-This spec intentionally packages the framework runtime only.
-Plans stay external in the assembled release root so users can edit them.
+This spec intentionally keeps plans external in the assembled release root
+so users can edit them. GUI packaging is optional and controlled by
+AURA_PKG_INCLUDE_GUI.
 """
 
 from __future__ import annotations
@@ -23,8 +24,15 @@ from PyInstaller.utils.hooks import (
 # The build wrapper runs PyInstaller from the repository root.
 ROOT = Path.cwd().resolve()
 ENTRYPOINT = ROOT / "cli.py"
+GUI_ENTRYPOINT = ROOT / "packages" / "yihuan_gui" / "__main__.py"
 
 INCLUDE_NVIDIA = os.environ.get("AURA_PKG_INCLUDE_NVIDIA", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+INCLUDE_GUI = os.environ.get("AURA_PKG_INCLUDE_GUI", "").strip().lower() in {
     "1",
     "true",
     "yes",
@@ -71,6 +79,8 @@ hiddenimports += [
     "pythoncom",
     "pywintypes",
 ]
+if INCLUDE_GUI:
+    hiddenimports += collect_submodules("packages.yihuan_gui")
 
 
 def _collect_optional_package(name: str) -> None:
@@ -84,7 +94,7 @@ def _collect_optional_package(name: str) -> None:
     hiddenimports += pkg_hiddenimports
 
 
-for optional_pkg in (
+optional_packages = [
     "onnxruntime",
     "numpy",
     "cv2",
@@ -93,13 +103,20 @@ for optional_pkg in (
     "av",
     "dotenv",
     "yaml",
-):
+]
+if INCLUDE_GUI:
+    optional_packages += [
+        "PySide6",
+        "shiboken6",
+    ]
+
+for optional_pkg in optional_packages:
     _collect_optional_package(optional_pkg)
 
 if INCLUDE_NVIDIA:
     binaries += collect_dynamic_libs("nvidia")
 
-for dist_name in _installed_distributions(
+metadata_distributions = [
     "onnxruntime-gpu",
     "onnxruntime",
     "numpy",
@@ -113,12 +130,41 @@ for dist_name in _installed_distributions(
     "fastjsonschema",
     "python-dotenv",
     "prompt_toolkit",
-):
+]
+if INCLUDE_GUI:
+    metadata_distributions += [
+        "PySide6",
+        "shiboken6",
+    ]
+
+for dist_name in _installed_distributions(*metadata_distributions):
     datas += copy_metadata(dist_name)
 
+analysis_entrypoints = [str(ENTRYPOINT)]
+if INCLUDE_GUI:
+    analysis_entrypoints.append(str(GUI_ENTRYPOINT))
+
+excluded_modules = [
+    "paddle",
+    "paddleocr",
+    "paddlex",
+    "torch",
+    "torchvision",
+    "ultralytics",
+    "matplotlib",
+    "pandas",
+    "scipy",
+    "tests",
+]
+if not INCLUDE_GUI:
+    excluded_modules += [
+        "PySide6",
+        "shiboken6",
+        "packages.yihuan_gui",
+    ]
 
 a = Analysis(
-    [str(ENTRYPOINT)],
+    analysis_entrypoints,
     pathex=[str(ROOT)],
     binaries=binaries,
     datas=datas,
@@ -126,29 +172,30 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[str(ROOT / "packaging" / "pyinstaller" / "rthook_aura_external_plans.py")],
-    excludes=[
-        "paddle",
-        "paddleocr",
-        "paddlex",
-        "torch",
-        "torchvision",
-        "ultralytics",
-        "PySide6",
-        "shiboken6",
-        "matplotlib",
-        "pandas",
-        "scipy",
-        "packages.yihuan_gui",
-        "tests",
-    ],
+    excludes=excluded_modules,
     noarchive=False,
     optimize=0,
 )
 pyz = PYZ(a.pure)
 
+def _scripts_for(entrypoint: Path):
+    target = entrypoint.resolve()
+    matches = []
+    for script in a.scripts:
+        try:
+            script_path = Path(script[1]).resolve()
+        except Exception:
+            continue
+        if script_path == target:
+            matches.append(script)
+    if not matches:
+        raise SystemExit(f"PyInstaller script entrypoint was not analyzed: {target}")
+    return matches
+
+
 exe = EXE(
     pyz,
-    a.scripts,
+    _scripts_for(ENTRYPOINT),
     [],
     exclude_binaries=True,
     name="aura",
@@ -160,8 +207,26 @@ exe = EXE(
     disable_windowed_traceback=False,
 )
 
+collected_executables = [exe]
+
+if INCLUDE_GUI:
+    gui_exe = EXE(
+        pyz,
+        _scripts_for(GUI_ENTRYPOINT),
+        [],
+        exclude_binaries=True,
+        name="AuraYihuanRuntime",
+        debug=False,
+        bootloader_ignore_signals=False,
+        strip=False,
+        upx=False,
+        console=False,
+        disable_windowed_traceback=False,
+    )
+    collected_executables.append(gui_exe)
+
 coll = COLLECT(
-    exe,
+    *collected_executables,
     a.binaries,
     a.zipfiles,
     a.datas,

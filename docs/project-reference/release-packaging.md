@@ -1,6 +1,6 @@
 # CPU / GPU+CPU ONNX Release Packaging
 
-本文档记录 Aura CLI 运行包的本地打包和 GitHub Actions 自动发布流程。默认发布 Windows x64 CLI/任务运行包，不包含 `gui yihuan`；GUI 继续使用单独发布链路。
+本文档记录 Aura Windows x64 运行包的本地打包和 GitHub Actions 自动发布流程。CPU 包保持 CLI-only；GPU+CPU 主包额外包含 `AuraYihuan.exe`，用户解压后可以双击启动异环 GUI。
 
 ## 产物
 
@@ -13,15 +13,17 @@ aura-release-gpu-onnx-nvidia-overlay.zip
 SHA256SUMS.txt
 ```
 
-用户视角只有两种版本：
+用户视角分为三个下载项：
 
 ```text
-CPU-only: 下载 aura-release-cpu-onnx.zip
-GPU+CPU: 下载 aura-release-gpu-onnx.zip
-离线 GPU runtime: 额外下载 aura-release-gpu-onnx-nvidia-overlay.zip 并解压覆盖到 GPU 主包根目录
+CPU-only: 下载 aura-release-cpu-onnx.zip，保持 CLI-only，用 run.ps1 启动
+GPU+CPU: 下载 aura-release-gpu-onnx.zip，解压后双击 AuraYihuan.exe 启动 GUI
+NVIDIA overlay: 需要离线 CUDA/cuDNN runtime 时，额外下载 aura-release-gpu-onnx-nvidia-overlay.zip
 ```
 
 CPU 包使用 `onnxruntime`，release 内默认配置为 `ocr.execution_provider: cpu`。GPU+CPU 包使用 `onnxruntime-gpu`，release 内默认配置为 `ocr.execution_provider: auto`，优先 CUDA，CUDA 不可用时回落 CPU。GPU 主包不默认内置完整 NVIDIA CUDA/cuDNN DLL；overlay 包解压后会提供 `runtime/_internal/nvidia`。
+
+NVIDIA overlay 的 zip 根目录与 GPU 主包保持同名顶层目录。最简单的用户流程是：把 `aura-release-gpu-onnx.zip` 和 `aura-release-gpu-onnx-nvidia-overlay.zip` 放在同一个文件夹，两个都解压到当前文件夹；如果系统提示合并或覆盖，选择允许。最终仍然只进入 `aura-release-gpu-onnx` 文件夹并双击 `AuraYihuan.exe`。
 
 ## 本地构建
 
@@ -52,7 +54,7 @@ GPU+CPU 主包：
 py -3.12 -m venv .venv-release-gpu-onnx
 .\.venv-release-gpu-onnx\Scripts\python.exe -m pip install -U pip
 .\.venv-release-gpu-onnx\Scripts\python.exe -m pip install `
-  -r requirements\runtime.txt `
+  -r requirements\gui.txt `
   -r requirements\optional-vision-onnx-cuda.txt `
   pyinstaller==6.14.2
 
@@ -62,6 +64,7 @@ powershell -NoProfile -ExecutionPolicy Bypass `
   -ReleaseName aura-release-gpu-onnx `
   -RuntimeRoot .runtime-gpu `
   -OnnxRuntimeProfile gpu `
+  -IncludeGui `
   -CreateZip
 ```
 
@@ -183,11 +186,11 @@ run_gpu_smoke: false
 
 推送 `v*` tag 时也会触发构建并发布 Release assets。
 
-workflow 分为四类 job：
+workflow 分为五类 job：
 
 ```text
 build-cpu: 构建 aura-release-cpu-onnx.zip
-build-gpu: 构建 aura-release-gpu-onnx.zip
+build-gpu: 构建带 AuraYihuan.exe 的 aura-release-gpu-onnx.zip
 build-nvidia-overlay: 构建 aura-release-gpu-onnx-nvidia-overlay.zip
 publish-assets: 生成 SHA256SUMS.txt，并在需要时上传到 GitHub Release
 gpu-smoke: 可选 self-hosted CUDA 强制烟测
@@ -214,6 +217,9 @@ BUILD-INFO.txt 中 release_profile=cpu
 GPU+CPU 主包必须满足：
 
 ```text
+存在 AuraYihuan.exe
+存在 runtime/AuraYihuanRuntime.exe
+存在 runtime/_internal/PySide6
 存在 models/ocr/ppocrv5_server/ocr.meta.json
 存在 models/ocr/ppocrv5_server/det.onnx
 存在 models/ocr/ppocrv5_server/rec.onnx
@@ -225,11 +231,13 @@ GPU+CPU 主包必须满足：
 不存在 plans/aura_base/src/services/ocr_model
 config.yaml 中 ocr.execution_provider=auto
 BUILD-INFO.txt 中 release_profile=gpu
+BUILD-INFO.txt 中 gui=true
 ```
 
 Overlay 必须满足：
 
 ```text
+zip 顶层目录必须是 aura-release-gpu-onnx/
 存在 runtime/_internal/nvidia/cuda_runtime/bin/cudart64_12.dll
 存在 runtime/_internal/nvidia/cublas/bin/cublas64_12.dll
 存在 runtime/_internal/nvidia/cublas/bin/cublasLt64_12.dll
@@ -243,6 +251,14 @@ CPU 和 GPU 主包都要跑 CLI smoke：
 powershell -NoProfile -ExecutionPolicy Bypass -File <release>\run.ps1 games --all
 powershell -NoProfile -ExecutionPolicy Bypass -File <release>\run.ps1 tasks yihuan
 powershell -NoProfile -ExecutionPolicy Bypass -File <release>\run.ps1 run yihuan tasks:checks:plan_loaded.yaml --timeout-sec 120
+```
+
+GPU 主包还要跑 GUI runtime self-check：
+
+```powershell
+$env:AURA_BASE_PATH = "<release>"
+$env:PYTHONNOUSERSITE = "1"
+& <release>\runtime\AuraYihuanRuntime.exe --self-check
 ```
 
 体积目标：

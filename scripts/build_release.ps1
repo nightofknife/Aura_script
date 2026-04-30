@@ -7,6 +7,7 @@ param(
     [ValidateSet("cpu", "gpu")]
     [string]$OnnxRuntimeProfile = "gpu",
     [switch]$IncludeNvidia,
+    [switch]$IncludeGui,
     [switch]$CreateZip,
     [switch]$CreateNvidiaOverlay,
     [switch]$SkipBuild,
@@ -86,6 +87,28 @@ function Assert-PythonModulesAbsent {
             "Release venv is not clean. These build-only or excluded runtime modules are importable: " +
             ($presentModules -join ", ") +
             ". Use a clean release venv for the selected ONNX Runtime profile."
+        )
+    }
+}
+
+function Assert-PythonModulesPresent {
+    param(
+        [string]$PythonPath,
+        [string[]]$ModuleNames
+    )
+
+    $missingModules = @()
+    foreach ($moduleName in $ModuleNames) {
+        if (-not (Test-PythonModuleAvailable -PythonPath $PythonPath -ModuleName $moduleName)) {
+            $missingModules += $moduleName
+        }
+    }
+
+    if ($missingModules.Count -gt 0) {
+        throw (
+            "Release venv is missing modules required by the selected packaging options: " +
+            ($missingModules -join ", ") +
+            ". Install the matching requirements before building."
         )
     }
 }
@@ -318,6 +341,35 @@ function Ensure-PyInstaller {
     }
 }
 
+function Build-GuiRootLauncher {
+    param(
+        [string]$PythonPath,
+        [string]$LauncherSource,
+        [string]$DistPath,
+        [string]$WorkPath
+    )
+
+    Assert-PathExists -PathValue $LauncherSource -Label "GUI root launcher source"
+    New-Item -ItemType Directory -Force -Path $DistPath | Out-Null
+    New-Item -ItemType Directory -Force -Path $WorkPath | Out-Null
+
+    Write-Host "Building AuraYihuan root launcher ..."
+    & $PythonPath -m PyInstaller `
+        --noconfirm `
+        --clean `
+        --onefile `
+        --windowed `
+        --uac-admin `
+        --name AuraYihuan `
+        --distpath $DistPath `
+        --workpath $WorkPath `
+        $LauncherSource
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "AuraYihuan root launcher build failed with exit code $LASTEXITCODE."
+    }
+}
+
 function Get-NvidiaPackageRoot {
     param([string]$PythonPath)
 
@@ -414,7 +466,8 @@ function New-NvidiaRuntimeOverlay {
     Assert-NvidiaRuntimeOverlayBundle -NvidiaRoot $nvidiaSource
 
     $overlayRoot = Join-Path $RuntimeRootPath "release\\$ReleaseName-nvidia-overlay"
-    $overlayRuntimeInternal = Join-Path $overlayRoot "runtime\\_internal"
+    $overlayReleaseRoot = Join-Path $overlayRoot $ReleaseName
+    $overlayRuntimeInternal = Join-Path $overlayReleaseRoot "runtime\\_internal"
     $overlayNvidiaDir = Join-Path $overlayRuntimeInternal "nvidia"
     $overlayZip = Join-Path $RuntimeRootPath "release\\$ReleaseName-nvidia-overlay.zip"
 
@@ -432,17 +485,18 @@ function New-NvidiaRuntimeOverlay {
     @(
         "NVIDIA runtime overlay for $ReleaseName"
         ""
-        "Extract this archive into the release root so it creates:"
-        "runtime\\_internal\\nvidia"
+        "Extract this archive into the same parent directory as $ReleaseName.zip."
+        "It contains the same top-level folder name as the main GPU package:"
+        "$ReleaseName\\runtime\\_internal\\nvidia"
         ""
         "The main package intentionally keeps these CUDA/cuDNN runtime libraries external."
-    ) | Set-Content -Path (Join-Path $overlayRoot "NVIDIA-RUNTIME-OVERLAY.txt") -Encoding UTF8
+    ) | Set-Content -Path (Join-Path $overlayReleaseRoot "NVIDIA-RUNTIME-OVERLAY.txt") -Encoding UTF8
 
     if (Test-Path $overlayZip) {
         Remove-Item -LiteralPath $overlayZip -Force
     }
     Write-Host "Creating NVIDIA runtime overlay zip: $overlayZip"
-    Compress-Archive -Path (Join-Path $overlayRoot "*") -DestinationPath $overlayZip -Force
+    Compress-Archive -Path $overlayReleaseRoot -DestinationPath $overlayZip -Force
 }
 
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
@@ -451,11 +505,16 @@ $SpecFilePath = Join-Path $RepoRoot $SpecPath
 $RuntimeRootPath = Join-Path $RepoRoot $RuntimeRoot
 $DistPath = Join-Path $RuntimeRootPath "dist"
 $WorkPath = Join-Path $RuntimeRootPath "build\\pyinstaller"
+$LauncherDistPath = Join-Path $RuntimeRootPath "launcher-dist"
+$LauncherWorkPath = Join-Path $RuntimeRootPath "build\\launcher"
 $ReleaseRoot = Join-Path $RuntimeRootPath "release\\$ReleaseName"
 $BuiltRuntimeDir = Join-Path $DistPath "aura"
+$BuiltGuiRuntimeExe = Join-Path $BuiltRuntimeDir "AuraYihuanRuntime.exe"
+$BuiltGuiLauncherExe = Join-Path $LauncherDistPath "AuraYihuan.exe"
 $ReleaseRuntimeDir = Join-Path $ReleaseRoot "runtime"
 $ReleasePlansDir = Join-Path $ReleaseRoot "plans"
 $ReleaseOcrModelsDir = Join-Path $ReleaseRoot "models\\ocr"
+$GuiLauncherSource = Join-Path $RepoRoot "packaging\\launcher\\aura_yihuan_launcher.py"
 $RunTemplate = Join-Path $RepoRoot "packaging\\templates\\run.ps1"
 $ConfigTemplate = Join-Path $RepoRoot "packaging\\templates\\config.yaml"
 $SourcePlansDir = Join-Path $RepoRoot "plans"
@@ -480,22 +539,30 @@ Assert-PathExists -PathValue $SourcePlansDir -Label "Plans directory"
 
 $env:PYTHONNOUSERSITE = "1"
 $env:AURA_PKG_INCLUDE_NVIDIA = if ($IncludeNvidia) { "1" } else { "0" }
+$env:AURA_PKG_INCLUDE_GUI = if ($IncludeGui) { "1" } else { "0" }
 
 if (-not $SkipBuild) {
     Ensure-PyInstaller -PythonPath $VenvPythonPath -Version $PyInstallerVersion
 }
 
+$isOverlayOnly = $CreateNvidiaOverlay -and $SkipBuild -and $SkipAssemble
 if ((-not $SkipBuild) -or $CreateNvidiaOverlay) {
-    Assert-PythonModulesAbsent -PythonPath $VenvPythonPath -ModuleNames @(
+    $forbiddenModules = @(
         "paddle",
         "paddleocr",
         "paddlex",
         "torch",
         "torchvision",
-        "ultralytics",
-        "PySide6",
-        "shiboken6"
+        "ultralytics"
     )
+    if ((-not $IncludeGui) -and (-not $isOverlayOnly)) {
+        $forbiddenModules += @("PySide6", "shiboken6")
+    }
+
+    Assert-PythonModulesAbsent -PythonPath $VenvPythonPath -ModuleNames $forbiddenModules
+    if ($IncludeGui -and (-not $SkipBuild)) {
+        Assert-PythonModulesPresent -PythonPath $VenvPythonPath -ModuleNames @("PySide6", "shiboken6")
+    }
     Assert-OnnxRuntimeEnvironment -PythonPath $VenvPythonPath -Profile $OnnxRuntimeProfile
 }
 
@@ -514,10 +581,24 @@ if (-not $SkipBuild) {
     if ($LASTEXITCODE -ne 0) {
         throw "PyInstaller build failed with exit code $LASTEXITCODE."
     }
+
+    if ($IncludeGui) {
+        Assert-PathExists -PathValue $BuiltGuiRuntimeExe -Label "Built Yihuan GUI runtime executable"
+        Build-GuiRootLauncher `
+            -PythonPath $VenvPythonPath `
+            -LauncherSource $GuiLauncherSource `
+            -DistPath $LauncherDistPath `
+            -WorkPath $LauncherWorkPath
+        Assert-PathExists -PathValue $BuiltGuiLauncherExe -Label "Built AuraYihuan root launcher executable"
+    }
 }
 
 if (-not $SkipAssemble) {
     Assert-PathExists -PathValue $BuiltRuntimeDir -Label "Built runtime directory"
+    if ($IncludeGui) {
+        Assert-PathExists -PathValue $BuiltGuiRuntimeExe -Label "Built Yihuan GUI runtime executable"
+        Assert-PathExists -PathValue $BuiltGuiLauncherExe -Label "Built AuraYihuan root launcher executable"
+    }
     Update-MsvcRuntimeForOnnxRuntime -RuntimeDir $BuiltRuntimeDir
 
     if (Test-Path $ReleaseRoot) {
@@ -529,6 +610,9 @@ if (-not $SkipAssemble) {
 
     Write-Host "Assembling release root ..."
     Invoke-RobocopySafe -Source $BuiltRuntimeDir -Destination $ReleaseRuntimeDir
+    if ($IncludeGui) {
+        Copy-Item -LiteralPath $BuiltGuiLauncherExe -Destination (Join-Path $ReleaseRoot "AuraYihuan.exe") -Force
+    }
     Update-MsvcRuntimeForOnnxRuntime -RuntimeDir $ReleaseRuntimeDir
     Copy-PlanPackages -Source $SourcePlansDir -Destination $ReleasePlansDir
     Copy-OcrModels -Source $SourceOcrModelsDir -Destination $ReleaseOcrModelsDir
@@ -558,7 +642,7 @@ if (-not $SkipAssemble) {
     $gpuBackend = if ($OnnxRuntimeProfile -eq "cpu") { "none" } else { "onnxruntime-gpu" }
 
     $summaryPath = Join-Path $ReleaseRoot "BUILD-INFO.txt"
-    @(
+    $summaryLines = @(
         "release_name=$ReleaseName"
         "built_at_utc=$([DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ'))"
         "release_profile=$OnnxRuntimeProfile"
@@ -572,7 +656,15 @@ if (-not $SkipAssemble) {
         "nvidia_runtime=$nvidiaRuntimeMode"
         "base_path_mode=release_root"
         "entrypoint=run.ps1"
-    ) | Set-Content -Path $summaryPath -Encoding UTF8
+    )
+    if ($IncludeGui) {
+        $summaryLines += @(
+            "gui=true"
+            "gui_entrypoint=AuraYihuan.exe"
+            "gui_runtime=runtime\\AuraYihuanRuntime.exe"
+        )
+    }
+    $summaryLines | Set-Content -Path $summaryPath -Encoding UTF8
 
     Write-Host "Release assembled at: $ReleaseRoot"
 }
