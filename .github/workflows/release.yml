@@ -192,11 +192,11 @@ jobs:
           if ($config -notmatch "(?m)^\s*execution_provider:\s*cpu\s*$") {
             throw "CPU release config.yaml must set ocr.execution_provider=cpu."
           }
-          $buildInfo = Get-Content -Raw -LiteralPath (Join-Path $release "BUILD-INFO.txt")
-          if ($buildInfo -notmatch "(?m)^release_profile=cpu$") {
+          $buildInfo = Get-Content -LiteralPath (Join-Path $release "BUILD-INFO.txt")
+          if ($buildInfo -notcontains "release_profile=cpu") {
             throw "CPU release BUILD-INFO.txt must contain release_profile=cpu."
           }
-          if ($buildInfo -notmatch "(?m)^onnxruntime_distribution=onnxruntime$") {
+          if ($buildInfo -notcontains "onnxruntime_distribution=onnxruntime") {
             throw "CPU release BUILD-INFO.txt must contain onnxruntime_distribution=onnxruntime."
           }
 
@@ -377,11 +377,11 @@ jobs:
           if ($config -notmatch "(?m)^\s*execution_provider:\s*auto\s*$") {
             throw "GPU release config.yaml must set ocr.execution_provider=auto."
           }
-          $buildInfo = Get-Content -Raw -LiteralPath (Join-Path $release "BUILD-INFO.txt")
-          if ($buildInfo -notmatch "(?m)^release_profile=gpu$") {
+          $buildInfo = Get-Content -LiteralPath (Join-Path $release "BUILD-INFO.txt")
+          if ($buildInfo -notcontains "release_profile=gpu") {
             throw "GPU release BUILD-INFO.txt must contain release_profile=gpu."
           }
-          if ($buildInfo -notmatch "(?m)^onnxruntime_distribution=onnxruntime-gpu$") {
+          if ($buildInfo -notcontains "onnxruntime_distribution=onnxruntime-gpu") {
             throw "GPU release BUILD-INFO.txt must contain onnxruntime_distribution=onnxruntime-gpu."
           }
 
