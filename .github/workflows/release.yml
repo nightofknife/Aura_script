@@ -68,14 +68,32 @@ jobs:
         run: |
           $assetDir = ".runtime-model-assets"
           New-Item -ItemType Directory -Force -Path $assetDir | Out-Null
-          gh release download $env:AURA_OCR_MODEL_RELEASE_TAG `
+
+          $release = gh release view $env:AURA_OCR_MODEL_RELEASE_TAG `
             --repo $env:GITHUB_REPOSITORY `
-            --pattern $env:AURA_OCR_MODEL_ASSET `
-            --pattern $env:AURA_OCR_MODEL_SHA256_ASSET `
-            --dir $assetDir
-          if ($LASTEXITCODE -ne 0) {
-            throw "Failed to download OCR model bundle release assets."
+            --json assets | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or -not $release) {
+            throw "Failed to read OCR model release: $env:AURA_OCR_MODEL_RELEASE_TAG"
           }
+
+          function Save-ReleaseAsset {
+            param([string]$AssetName)
+
+            $asset = $release.assets | Where-Object { $_.name -eq $AssetName } | Select-Object -First 1
+            if (-not $asset) {
+              $available = ($release.assets | ForEach-Object { $_.name }) -join ", "
+              throw "Release asset not found: $AssetName. Available assets: $available"
+            }
+
+            $destination = Join-Path $assetDir $AssetName
+            Invoke-WebRequest -Uri $asset.url -OutFile $destination
+            if (-not (Test-Path $destination)) {
+              throw "Failed to download release asset: $AssetName"
+            }
+          }
+
+          Save-ReleaseAsset -AssetName $env:AURA_OCR_MODEL_ASSET
+          Save-ReleaseAsset -AssetName $env:AURA_OCR_MODEL_SHA256_ASSET
 
           $zipPath = Join-Path $assetDir $env:AURA_OCR_MODEL_ASSET
           $shaPath = Join-Path $assetDir $env:AURA_OCR_MODEL_SHA256_ASSET
@@ -227,14 +245,32 @@ jobs:
         run: |
           $assetDir = ".runtime-model-assets"
           New-Item -ItemType Directory -Force -Path $assetDir | Out-Null
-          gh release download $env:AURA_OCR_MODEL_RELEASE_TAG `
+
+          $release = gh release view $env:AURA_OCR_MODEL_RELEASE_TAG `
             --repo $env:GITHUB_REPOSITORY `
-            --pattern $env:AURA_OCR_MODEL_ASSET `
-            --pattern $env:AURA_OCR_MODEL_SHA256_ASSET `
-            --dir $assetDir
-          if ($LASTEXITCODE -ne 0) {
-            throw "Failed to download OCR model bundle release assets."
+            --json assets | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or -not $release) {
+            throw "Failed to read OCR model release: $env:AURA_OCR_MODEL_RELEASE_TAG"
           }
+
+          function Save-ReleaseAsset {
+            param([string]$AssetName)
+
+            $asset = $release.assets | Where-Object { $_.name -eq $AssetName } | Select-Object -First 1
+            if (-not $asset) {
+              $available = ($release.assets | ForEach-Object { $_.name }) -join ", "
+              throw "Release asset not found: $AssetName. Available assets: $available"
+            }
+
+            $destination = Join-Path $assetDir $AssetName
+            Invoke-WebRequest -Uri $asset.url -OutFile $destination
+            if (-not (Test-Path $destination)) {
+              throw "Failed to download release asset: $AssetName"
+            }
+          }
+
+          Save-ReleaseAsset -AssetName $env:AURA_OCR_MODEL_ASSET
+          Save-ReleaseAsset -AssetName $env:AURA_OCR_MODEL_SHA256_ASSET
 
           $zipPath = Join-Path $assetDir $env:AURA_OCR_MODEL_ASSET
           $shaPath = Join-Path $assetDir $env:AURA_OCR_MODEL_SHA256_ASSET
