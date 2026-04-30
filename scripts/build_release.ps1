@@ -48,6 +48,7 @@ function Invoke-RobocopySafe {
     if ($code -ge 8) {
         throw "Robocopy failed with exit code $code while copying '$Source' -> '$Destination'."
     }
+    $global:LASTEXITCODE = 0
 }
 
 function Test-PythonModuleAvailable {

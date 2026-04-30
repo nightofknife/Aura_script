@@ -137,6 +137,7 @@ jobs:
           if ($LASTEXITCODE -ge 8) {
             throw "Failed to copy OCR model bundle from $sourceBundle."
           }
+          $global:LASTEXITCODE = 0
 
           foreach ($fileName in @("ocr.meta.json", "det.onnx", "rec.onnx", "doc_orientation.onnx", "textline_orientation.onnx")) {
             $candidate = Join-Path $destinationBundle $fileName
@@ -321,6 +322,7 @@ jobs:
           if ($LASTEXITCODE -ge 8) {
             throw "Failed to copy OCR model bundle from $sourceBundle."
           }
+          $global:LASTEXITCODE = 0
 
           foreach ($fileName in @("ocr.meta.json", "det.onnx", "rec.onnx", "doc_orientation.onnx", "textline_orientation.onnx")) {
             $candidate = Join-Path $destinationBundle $fileName
