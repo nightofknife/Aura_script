@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
@@ -58,6 +59,53 @@ class TestGameRunners(unittest.TestCase):
         self.assertEqual(result["status"], "success")
         fake_runtime.cancel_task.assert_called_once_with("cid-123")
 
+    def test_embedded_runner_target_status_uses_runtime_target_service(self):
+        runner = EmbeddedGameRunner()
+        fake_service = Mock()
+        fake_service.target_summary.return_value = {"title": "Yihuan", "client_rect_screen": [1, 2, 3, 4]}
+        with (
+            patch.object(runner, "_ensure_running_runtime", return_value=object()),
+            patch("packages.aura_game.runner.service_registry.get_service_instance", return_value=fake_service) as get_service,
+        ):
+            result = runner.target_status(game_name="yihuan")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["game_name"], "yihuan")
+        self.assertEqual(result["target"]["title"], "Yihuan")
+        get_service.assert_called_once_with("target_runtime")
+
+    def test_embedded_runner_target_snapshot_serializes_runtime_capture(self):
+        try:
+            import numpy as np
+        except ModuleNotFoundError:
+            self.skipTest("numpy is not installed")
+
+        runner = EmbeddedGameRunner()
+        fake_service = Mock()
+        fake_service.capture.return_value = SimpleNamespace(
+            success=True,
+            image=np.zeros((2, 3, 3), dtype=np.uint8),
+            backend="gdi",
+            image_size=(3, 2),
+            window_rect=(10, 20, 30, 40),
+            relative_rect=(0, 0, 3, 2),
+            quality_flags=["test"],
+            error_message="",
+        )
+        fake_service.target_summary.return_value = {"title": "Yihuan"}
+        with (
+            patch.object(runner, "_ensure_running_runtime", return_value=object()),
+            patch("packages.aura_game.runner.service_registry.get_service_instance", return_value=fake_service),
+        ):
+            result = runner.target_snapshot(game_name="yihuan", backend="gdi")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["backend"], "gdi")
+        self.assertEqual(result["image_size"], [3, 2])
+        self.assertEqual(result["window_rect"], [10, 20, 30, 40])
+        self.assertEqual(result["quality_flags"], ["test"])
+        self.assertTrue(result["image_png"].startswith(b"\x89PNG"))
+
     def test_subprocess_runner_start_stop_lifecycle(self):
         runner = SubprocessGameRunner()
         try:
@@ -83,6 +131,18 @@ class TestGameRunners(unittest.TestCase):
 
         self.assertEqual(result["status"], "success")
         request.assert_called_once_with("cancel_task", cid="cid-123")
+
+    def test_subprocess_runner_target_helpers_use_request_channel(self):
+        runner = SubprocessGameRunner()
+        with patch.object(runner, "_request", return_value={"ok": True}) as request:
+            result = runner.target_status(game_name="yihuan")
+            self.assertTrue(result["ok"])
+            request.assert_called_once_with("target_status", game_name="yihuan")
+
+        with patch.object(runner, "_request", return_value={"ok": True}) as request:
+            result = runner.target_snapshot(game_name="yihuan", backend="gdi")
+            self.assertTrue(result["ok"])
+            request.assert_called_once_with("target_snapshot", game_name="yihuan", backend="gdi")
 
     def test_embedded_runner_requires_admin_startup(self):
         runner = EmbeddedGameRunner()

@@ -76,6 +76,7 @@ from .logic import (
     task_display_name,
     task_is_enabled,
 )
+from .map_overlay.controller import MapOverlayController
 
 
 WORKBENCH_TASKS: dict[str, dict[str, str]] = {
@@ -242,6 +243,7 @@ class YihuanMainWindow(QMainWindow):
         self._last_business_cids: dict[str, str] = {}
         self._pending_launch: PendingLaunch | None = None
         self._hotkey_warning_shown = False
+        self._map_overlay_controller: MapOverlayController | None = None
 
         self._pending_timer = QTimer(self)
         self._pending_timer.setInterval(1000)
@@ -278,9 +280,13 @@ class YihuanMainWindow(QMainWindow):
         refresh_plan_action.triggered.connect(self.request_refresh_plan_info.emit)
         refresh_history_action = QAction("刷新最近记录", self)
         refresh_history_action.triggered.connect(self.request_refresh_history.emit)
+        map_overlay_action = QAction("异环大地图点位悬浮层", self)
+        map_overlay_action.triggered.connect(self._open_map_overlay)
         tools_menu.addAction(self._refresh_probe_action)
         tools_menu.addAction(refresh_plan_action)
         tools_menu.addAction(refresh_history_action)
+        tools_menu.addSeparator()
+        tools_menu.addAction(map_overlay_action)
 
     def _build_central_pages(self) -> None:
         self._pages = QStackedWidget(self)
@@ -721,6 +727,15 @@ class YihuanMainWindow(QMainWindow):
 
         self._bridge_thread.start()
         self.request_initialize.emit()
+
+    def _open_map_overlay(self) -> None:
+        if self._map_overlay_controller is None:
+            self._map_overlay_controller = MapOverlayController(
+                self._settings_store,
+                game_name=GAME_NAME,
+                parent=self,
+            )
+        self._map_overlay_controller.show()
 
     def _restore_window_settings(self) -> None:
         geometry = self._settings_store.value("window/geometry")
@@ -1181,6 +1196,9 @@ class YihuanMainWindow(QMainWindow):
 
         self._persist_window_settings()
         self._hotkey_manager.unregister()
+        if self._map_overlay_controller is not None:
+            self._map_overlay_controller.close()
+            self._map_overlay_controller = None
         if hasattr(self, "_bridge") and hasattr(self, "_bridge_thread"):
             try:
                 QMetaObject.invokeMethod(self._bridge, "shutdown", Qt.BlockingQueuedConnection)

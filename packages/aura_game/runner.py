@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import multiprocessing
 import queue
@@ -9,6 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from packages.aura_core.api import ACTION_REGISTRY, hook_manager, service_registry
 from packages.aura_core.config.loader import get_config_value
+from packages.aura_core.context.plan import current_plan_name
 from packages.aura_core.runtime.bootstrap import create_runtime, peek_runtime, start_runtime, stop_runtime
 
 _TERMINAL_STATUSES = {"success", "error", "failed", "timeout", "cancelled"}
@@ -239,9 +241,63 @@ class EmbeddedGameRunner:
         runtime = self._ensure_runtime()
         return runtime.cancel_task(str(cid))
 
+    def target_status(self, *, game_name: str) -> Dict[str, Any]:
+        runtime = self._ensure_running_runtime()
+        del runtime
+        token = current_plan_name.set(str(game_name))
+        try:
+            target_runtime = service_registry.get_service_instance("target_runtime")
+            summary = target_runtime.target_summary()
+            return {
+                "ok": True,
+                "game_name": game_name,
+                "target": summary,
+            }
+        finally:
+            current_plan_name.reset(token)
+
+    def target_snapshot(self, *, game_name: str, backend: Optional[str] = None) -> Dict[str, Any]:
+        runtime = self._ensure_running_runtime()
+        del runtime
+        token = current_plan_name.set(str(game_name))
+        try:
+            target_runtime = service_registry.get_service_instance("target_runtime")
+            capture = target_runtime.capture(backend=backend)
+            target = target_runtime.target_summary()
+            if not capture.success or capture.image is None:
+                return {
+                    "ok": False,
+                    "game_name": game_name,
+                    "backend": capture.backend,
+                    "target": target,
+                    "message": capture.error_message or "目标窗口截图失败。",
+                    "quality_flags": list(capture.quality_flags),
+                }
+            image_png = _capture_image_to_png_bytes(capture.image)
+            return {
+                "ok": True,
+                "game_name": game_name,
+                "backend": capture.backend,
+                "target": target,
+                "image_png": image_png,
+                "image_size": list(capture.image_size or (0, 0)),
+                "window_rect": list(capture.window_rect) if capture.window_rect is not None else None,
+                "relative_rect": list(capture.relative_rect) if capture.relative_rect is not None else None,
+                "quality_flags": list(capture.quality_flags),
+            }
+        finally:
+            current_plan_name.reset(token)
+
     def get_run(self, cid: str) -> Dict[str, Any]:
         runtime = self._ensure_runtime()
         return _normalize_run_row(runtime.get_run_detail(cid))
+
+    def _ensure_running_runtime(self):
+        runtime = self._ensure_runtime()
+        if not self._is_running():
+            self.start()
+            runtime = self._ensure_runtime()
+        return runtime
 
     def list_runs(
         self,
@@ -426,6 +482,12 @@ class SubprocessGameRunner:
     def cancel_task(self, cid: str) -> Dict[str, Any]:
         return self._request("cancel_task", cid=cid)
 
+    def target_status(self, *, game_name: str) -> Dict[str, Any]:
+        return self._request("target_status", game_name=game_name)
+
+    def target_snapshot(self, *, game_name: str, backend: Optional[str] = None) -> Dict[str, Any]:
+        return self._request("target_snapshot", game_name=game_name, backend=backend)
+
     def list_runs(
         self,
         *,
@@ -471,3 +533,11 @@ class SubprocessGameRunner:
 
     def __exit__(self, exc_type, exc, tb) -> None:
         self.close()
+
+
+def _capture_image_to_png_bytes(image: Any) -> bytes:
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.fromarray(image).save(buffer, format="PNG")
+    return buffer.getvalue()

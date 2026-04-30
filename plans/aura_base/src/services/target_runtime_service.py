@@ -64,6 +64,22 @@ class TargetRuntimeService:
     def get_client_rect(self) -> tuple[int, int, int, int] | None:
         return self._call_session("get_client_rect")
 
+    def target_summary(self) -> dict[str, Any]:
+        resolved = self._resolve_runtime_config()
+        session = self._get_or_create_session(resolved=resolved)
+        target = getattr(session, "target", None)
+        if target is not None and hasattr(target, "to_summary"):
+            return dict(target.to_summary())
+        try:
+            session_check = dict(session.self_check() or {})
+        except Exception:
+            session_check = {}
+        target_payload = session_check.get("target")
+        if isinstance(target_payload, dict):
+            return dict(target_payload)
+        client_rect = self.get_client_rect()
+        return {"client_rect": list(client_rect) if client_rect is not None else None}
+
     def get_pixel_color_at(self, x: int, y: int) -> tuple[int, int, int]:
         return self._call_session("get_pixel_color_at", x, y)
 

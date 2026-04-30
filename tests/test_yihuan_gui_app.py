@@ -56,6 +56,23 @@ class TestYihuanMainWindowWorkbench(unittest.TestCase):
         self.assertEqual(task_ids, list(WORKBENCH_TASKS.keys()))
         self.assertEqual([WORKBENCH_TASKS[task_id]["label"] for task_id in task_ids], ["钓鱼", "沙威玛"])
 
+    def test_tools_menu_contains_big_map_overlay_action(self):
+        window = self._make_window()
+
+        submenu_titles = []
+        overlay_action_found = False
+        for action in window.menuBar().actions():
+            menu = action.menu()
+            if menu is None:
+                continue
+            submenu_titles.append(menu.title())
+            overlay_action_found = overlay_action_found or any(
+                child_action.text() == "异环大地图点位悬浮层" for child_action in menu.actions()
+            )
+
+        self.assertIn("辅助", submenu_titles)
+        self.assertTrue(overlay_action_found)
+
     def test_start_uses_countdown_before_dispatch_and_stop_cancels_it(self):
         window = self._make_window()
         window._runner_ready = True
