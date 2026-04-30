@@ -4,6 +4,8 @@ param(
     [string]$RuntimeRoot = ".runtime",
     [string]$ReleaseName = "aura-release",
     [string]$PyInstallerVersion = "6.14.2",
+    [ValidateSet("cpu", "gpu")]
+    [string]$OnnxRuntimeProfile = "gpu",
     [switch]$IncludeNvidia,
     [switch]$CreateZip,
     [switch]$CreateNvidiaOverlay,
@@ -82,42 +84,66 @@ function Assert-PythonModulesAbsent {
         throw (
             "Release venv is not clean. These build-only or excluded runtime modules are importable: " +
             ($presentModules -join ", ") +
-            ". Use a clean venv such as .venv-release-gpu-onnx with runtime.txt and optional-vision-onnx-cuda.txt only."
+            ". Use a clean release venv for the selected ONNX Runtime profile."
         )
     }
 }
 
-function Assert-OnnxRuntimeGpuEnvironment {
-    param([string]$PythonPath)
+function Assert-OnnxRuntimeEnvironment {
+    param(
+        [string]$PythonPath,
+        [ValidateSet("cpu", "gpu")]
+        [string]$Profile
+    )
 
     $script = @'
 from importlib import metadata
 import sys
 
-try:
-    metadata.version("onnxruntime-gpu")
-except metadata.PackageNotFoundError:
-    raise SystemExit("onnxruntime-gpu is required for the GPU ONNX release venv.")
+profile = sys.argv[1]
 
-try:
-    metadata.version("onnxruntime")
-except metadata.PackageNotFoundError:
-    pass
+def installed_version(name):
+    try:
+        return metadata.version(name)
+    except metadata.PackageNotFoundError:
+        return None
+
+onnxruntime_version = installed_version("onnxruntime")
+onnxruntime_gpu_version = installed_version("onnxruntime-gpu")
+
+if profile == "cpu":
+    if not onnxruntime_version:
+        raise SystemExit("onnxruntime is required for the CPU ONNX release venv.")
+    if onnxruntime_gpu_version:
+        raise SystemExit("Do not install onnxruntime-gpu in the CPU release venv.")
+    distribution = "onnxruntime"
+elif profile == "gpu":
+    if not onnxruntime_gpu_version:
+        raise SystemExit("onnxruntime-gpu is required for the GPU ONNX release venv.")
+    if onnxruntime_version:
+        raise SystemExit("Do not install both onnxruntime and onnxruntime-gpu in the release venv.")
+    distribution = "onnxruntime-gpu"
 else:
-    raise SystemExit("Do not install both onnxruntime and onnxruntime-gpu in the release venv.")
+    raise SystemExit(f"Unsupported ONNX Runtime release profile: {profile!r}")
 
-import onnxruntime as ort
+try:
+    import onnxruntime as ort
+except ImportError as exc:
+    raise SystemExit(f"Failed to import onnxruntime from {distribution}: {exc}") from exc
 
 providers = list(ort.get_available_providers())
 if "CPUExecutionProvider" not in providers:
     raise SystemExit(f"ONNX Runtime CPUExecutionProvider is missing: {providers!r}")
 
-print("ONNX Runtime GPU release preflight OK: providers=" + ",".join(providers))
+print(
+    "ONNX Runtime release preflight OK: "
+    f"profile={profile}; distribution={distribution}; providers=" + ",".join(providers)
+)
 '@
 
-    $output = $script | & $PythonPath - 2>&1
+    $output = $script | & $PythonPath - $Profile 2>&1
     if ($LASTEXITCODE -ne 0) {
-        throw "ONNX Runtime GPU preflight failed: $output"
+        throw "ONNX Runtime preflight failed for profile '$Profile': $output"
     }
     if ($output) {
         Write-Host $output
@@ -189,6 +215,36 @@ function Update-MsvcRuntimeForOnnxRuntime {
         Write-Host "Updating packaged msvcp140.dll for ONNX Runtime: $targetVersion -> $sourceVersion"
         Copy-Item -LiteralPath $sourcePath -Destination $targetPath -Force
     }
+}
+
+function Write-ReleaseConfig {
+    param(
+        [string]$TemplatePath,
+        [string]$DestinationPath,
+        [ValidateSet("cpu", "gpu")]
+        [string]$Profile
+    )
+
+    Assert-PathExists -PathValue $TemplatePath -Label "Config template"
+
+    $executionProvider = if ($Profile -eq "cpu") { "cpu" } else { "auto" }
+    $foundExecutionProvider = $false
+    $updatedLines = Get-Content -LiteralPath $TemplatePath |
+        ForEach-Object {
+            if ($_ -match "^\s*execution_provider\s*:") {
+                $foundExecutionProvider = $true
+                "  execution_provider: $executionProvider"
+            }
+            else {
+                $_
+            }
+        }
+
+    if (-not $foundExecutionProvider) {
+        throw "Config template does not contain ocr.execution_provider; update $TemplatePath before packaging."
+    }
+
+    $updatedLines | Set-Content -Path $DestinationPath -Encoding UTF8
 }
 
 function Copy-OcrModels {
@@ -325,6 +381,27 @@ function New-ZipArchive {
     Compress-Archive -Path $SourcePath -DestinationPath $DestinationPath -Force
 }
 
+function Update-ReleaseChecksums {
+    param([string]$ReleaseDirectory)
+
+    if (-not (Test-Path $ReleaseDirectory)) {
+        return
+    }
+
+    $zipFiles = @(Get-ChildItem -LiteralPath $ReleaseDirectory -File -Filter "*.zip" | Sort-Object Name)
+    if ($zipFiles.Count -lt 1) {
+        return
+    }
+
+    $checksumPath = Join-Path $ReleaseDirectory "SHA256SUMS.txt"
+    $lines = foreach ($zipFile in $zipFiles) {
+        $hash = (Get-FileHash -LiteralPath $zipFile.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        "$hash  $($zipFile.Name)"
+    }
+    $lines | Set-Content -Path $checksumPath -Encoding ascii
+    Write-Host "Updated release checksums: $checksumPath"
+}
+
 function New-NvidiaRuntimeOverlay {
     param(
         [string]$PythonPath,
@@ -385,19 +462,29 @@ $SourceOcrModelsDir = Join-Path $RepoRoot "models\\ocr"
 $SourceLicense = Join-Path $RepoRoot "LICENSE"
 $SourceReadme = Join-Path $RepoRoot "README.md"
 
+if ($OnnxRuntimeProfile -eq "cpu") {
+    if ($IncludeNvidia) {
+        throw "-IncludeNvidia is only valid with -OnnxRuntimeProfile gpu."
+    }
+    if ($CreateNvidiaOverlay) {
+        throw "-CreateNvidiaOverlay is only valid with -OnnxRuntimeProfile gpu."
+    }
+}
+
 Assert-PathExists -PathValue $VenvPythonPath -Label "Venv python"
 Assert-PathExists -PathValue $SpecFilePath -Label "PyInstaller spec"
 Assert-PathExists -PathValue $RunTemplate -Label "Run script template"
 Assert-PathExists -PathValue $ConfigTemplate -Label "Config template"
 Assert-PathExists -PathValue $SourcePlansDir -Label "Plans directory"
-Assert-OcrModelBundle -ModelsRoot $SourceOcrModelsDir
 
 $env:PYTHONNOUSERSITE = "1"
 $env:AURA_PKG_INCLUDE_NVIDIA = if ($IncludeNvidia) { "1" } else { "0" }
 
-Ensure-PyInstaller -PythonPath $VenvPythonPath -Version $PyInstallerVersion
-
 if (-not $SkipBuild) {
+    Ensure-PyInstaller -PythonPath $VenvPythonPath -Version $PyInstallerVersion
+}
+
+if ((-not $SkipBuild) -or $CreateNvidiaOverlay) {
     Assert-PythonModulesAbsent -PythonPath $VenvPythonPath -ModuleNames @(
         "paddle",
         "paddleocr",
@@ -408,7 +495,7 @@ if (-not $SkipBuild) {
         "PySide6",
         "shiboken6"
     )
-    Assert-OnnxRuntimeGpuEnvironment -PythonPath $VenvPythonPath
+    Assert-OnnxRuntimeEnvironment -PythonPath $VenvPythonPath -Profile $OnnxRuntimeProfile
 }
 
 if (-not $SkipBuild) {
@@ -448,9 +535,7 @@ if (-not $SkipAssemble) {
     Copy-Item -LiteralPath $RunTemplate -Destination (Join-Path $ReleaseRoot "run.ps1") -Force
 
     $releaseConfigPath = Join-Path $ReleaseRoot "config.yaml"
-    if (-not (Test-Path $releaseConfigPath)) {
-        Copy-Item -LiteralPath $ConfigTemplate -Destination $releaseConfigPath -Force
-    }
+    Write-ReleaseConfig -TemplatePath $ConfigTemplate -DestinationPath $releaseConfigPath -Profile $OnnxRuntimeProfile
 
     if (Test-Path $SourceLicense) {
         Copy-Item -LiteralPath $SourceLicense -Destination (Join-Path $ReleaseRoot "LICENSE") -Force
@@ -459,23 +544,29 @@ if (-not $SkipAssemble) {
         Copy-Item -LiteralPath $SourceReadme -Destination (Join-Path $ReleaseRoot "README.md") -Force
     }
 
-    $nvidiaRuntimeMode = if ($IncludeNvidia) {
+    $nvidiaRuntimeMode = if ($OnnxRuntimeProfile -eq "cpu") {
+        "none"
+    } elseif ($IncludeNvidia) {
         "bundled"
     } elseif ($CreateNvidiaOverlay) {
         "overlay"
     } else {
         "external"
     }
+    $onnxRuntimeDistribution = if ($OnnxRuntimeProfile -eq "cpu") { "onnxruntime" } else { "onnxruntime-gpu" }
+    $gpuBackend = if ($OnnxRuntimeProfile -eq "cpu") { "none" } else { "onnxruntime-gpu" }
 
     $summaryPath = Join-Path $ReleaseRoot "BUILD-INFO.txt"
     @(
         "release_name=$ReleaseName"
         "built_at_utc=$([DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ'))"
+        "release_profile=$OnnxRuntimeProfile"
+        "onnxruntime_distribution=$onnxRuntimeDistribution"
         "include_nvidia=$($IncludeNvidia.IsPresent)"
         "create_zip=$($CreateZip.IsPresent)"
         "create_nvidia_overlay=$($CreateNvidiaOverlay.IsPresent)"
         "ocr_backend=onnxruntime"
-        "gpu_backend=onnxruntime-gpu"
+        "gpu_backend=$gpuBackend"
         "paddle_stack=false"
         "nvidia_runtime=$nvidiaRuntimeMode"
         "base_path_mode=release_root"
@@ -497,4 +588,8 @@ if ($CreateNvidiaOverlay) {
         -PythonPath $VenvPythonPath `
         -RuntimeRootPath $RuntimeRootPath `
         -ReleaseName $ReleaseName
+}
+
+if ($CreateZip -or $CreateNvidiaOverlay) {
+    Update-ReleaseChecksums -ReleaseDirectory (Join-Path $RuntimeRootPath "release")
 }
