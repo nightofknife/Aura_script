@@ -13,6 +13,9 @@ runtime:
     backend: wgc
   input:
     backend: sendinput
+    mouse_move_duration_ms: 220
+    key_interval_ms: 120
+    click_post_delay_ms: 120
   window_spec:
     mode: off
 input:

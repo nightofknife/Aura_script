@@ -2,6 +2,7 @@
 
 __all__ = [
     "cafe_service",
+    "combat_service",
     "fishing_service",
     "mahjong_service",
     "tetrominoes_service",

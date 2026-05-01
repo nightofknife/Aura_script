@@ -1,0 +1,38 @@
+auto_loop:
+  meta:
+    title: 自动战斗
+    description: 使用异环专用战斗识别和默认策略执行自动战斗循环。
+    inputs:
+      - name: profile_name
+        type: string
+        default: default_1280x720_cn
+      - name: strategy_name
+        type: string
+        default: default
+      - name: max_seconds
+        type: number
+        default: 0
+      - name: max_encounters
+        type: number
+        default: 0
+      - name: auto_target
+        type: boolean
+        default: true
+      - name: dry_run
+        type: boolean
+        default: false
+      - name: debug_enabled
+        type: boolean
+        default: false
+  steps:
+    run:
+      action: yihuan_combat_run_session
+      params:
+        profile_name: "{{ inputs.profile_name }}"
+        strategy_name: "{{ inputs.strategy_name }}"
+        max_seconds: "{{ inputs.max_seconds }}"
+        max_encounters: "{{ inputs.max_encounters }}"
+        auto_target: "{{ inputs.auto_target }}"
+        dry_run: "{{ inputs.dry_run }}"
+        debug_enabled: "{{ inputs.debug_enabled }}"
+  returns: "{{ nodes.run.output }}"

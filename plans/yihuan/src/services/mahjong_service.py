@@ -39,6 +39,7 @@ class YihuanMahjongService:
         self._plan_root = Path(__file__).resolve().parents[2]
         self._profile_dir = self._plan_root / "data" / "mahjong"
         self._profile_cache: dict[str, dict[str, Any]] = {}
+        self._template_cache: dict[tuple[str, str, tuple[int, int]], np.ndarray | None] = {}
 
     def load_profile(self, profile_name: str | None = None) -> dict[str, Any]:
         resolved_name = str(profile_name or self._DEFAULT_PROFILE).strip() or self._DEFAULT_PROFILE
@@ -59,6 +60,11 @@ class YihuanMahjongService:
         normalized = {
             "profile_name": str(payload.get("profile_name") or resolved_name),
             "client_size": self._coerce_size(payload.get("client_size"), default=(1280, 720)),
+            "template_dir": str(
+                payload.get("template_dir")
+                or f"data/mahjong/{resolved_name}/templates"
+            ),
+            "template_threshold": min(max(self._coerce_float(payload.get("template_threshold"), 0.82), 0.0), 1.0),
             "ready_button_region": self._coerce_region(
                 payload.get("ready_button_region"),
                 default=(1045, 610, 165, 100),
@@ -118,29 +124,82 @@ class YihuanMahjongService:
                 payload.get("missing_suit_tie_break_order"),
                 default=("tong", "tiao", "wan"),
             ),
+            "exchange_prompt_region": self._coerce_region(
+                payload.get("exchange_prompt_region"),
+                default=(505, 415, 285, 55),
+            ),
+            "exchange_confirm_region": self._coerce_region(
+                payload.get("exchange_confirm_region"),
+                default=(556, 485, 168, 39),
+            ),
+            "exchange_confirm_point": self._coerce_point(
+                payload.get("exchange_confirm_point"),
+                default=(640, 504),
+            ),
+            "exchange_hand_region": self._coerce_region(
+                payload.get("exchange_hand_region"),
+                default=(315, 585, 690, 135),
+            ),
+            "exchange_required_tile_count": max(
+                self._coerce_int(payload.get("exchange_required_tile_count"), 3),
+                1,
+            ),
+            "exchange_wait_timeout_sec": max(
+                self._coerce_float(payload.get("exchange_wait_timeout_sec"), 8.0),
+                0.1,
+            ),
+            "exchange_prompt_min_white_ratio": self._coerce_float(
+                payload.get("exchange_prompt_min_white_ratio"),
+                0.015,
+            ),
+            "exchange_prompt_min_orange_ratio": self._coerce_float(
+                payload.get("exchange_prompt_min_orange_ratio"),
+                0.010,
+            ),
+            "exchange_confirm_present_min_body_ratio": self._coerce_float(
+                payload.get("exchange_confirm_present_min_body_ratio"),
+                0.35,
+            ),
+            "exchange_confirm_enabled_white_ratio": self._coerce_float(
+                payload.get("exchange_confirm_enabled_white_ratio"),
+                0.38,
+            ),
+            "exchange_suit_tie_break_order": self._coerce_suit_order(
+                payload.get("exchange_suit_tie_break_order"),
+                default=("tong", "tiao", "wan"),
+            ),
             "auto_switches": {
                 "hu": self._coerce_switch_profile(
                     switches_payload.get("hu"),
                     default_point=(56, 310),
                     default_region=(28, 290, 68, 58),
-                    default_bounds=((14, 50, 70), (38, 255, 255)),
+                    default_enabled_template="switch_hu_enabled.png",
+                    default_disabled_template="switch_hu_disabled.png",
                 ),
                 "peng": self._coerce_switch_profile(
                     switches_payload.get("peng"),
                     default_point=(56, 377),
                     default_region=(28, 357, 68, 58),
-                    default_bounds=((38, 50, 70), (95, 255, 255)),
+                    default_enabled_template="switch_peng_enabled.png",
+                    default_disabled_template="switch_peng_disabled.png",
                 ),
                 "discard": self._coerce_switch_profile(
                     switches_payload.get("discard"),
                     default_point=(56, 444),
                     default_region=(28, 424, 68, 58),
-                    default_bounds=((85, 45, 70), (115, 255, 255)),
+                    default_enabled_template="switch_discard_enabled.png",
+                    default_disabled_template="switch_discard_disabled.png",
                 ),
             },
             "switch_stack_region": self._coerce_region(payload.get("switch_stack_region"), default=(20, 280, 90, 235)),
-            "switch_min_present_dark_ratio": self._coerce_float(payload.get("switch_min_present_dark_ratio"), 0.45),
-            "switch_min_enabled_color_ratio": self._coerce_float(payload.get("switch_min_enabled_color_ratio"), 0.018),
+            "switch_template_threshold": min(
+                max(self._coerce_float(payload.get("switch_template_threshold"), 0.86), 0.0),
+                1.0,
+            ),
+            "switch_template_score_margin": min(
+                max(self._coerce_float(payload.get("switch_template_score_margin"), 0.08), 0.0),
+                1.0,
+            ),
             "switch_retry_limit": max(self._coerce_int(payload.get("switch_retry_limit"), 2), 1),
             "switch_verify_delay_ms": max(self._coerce_int(payload.get("switch_verify_delay_ms"), 120), 0),
             "result_panel_region": self._coerce_region(payload.get("result_panel_region"), default=(565, 80, 690, 575)),
@@ -187,6 +246,7 @@ class YihuanMahjongService:
     def analyze_phase(self, source_image: np.ndarray, *, profile_name: str | None = None) -> dict[str, Any]:
         profile = self.load_profile(profile_name)
         result = self.analyze_result_screen(source_image, profile_name=profile["profile_name"])
+        exchange = self.analyze_exchange(source_image, profile_name=profile["profile_name"])
         ready = self.analyze_ready(source_image, profile_name=profile["profile_name"])
         dingque = self.analyze_dingque(source_image, profile_name=profile["profile_name"])
         playing = self.analyze_playing(source_image, profile_name=profile["profile_name"])
@@ -194,6 +254,8 @@ class YihuanMahjongService:
         phase = "unknown"
         if result["found"]:
             phase = "result"
+        elif exchange["found"]:
+            phase = "exchange"
         elif dingque["found"]:
             phase = "dingque"
         elif playing["found"]:
@@ -206,9 +268,99 @@ class YihuanMahjongService:
             "profile_name": profile["profile_name"],
             "capture_size": [int(source_image.shape[1]), int(source_image.shape[0])],
             "ready": ready,
+            "exchange": exchange,
             "dingque": dingque,
             "playing": playing,
             "result": result,
+        }
+
+    def analyze_exchange(self, source_image: np.ndarray, *, profile_name: str | None = None) -> dict[str, Any]:
+        profile = self.load_profile(profile_name)
+        prompt_region = self.scale_region(source_image, profile["exchange_prompt_region"], profile=profile)
+        confirm_region = self.scale_region(source_image, profile["exchange_confirm_region"], profile=profile)
+        prompt = self._crop_region(source_image, prompt_region)
+        confirm = self._crop_region(source_image, confirm_region)
+        if prompt.size == 0 or confirm.size == 0:
+            return {
+                "found": False,
+                "reason": "empty_region",
+                "prompt_region": list(prompt_region),
+                "confirm_region": list(confirm_region),
+                "confirm_enabled": False,
+                "prompt_match": {},
+                "confirm_enabled_match": {},
+                "confirm_disabled_match": {},
+                "prompt_white_ratio": 0.0,
+                "prompt_orange_ratio": 0.0,
+                "confirm_body_ratio": 0.0,
+                "confirm_white_ratio": 0.0,
+            }
+
+        threshold = float(profile["template_threshold"])
+        prompt_match = self._match_template(
+            source_image,
+            "exchange_prompt.png",
+            region=profile["exchange_prompt_region"],
+            profile=profile,
+            threshold=threshold,
+        )
+        confirm_enabled_match = self._match_template(
+            source_image,
+            "exchange_confirm_enabled.png",
+            region=profile["exchange_confirm_region"],
+            profile=profile,
+            threshold=threshold,
+        )
+        confirm_disabled_match = self._match_template(
+            source_image,
+            "exchange_confirm_disabled.png",
+            region=profile["exchange_confirm_region"],
+            profile=profile,
+            threshold=threshold,
+        )
+
+        prompt_hsv = cv2.cvtColor(prompt, cv2.COLOR_RGB2HSV)
+        prompt_white_ratio = self._ratio((prompt_hsv[:, :, 1] <= 80) & (prompt_hsv[:, :, 2] >= 150))
+        prompt_orange_ratio = self._mask_ratio(prompt_hsv, [[(10, 45, 90), (35, 255, 255)]])
+        prompt_visual_found = (
+            prompt_white_ratio >= float(profile["exchange_prompt_min_white_ratio"])
+            and prompt_white_ratio <= 0.35
+            and prompt_orange_ratio >= float(profile["exchange_prompt_min_orange_ratio"])
+        )
+
+        confirm_hsv = cv2.cvtColor(confirm, cv2.COLOR_RGB2HSV)
+        confirm_body_ratio = self._ratio((confirm_hsv[:, :, 1] <= 90) & (confirm_hsv[:, :, 2] >= 105))
+        confirm_white_ratio = self._ratio((confirm_hsv[:, :, 1] <= 70) & (confirm_hsv[:, :, 2] >= 190))
+        confirm_present = (
+            confirm_body_ratio >= float(profile["exchange_confirm_present_min_body_ratio"])
+            or bool(confirm_enabled_match.get("found"))
+            or bool(confirm_disabled_match.get("found"))
+        )
+        confirm_enabled = (
+            confirm_white_ratio >= float(profile["exchange_confirm_enabled_white_ratio"])
+        )
+        prompt_found = bool(prompt_match.get("found")) or prompt_visual_found
+        found = prompt_found and confirm_present
+        if found:
+            reason = "ok"
+        elif not prompt_found:
+            reason = "prompt_missing"
+        else:
+            reason = "confirm_missing"
+        return {
+            "found": found,
+            "reason": reason,
+            "prompt_region": list(prompt_region),
+            "confirm_region": list(confirm_region),
+            "confirm_point": list(self.scale_point(source_image, profile["exchange_confirm_point"], profile=profile)),
+            "confirm_enabled": bool(confirm_enabled),
+            "prompt_match": prompt_match,
+            "confirm_enabled_match": confirm_enabled_match,
+            "confirm_disabled_match": confirm_disabled_match,
+            "prompt_white_ratio": prompt_white_ratio,
+            "prompt_orange_ratio": prompt_orange_ratio,
+            "confirm_body_ratio": confirm_body_ratio,
+            "confirm_white_ratio": confirm_white_ratio,
         }
 
     def analyze_ready(self, source_image: np.ndarray, *, profile_name: str | None = None) -> dict[str, Any]:
@@ -218,6 +370,13 @@ class YihuanMahjongService:
         if crop.size == 0:
             return self._ready_result(False, "empty_region", region, 0.0, 0.0)
 
+        template_match = self._match_template(
+            source_image,
+            "ready_button.png",
+            region=profile["ready_button_region"],
+            profile=profile,
+            threshold=float(profile["template_threshold"]),
+        )
         hsv = cv2.cvtColor(crop, cv2.COLOR_RGB2HSV)
         bright_mask = (
             (hsv[:, :, 1] <= int(profile["ready_bright_s_max"]))
@@ -225,12 +384,15 @@ class YihuanMahjongService:
         )
         bright_ratio = self._ratio(bright_mask)
         green_ratio = self._mask_ratio(hsv, [profile["ready_green_hsv_lower"], profile["ready_green_hsv_upper"]])
-        found = (
+        visual_found = (
             bright_ratio >= float(profile["ready_min_bright_ratio"])
             and green_ratio >= float(profile["ready_min_green_ratio"])
         )
+        found = bool(template_match.get("found")) or visual_found
         reason = "ok" if found else "visual_threshold_low"
-        return self._ready_result(found, reason, region, bright_ratio, green_ratio)
+        result = self._ready_result(found, reason, region, bright_ratio, green_ratio)
+        result["template_match"] = template_match
+        return result
 
     def analyze_dingque(self, source_image: np.ndarray, *, profile_name: str | None = None) -> dict[str, Any]:
         profile = self.load_profile(profile_name)
@@ -248,12 +410,22 @@ class YihuanMahjongService:
                     "color_ratio": 0.0,
                 }
                 continue
+            template_match = self._match_template(
+                source_image,
+                f"dingque_{suit}.png",
+                region=button_profile["region"],
+                profile=profile,
+                threshold=float(profile["template_threshold"]),
+            )
             hsv = cv2.cvtColor(crop, cv2.COLOR_RGB2HSV)
             dark_ratio = self._ratio(hsv[:, :, 2] <= 80)
             color_ratio = self._mask_ratio(hsv, button_profile["hsv_bounds"])
             button_found = (
-                dark_ratio >= float(profile["dingque_button_min_dark_ratio"])
-                and color_ratio >= float(profile["dingque_button_min_color_ratio"])
+                bool(template_match.get("found"))
+                or (
+                    dark_ratio >= float(profile["dingque_button_min_dark_ratio"])
+                    and color_ratio >= float(profile["dingque_button_min_color_ratio"])
+                )
             )
             if button_found:
                 found_count += 1
@@ -263,6 +435,7 @@ class YihuanMahjongService:
                 "region": list(region),
                 "dark_ratio": dark_ratio,
                 "color_ratio": color_ratio,
+                "template_match": template_match,
             }
 
         required = min(int(profile["dingque_required_button_count"]), len(SUITS))
@@ -280,6 +453,8 @@ class YihuanMahjongService:
         switches: dict[str, dict[str, Any]] = {}
         present_count = 0
         enabled_count = 0
+        threshold = float(profile["switch_template_threshold"])
+        score_margin = float(profile["switch_template_score_margin"])
         for name, switch_profile in dict(profile["auto_switches"]).items():
             region = self.scale_region(source_image, switch_profile["region"], profile=profile)
             crop = self._crop_region(source_image, region)
@@ -289,34 +464,60 @@ class YihuanMahjongService:
                     "enabled": False,
                     "reason": "empty_region",
                     "region": list(region),
-                    "dark_ratio": 0.0,
-                    "enabled_color_ratio": 0.0,
+                    "enabled_template_score": 0.0,
+                    "disabled_template_score": 0.0,
                 }
                 continue
-            hsv = cv2.cvtColor(crop, cv2.COLOR_RGB2HSV)
-            dark_ratio = self._ratio(hsv[:, :, 2] <= 95)
-            enabled_color_ratio = self._mask_ratio(hsv, switch_profile["enabled_hsv_bounds"])
-            enabled = enabled_color_ratio >= float(profile["switch_min_enabled_color_ratio"])
-            present = dark_ratio >= float(profile["switch_min_present_dark_ratio"]) or enabled
+            enabled_match = self._match_template(
+                source_image,
+                str(switch_profile["enabled_template"]),
+                region=switch_profile["region"],
+                profile=profile,
+                threshold=threshold,
+                color=True,
+                match_method="sqdiff",
+            )
+            disabled_match = self._match_template(
+                source_image,
+                str(switch_profile["disabled_template"]),
+                region=switch_profile["region"],
+                profile=profile,
+                threshold=threshold,
+                color=True,
+                match_method="sqdiff",
+            )
+            enabled_score = float(enabled_match.get("score") or 0.0)
+            disabled_score = float(disabled_match.get("score") or 0.0)
+            enabled_template_found = bool(enabled_match.get("found"))
+            disabled_template_found = bool(disabled_match.get("found"))
+            enabled = enabled_template_found and enabled_score >= disabled_score + score_margin
+            present = enabled_template_found or disabled_template_found
             if present:
                 present_count += 1
             if enabled:
                 enabled_count += 1
+            if enabled:
+                reason = "enabled_template"
+            elif disabled_template_found:
+                reason = "disabled_template"
+            elif enabled_template_found:
+                reason = "ambiguous_template"
+            else:
+                reason = "template_score_below_threshold"
             switches[name] = {
                 "present": present,
                 "enabled": enabled,
-                "reason": "ok" if present else "visual_threshold_low",
+                "reason": reason,
                 "region": list(region),
-                "dark_ratio": dark_ratio,
-                "enabled_color_ratio": enabled_color_ratio,
+                "enabled_template_score": enabled_score,
+                "disabled_template_score": disabled_score,
+                "template_score_margin": score_margin,
+                "template_match": enabled_match,
+                "enabled_template_match": enabled_match,
+                "disabled_template_match": disabled_match,
             }
 
         stack_region = self.scale_region(source_image, profile["switch_stack_region"], profile=profile)
-        stack = self._crop_region(source_image, stack_region)
-        stack_dark_ratio = 0.0
-        if stack.size:
-            stack_hsv = cv2.cvtColor(stack, cv2.COLOR_RGB2HSV)
-            stack_dark_ratio = self._ratio(stack_hsv[:, :, 2] <= 95)
 
         found = present_count >= 2
         return {
@@ -325,7 +526,8 @@ class YihuanMahjongService:
             "present_switch_count": present_count,
             "enabled_switch_count": enabled_count,
             "switch_stack_region": list(stack_region),
-            "switch_stack_dark_ratio": stack_dark_ratio,
+            "switch_template_threshold": threshold,
+            "switch_template_score_margin": score_margin,
             "switches": switches,
         }
 
@@ -375,11 +577,46 @@ class YihuanMahjongService:
                 (auto_exit_hsv[:, :, 1] <= 80) & (auto_exit_hsv[:, :, 2] >= 150)
             )
 
+        threshold = float(profile["template_threshold"])
+        title_match = self._match_template(
+            source_image,
+            "result_ranking_title.png",
+            region=profile["result_panel_region"],
+            profile=profile,
+            threshold=threshold,
+        )
+        exit_match = self._match_template(
+            source_image,
+            "result_exit_button.png",
+            region=profile["result_buttons_region"],
+            profile=profile,
+            threshold=threshold,
+        )
+        retry_match = self._match_template(
+            source_image,
+            "result_retry_button.png",
+            region=profile["result_buttons_region"],
+            profile=profile,
+            threshold=threshold,
+        )
+        auto_exit_match = self._match_template(
+            source_image,
+            "result_auto_exit_text.png",
+            region=profile["result_auto_exit_region"],
+            profile=profile,
+            threshold=threshold,
+        )
+
         panel_pass = panel_dark_ratio >= float(profile["result_panel_min_dark_ratio"])
         buttons_pass = buttons_white_ratio >= float(profile["result_buttons_min_white_ratio"])
         cyan_pass = first_row_cyan_ratio >= float(profile["result_first_row_min_cyan_ratio"])
         auto_exit_pass = auto_exit_white_ratio >= float(profile["result_auto_exit_min_white_ratio"])
-        found = bool(panel_pass and buttons_pass and (cyan_pass or auto_exit_pass))
+        template_pass = bool(title_match.get("found")) and (
+            bool(exit_match.get("found"))
+            or bool(retry_match.get("found"))
+            or bool(auto_exit_match.get("found"))
+        )
+        found = bool(template_pass or (panel_pass and buttons_pass and (cyan_pass or auto_exit_pass)))
         if found:
             reason = "ok"
         elif not panel_pass:
@@ -403,11 +640,37 @@ class YihuanMahjongService:
             "buttons_min_white_ratio": float(profile["result_buttons_min_white_ratio"]),
             "auto_exit_white_ratio": auto_exit_white_ratio,
             "auto_exit_min_white_ratio": float(profile["result_auto_exit_min_white_ratio"]),
+            "template_pass": template_pass,
+            "title_match": title_match,
+            "exit_match": exit_match,
+            "retry_match": retry_match,
+            "auto_exit_match": auto_exit_match,
         }
 
     def analyze_hand_suits(self, source_image: np.ndarray, *, profile_name: str | None = None) -> dict[str, Any]:
         profile = self.load_profile(profile_name)
-        region = self.scale_region(source_image, profile["hand_region"], profile=profile)
+        return self._analyze_hand_suits_in_region(
+            source_image,
+            profile=profile,
+            logical_region=profile["hand_region"],
+        )
+
+    def analyze_exchange_hand_suits(self, source_image: np.ndarray, *, profile_name: str | None = None) -> dict[str, Any]:
+        profile = self.load_profile(profile_name)
+        return self._analyze_hand_suits_in_region(
+            source_image,
+            profile=profile,
+            logical_region=profile["exchange_hand_region"],
+        )
+
+    def _analyze_hand_suits_in_region(
+        self,
+        source_image: np.ndarray,
+        *,
+        profile: Mapping[str, Any],
+        logical_region: Region,
+    ) -> dict[str, Any]:
+        region = self.scale_region(source_image, logical_region, profile=profile)
         crop = self._crop_region(source_image, region)
         counts = {suit: 0 for suit in SUITS}
         candidates: list[dict[str, Any]] = []
@@ -528,6 +791,61 @@ class YihuanMahjongService:
             "tie_break_order": tie_order,
             "weakness": weakness,
             "reason": "fewest_tiles" if len(tied) == 1 else "tie_break",
+        }
+
+    def choose_exchange_three_detail(
+        self,
+        candidates: list[Mapping[str, Any]] | None,
+        *,
+        profile_name: str | None = None,
+    ) -> dict[str, Any]:
+        profile = self.load_profile(profile_name)
+        required = int(profile["exchange_required_tile_count"])
+        grouped: dict[str, list[dict[str, Any]]] = {suit: [] for suit in SUITS}
+        for tile in candidates or []:
+            if not isinstance(tile, Mapping):
+                continue
+            suit = str(tile.get("suit") or "").strip()
+            if suit not in grouped:
+                continue
+            grouped[suit].append(dict(tile))
+
+        counts = {suit: len(tiles) for suit, tiles in grouped.items()}
+        eligible = [suit for suit in SUITS if counts[suit] >= required]
+        if not eligible:
+            return {
+                "found": False,
+                "reason": "insufficient_same_suit",
+                "required_tile_count": required,
+                "counts": counts,
+                "selected_suit": None,
+                "selected_label": None,
+                "selected_tiles": [],
+                "tile_indices": [],
+                "tile_points": [],
+            }
+
+        min_count = min(counts[suit] for suit in eligible)
+        tied = [suit for suit in eligible if counts[suit] == min_count]
+        tie_order = list(profile["exchange_suit_tie_break_order"])
+        tie_rank = {suit: index for index, suit in enumerate(tie_order)}
+        selected_suit = sorted(tied, key=lambda suit: tie_rank.get(suit, len(tie_rank)))[0]
+        selected_tiles = sorted(grouped[selected_suit], key=self._tile_left_to_right_key)[:required]
+        tile_indices = [int(tile.get("index", index)) for index, tile in enumerate(selected_tiles)]
+        tile_points = [self._tile_center_point(tile) for tile in selected_tiles]
+        return {
+            "found": True,
+            "reason": "fewest_eligible_suit" if len(tied) == 1 else "tie_break",
+            "required_tile_count": required,
+            "counts": counts,
+            "eligible_suits": eligible,
+            "tied_suits": tied,
+            "tie_break_order": tie_order,
+            "selected_suit": selected_suit,
+            "selected_label": SUIT_LABELS[selected_suit],
+            "selected_tiles": selected_tiles,
+            "tile_indices": tile_indices,
+            "tile_points": [[int(x), int(y)] for x, y in tile_points],
         }
 
     def plan_exchange_three(
@@ -729,6 +1047,121 @@ class YihuanMahjongService:
         return isolated, edge, near_edge
 
     @staticmethod
+    def _tile_left_to_right_key(tile: Mapping[str, Any]) -> tuple[int, int, int]:
+        rect = tile.get("rect")
+        if isinstance(rect, (list, tuple)) and len(rect) >= 4:
+            return int(rect[1]), int(rect[0]), int(tile.get("index", 0) or 0)
+        return 0, 0, int(tile.get("index", 0) or 0)
+
+    @staticmethod
+    def _tile_center_point(tile: Mapping[str, Any]) -> Point:
+        rect = tile.get("rect")
+        if isinstance(rect, (list, tuple)) and len(rect) >= 4:
+            x, y, width, height = [int(value) for value in rect[:4]]
+            return int(round(x + width / 2.0)), int(round(y + height / 2.0))
+        point = tile.get("center_point")
+        if isinstance(point, (list, tuple)) and len(point) >= 2:
+            return int(point[0]), int(point[1])
+        return 0, 0
+
+    def _match_template(
+        self,
+        source_image: np.ndarray,
+        template_name: str,
+        *,
+        region: Region,
+        profile: Mapping[str, Any],
+        threshold: float,
+        color: bool = False,
+        match_method: str = "ccoeff",
+    ) -> dict[str, Any]:
+        scaled_region = self.scale_region(source_image, region, profile=profile)
+        crop = self._crop_region(source_image, scaled_region)
+        if crop.size == 0:
+            return {"found": False, "reason": "empty_region", "score": 0.0, "region": list(scaled_region)}
+        template = self._load_template(template_name, profile=profile, source_image=source_image)
+        if template is None or template.size == 0:
+            return {"found": False, "reason": "template_missing", "score": 0.0, "region": list(scaled_region)}
+        if template.shape[0] > crop.shape[0] or template.shape[1] > crop.shape[1]:
+            return {
+                "found": False,
+                "reason": "template_larger_than_region",
+                "score": 0.0,
+                "region": list(scaled_region),
+                "template_size": [int(template.shape[1]), int(template.shape[0])],
+            }
+        if color:
+            match_crop = crop
+            match_template = template
+        else:
+            match_crop = cv2.cvtColor(crop, cv2.COLOR_RGB2GRAY)
+            match_template = cv2.cvtColor(template, cv2.COLOR_RGB2GRAY)
+        if str(match_method).strip().lower() == "sqdiff":
+            result = cv2.matchTemplate(match_crop, match_template, cv2.TM_SQDIFF_NORMED)
+            min_value, _, min_location, _ = cv2.minMaxLoc(result)
+            score = 1.0 - float(min_value)
+            match_location = min_location
+            raw_distance = float(min_value)
+        else:
+            result = cv2.matchTemplate(match_crop, match_template, cv2.TM_CCOEFF_NORMED)
+            _, max_value, _, max_location = cv2.minMaxLoc(result)
+            score = float(max_value)
+            match_location = max_location
+            raw_distance = None
+        left = int(scaled_region[0] + match_location[0])
+        top = int(scaled_region[1] + match_location[1])
+        width = int(template.shape[1])
+        height = int(template.shape[0])
+        payload = {
+            "found": score >= float(threshold),
+            "reason": "ok" if score >= float(threshold) else "score_below_threshold",
+            "score": score,
+            "threshold": float(threshold),
+            "region": list(scaled_region),
+            "match_region": [left, top, width, height],
+            "center_point": [int(left + width / 2), int(top + height / 2)],
+            "color": bool(color),
+            "match_method": str(match_method),
+        }
+        if raw_distance is not None:
+            payload["distance"] = raw_distance
+        return payload
+
+    def _load_template(
+        self,
+        template_name: str,
+        *,
+        profile: Mapping[str, Any],
+        source_image: np.ndarray,
+    ) -> np.ndarray | None:
+        scale_x, scale_y = self._scale_factors(source_image, profile)
+        cache_key = (
+            str(profile["profile_name"]),
+            str(template_name),
+            (int(round(scale_x * 1000)), int(round(scale_y * 1000))),
+        )
+        if cache_key in self._template_cache:
+            return self._template_cache[cache_key]
+        template_dir = Path(str(profile["template_dir"]))
+        if not template_dir.is_absolute():
+            template_dir = self._plan_root / template_dir
+        path = template_dir / template_name
+        if not path.is_file():
+            self._template_cache[cache_key] = None
+            return None
+        bgr = cv2.imread(str(path), cv2.IMREAD_COLOR)
+        if bgr is None:
+            self._template_cache[cache_key] = None
+            return None
+        template = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+        if abs(scale_x - 1.0) > 0.001 or abs(scale_y - 1.0) > 0.001:
+            width = max(int(round(template.shape[1] * scale_x)), 1)
+            height = max(int(round(template.shape[0] * scale_y)), 1)
+            template = cv2.resize(template, (width, height), interpolation=cv2.INTER_AREA)
+        self._template_cache[cache_key] = template
+        return template
+
+    @staticmethod
     def _scale_factors(source_image: np.ndarray, profile: Mapping[str, Any]) -> tuple[float, float]:
         client_w, client_h = profile["client_size"]
         image_h, image_w = source_image.shape[:2]
@@ -820,13 +1253,15 @@ class YihuanMahjongService:
         *,
         default_point: Point,
         default_region: Region,
-        default_bounds: tuple[tuple[int, int, int], tuple[int, int, int]],
+        default_enabled_template: str,
+        default_disabled_template: str,
     ) -> dict[str, Any]:
         data = dict(payload or {}) if isinstance(payload, Mapping) else {}
         return {
             "point": self._coerce_point(data.get("point"), default=default_point),
             "region": self._coerce_region(data.get("region"), default=default_region),
-            "enabled_hsv_bounds": [self._coerce_hsv_pair(data.get("enabled_hsv_bounds"), default=default_bounds)],
+            "enabled_template": str(data.get("enabled_template") or default_enabled_template),
+            "disabled_template": str(data.get("disabled_template") or default_disabled_template),
         }
 
     def _coerce_suit_hsv_bounds(self, value: Any) -> dict[str, list[list[tuple[int, int, int]]]]:

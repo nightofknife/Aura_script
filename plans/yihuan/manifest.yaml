@@ -20,6 +20,13 @@ exports:
     singleton: true
     replace: null
     description: Load cafe calibration and detect Yihuan cafe mini-game orders.
+  - name: yihuan_combat
+    module: plans.yihuan.src.services.combat_service
+    class: YihuanCombatService
+    public: true
+    singleton: true
+    replace: null
+    description: Recognize Yihuan combat HUD state and load combat automation profiles.
   - name: yihuan_fishing
     module: plans.yihuan.src.services.fishing_service
     class: YihuanFishingService
@@ -91,6 +98,42 @@ exports:
       type: Any
       required: false
       default: null
+  - name: yihuan_combat_run_session
+    module: plans.yihuan.src.actions.combat_actions
+    function: yihuan_combat_run_session
+    public: false
+    read_only: false
+    timeout: null
+    description: Run the Yihuan-specific automatic combat loop.
+    parameters:
+    - name: profile_name
+      type: Any
+      required: false
+      default: default_1280x720_cn
+    - name: strategy_name
+      type: Any
+      required: false
+      default: default
+    - name: max_seconds
+      type: Any
+      required: false
+      default: 0
+    - name: max_encounters
+      type: Any
+      required: false
+      default: 0
+    - name: auto_target
+      type: Any
+      required: false
+      default: true
+    - name: dry_run
+      type: Any
+      required: false
+      default: false
+    - name: debug_enabled
+      type: Any
+      required: false
+      default: false
   - name: yihuan_fishing_debug_monitor
     module: plans.yihuan.src.actions.fishing_actions
     function: yihuan_fishing_debug_monitor
@@ -157,6 +200,10 @@ exports:
       type: Any
       required: false
       default: default_1280x720_cn
+    - name: sell_fish_every_rounds
+      type: Any
+      required: false
+      default: 0
   - name: yihuan_mahjong_run_session
     module: plans.yihuan.src.actions.mahjong_actions
     function: yihuan_mahjong_run_session
@@ -302,6 +349,14 @@ exports:
     title: 异环运行时探针
     source: tasks/checks/runtime_probe.yaml
     description: 检查当前异环桌面客户端的运行时绑定情况。
+  - id: combat/auto_loop/auto_loop
+    title: 自动战斗
+    source: tasks/combat/auto_loop.yaml
+    description: 使用异环专用战斗识别和默认策略执行自动战斗循环。
+  - id: combat/auto_loop
+    title: 自动战斗
+    source: tasks/combat/auto_loop.yaml
+    description: 使用异环专用战斗识别和默认策略执行自动战斗循环。
   - id: fishing/auto_loop/auto_loop
     title: 自动循环钓鱼
     source: tasks/fishing/auto_loop.yaml
@@ -326,6 +381,14 @@ exports:
     title: 自动麻将
     source: tasks/mahjong/auto_loop.yaml
     description: 使用异环内置胡/碰/出自动开关完成麻将局，并在结算排行页出现时结束任务。
+  - id: one_cafe/revenue_restock/revenue_restock
+    title: 一咖舍收益和补货
+    source: tasks/one_cafe/revenue_restock.yaml
+    description: 复用 Aura task 编排与基础视觉/输入动作，领取一咖舍收益并按配置执行补货，结束后返回世界场景。
+  - id: one_cafe/revenue_restock
+    title: 一咖舍收益和补货
+    source: tasks/one_cafe/revenue_restock.yaml
+    description: 复用 Aura task 编排与基础视觉/输入动作，领取一咖舍收益并按配置执行补货，结束后返回世界场景。
   - id: tetrominoes/analyze_screen/analyze_screen
     title: Tetrominoes screen analysis
     source: tasks/tetrominoes/analyze_screen.yaml
@@ -344,4 +407,4 @@ exports:
     description: Run the Yihuan Tetrominoes mini-game with survival-first planning.
 metadata:
   generated_by: ManifestGenerator
-  generated_at: '2026-04-29T05:43:39Z'
+  generated_at: '2026-05-01T02:47:19Z'

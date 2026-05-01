@@ -1,0 +1,698 @@
+revenue_restock:
+  meta:
+    title: 一咖舍收益和补货
+    description: 复用 Aura task 编排与基础视觉/输入动作，领取一咖舍收益并按配置执行补货，结束后返回世界场景。
+    inputs:
+      - name: profile_name
+        type: string
+        default: default_1280x720_cn
+      - name: withdraw_enabled
+        type: boolean
+        default: true
+      - name: restock_enabled
+        type: boolean
+        default: true
+      - name: restock_hours
+        type: number
+        default: 24
+  steps:
+    open_city_tycoon:
+      action: plans/aura_base/press_key
+      params:
+        key: f5
+
+    wait_city_tycoon_map:
+      action: plans/aura_base/wait_for_image
+      depends_on: open_city_tycoon
+      params:
+        template: "data/one_cafe/{{ inputs.profile_name }}/city_tycoon_title.png"
+        timeout: 8
+        interval: 0.3
+        threshold: 0.82
+      on_result:
+        retry_when: "{{ not result.found }}"
+        max_retries: 0
+
+    move_to_one_cafe_marker:
+      action: plans/aura_base/move_to
+      depends_on: wait_city_tycoon_map
+      params:
+        x: 530
+        y: 545
+        duration: 0.25
+
+    hold_one_cafe_marker_down:
+      action: plans/aura_base/mouse_down
+      depends_on: move_to_one_cafe_marker
+      params:
+        button: left
+
+    hold_one_cafe_marker:
+      action: plans/aura_base/sleep
+      depends_on: hold_one_cafe_marker_down
+      params:
+        seconds: 0.35
+
+    release_one_cafe_marker:
+      action: plans/aura_base/mouse_up
+      depends_on: hold_one_cafe_marker
+      params:
+        button: left
+
+    pause_after_one_cafe_marker:
+      action: plans/aura_base/sleep
+      depends_on: release_one_cafe_marker
+      params:
+        seconds: 0.8
+
+    detect_shop_management_after_first_click:
+      action: plans/aura_base/wait_for_image
+      depends_on: pause_after_one_cafe_marker
+      params:
+        template: "data/one_cafe/{{ inputs.profile_name }}/shop_management_title.png"
+        timeout: 0
+        interval: 0
+        threshold: 0.82
+
+    detect_city_map_after_first_click:
+      action: plans/aura_base/wait_for_image
+      depends_on: detect_shop_management_after_first_click
+      when: "{{ not nodes.detect_shop_management_after_first_click.output.found }}"
+      params:
+        template: "data/one_cafe/{{ inputs.profile_name }}/city_tycoon_title.png"
+        timeout: 0
+        interval: 0
+        threshold: 0.82
+
+    wait_shop_management_after_marker:
+      action: plans/aura_base/wait_for_image
+      depends_on:
+        detect_city_map_after_first_click: success|skipped
+      when: "{{ (not nodes.detect_shop_management_after_first_click.output.found) and (not nodes.detect_city_map_after_first_click.output.found) }}"
+      params:
+        template: "data/one_cafe/{{ inputs.profile_name }}/shop_management_title.png"
+        timeout: 4
+        interval: 0.3
+        threshold: 0.82
+
+    retry_move_to_one_cafe_marker:
+      action: plans/aura_base/move_to
+      depends_on:
+        all:
+          - detect_city_map_after_first_click: success|skipped
+          - wait_shop_management_after_marker: success|skipped
+      when: "{{ (not nodes.detect_shop_management_after_first_click.output.found) and (nodes.detect_city_map_after_first_click.output.found or (nodes.wait_shop_management_after_marker.run_state.status != 'SKIPPED' and (not nodes.wait_shop_management_after_marker.output.found))) }}"
+      params:
+        x: 530
+        y: 545
+        duration: 0.25
+
+    retry_hold_one_cafe_marker_down:
+      action: plans/aura_base/mouse_down
+      depends_on:
+        retry_move_to_one_cafe_marker: success|skipped
+      when: "{{ (not nodes.detect_shop_management_after_first_click.output.found) and (nodes.detect_city_map_after_first_click.output.found or (nodes.wait_shop_management_after_marker.run_state.status != 'SKIPPED' and (not nodes.wait_shop_management_after_marker.output.found))) }}"
+      params:
+        button: left
+
+    retry_hold_one_cafe_marker:
+      action: plans/aura_base/sleep
+      depends_on:
+        retry_hold_one_cafe_marker_down: success|skipped
+      when: "{{ (not nodes.detect_shop_management_after_first_click.output.found) and (nodes.detect_city_map_after_first_click.output.found or (nodes.wait_shop_management_after_marker.run_state.status != 'SKIPPED' and (not nodes.wait_shop_management_after_marker.output.found))) }}"
+      params:
+        seconds: 0.35
+
+    retry_release_one_cafe_marker:
+      action: plans/aura_base/mouse_up
+      depends_on:
+        retry_hold_one_cafe_marker: success|skipped
+      when: "{{ (not nodes.detect_shop_management_after_first_click.output.found) and (nodes.detect_city_map_after_first_click.output.found or (nodes.wait_shop_management_after_marker.run_state.status != 'SKIPPED' and (not nodes.wait_shop_management_after_marker.output.found))) }}"
+      params:
+        button: left
+
+    pause_after_retry_one_cafe_marker:
+      action: plans/aura_base/sleep
+      depends_on:
+        retry_release_one_cafe_marker: success|skipped
+      when: "{{ (not nodes.detect_shop_management_after_first_click.output.found) and (nodes.detect_city_map_after_first_click.output.found or (nodes.wait_shop_management_after_marker.run_state.status != 'SKIPPED' and (not nodes.wait_shop_management_after_marker.output.found))) }}"
+      params:
+        seconds: 0.8
+
+    wait_shop_management:
+      action: plans/aura_base/wait_for_image
+      depends_on:
+        pause_after_retry_one_cafe_marker: success|skipped
+      params:
+        template: "data/one_cafe/{{ inputs.profile_name }}/shop_management_title.png"
+        timeout: 8
+        interval: 0.3
+        threshold: 0.82
+      on_result:
+        retry_when: "{{ not result.found }}"
+        max_retries: 0
+
+    click_withdraw:
+      action: plans/aura_base/find_image_and_click
+      depends_on: wait_shop_management
+      when: "{{ inputs.withdraw_enabled }}"
+      params:
+        template: "data/one_cafe/{{ inputs.profile_name }}/withdraw_button.png"
+        threshold: 0.82
+        move_duration: 0.3
+      on_result:
+        retry_when: "{{ result == false }}"
+        max_retries: 2
+        delay: 0.5
+
+    pause_after_withdraw_click:
+      action: plans/aura_base/sleep
+      depends_on:
+        click_withdraw: success|skipped
+      when: "{{ inputs.withdraw_enabled }}"
+      params:
+        seconds: 0.8
+
+    detect_no_revenue_toast:
+      action: plans/aura_base/wait_for_image
+      depends_on:
+        pause_after_withdraw_click: success|skipped
+      when: "{{ inputs.withdraw_enabled }}"
+      params:
+        template: "data/one_cafe/{{ inputs.profile_name }}/no_revenue_toast.png"
+        timeout: 2
+        interval: 0.2
+        threshold: 0.82
+
+    detect_withdraw_report:
+      action: plans/aura_base/wait_for_image
+      depends_on:
+        pause_after_withdraw_click: success|skipped
+      when: "{{ inputs.withdraw_enabled }}"
+      params:
+        template: "data/one_cafe/{{ inputs.profile_name }}/withdraw_report_title.png"
+        timeout: 3
+        interval: 0.2
+        threshold: 0.82
+
+    pause_after_no_revenue:
+      action: plans/aura_base/sleep
+      depends_on:
+        detect_no_revenue_toast: success|skipped
+      when: "{{ inputs.withdraw_enabled and nodes.detect_no_revenue_toast.output.found }}"
+      params:
+        seconds: 0.6
+
+    unknown_withdraw_state:
+      action: plans/aura_base/log
+      depends_on:
+        all:
+          - detect_no_revenue_toast: success|skipped
+          - detect_withdraw_report: success|skipped
+      when: "{{ inputs.withdraw_enabled and (not nodes.detect_no_revenue_toast.output.found) and (not nodes.detect_withdraw_report.output.found) }}"
+      params:
+        level: warning
+        message: 一咖舍提取收益后未识别到营收报告或无收益提示，将继续尝试补货。
+
+    confirm_withdraw_report:
+      action: plans/aura_base/find_image_and_click
+      depends_on:
+        all:
+          - detect_no_revenue_toast: success|skipped
+          - detect_withdraw_report: success|skipped
+      when: "{{ inputs.withdraw_enabled and nodes.detect_withdraw_report.output.found }}"
+      params:
+        template: "data/one_cafe/{{ inputs.profile_name }}/withdraw_report_confirm.png"
+        threshold: 0.82
+        move_duration: 0.3
+      on_result:
+        retry_when: "{{ result == false }}"
+        max_retries: 4
+        delay: 0.5
+
+    pause_after_confirm_withdraw_report:
+      action: plans/aura_base/sleep
+      depends_on:
+        confirm_withdraw_report: success|skipped
+      when: "{{ inputs.withdraw_enabled and nodes.detect_withdraw_report.output.found }}"
+      params:
+        seconds: 0.8
+
+    wait_reward_popup:
+      action: plans/aura_base/wait_for_image
+      depends_on:
+        pause_after_confirm_withdraw_report: success|skipped
+      when: "{{ inputs.withdraw_enabled and nodes.detect_withdraw_report.output.found }}"
+      params:
+        template: "data/one_cafe/{{ inputs.profile_name }}/reward_popup.png"
+        timeout: 5
+        interval: 0.3
+        threshold: 0.82
+      on_result:
+        retry_when: "{{ not result.found }}"
+        max_retries: 0
+
+    close_reward_popup:
+      action: plans/aura_base/click
+      depends_on:
+        wait_reward_popup: success|skipped
+      when: "{{ inputs.withdraw_enabled and nodes.detect_withdraw_report.output.found }}"
+      params:
+        x: 640
+        y: 650
+
+    pause_after_close_reward_popup:
+      action: plans/aura_base/sleep
+      depends_on:
+        close_reward_popup: success|skipped
+      when: "{{ inputs.withdraw_enabled and nodes.detect_withdraw_report.output.found }}"
+      params:
+        seconds: 0.8
+
+    wait_shop_management_after_withdraw:
+      action: plans/aura_base/wait_for_image
+      depends_on:
+        all:
+          - pause_after_no_revenue: success|skipped
+          - unknown_withdraw_state: success|skipped
+          - pause_after_close_reward_popup: success|skipped
+      when: "{{ inputs.withdraw_enabled }}"
+      params:
+        template: "data/one_cafe/{{ inputs.profile_name }}/shop_management_title.png"
+        timeout: 5
+        interval: 0.3
+        threshold: 0.82
+
+    wait_restock_entry:
+      action: plans/aura_base/wait_for_image
+      depends_on:
+        wait_shop_management_after_withdraw: success|skipped
+      when: "{{ inputs.restock_enabled }}"
+      params:
+        template: "data/one_cafe/{{ inputs.profile_name }}/restock_entry_button.png"
+        timeout: 5
+        interval: 0.3
+        threshold: 0.82
+      on_result:
+        retry_when: "{{ not result.found }}"
+        max_retries: 0
+
+    click_restock_entry:
+      action: plans/aura_base/find_image_and_click
+      depends_on:
+        wait_restock_entry: success|skipped
+      when: "{{ inputs.restock_enabled }}"
+      params:
+        template: "data/one_cafe/{{ inputs.profile_name }}/restock_entry_button.png"
+        threshold: 0.82
+        move_duration: 0.3
+      on_result:
+        retry_when: "{{ result == false }}"
+        max_retries: 2
+        delay: 0.5
+
+    pause_after_restock_entry_click:
+      action: plans/aura_base/sleep
+      depends_on:
+        click_restock_entry: success|skipped
+      when: "{{ inputs.restock_enabled }}"
+      params:
+        seconds: 0.8
+
+    wait_inventory_page:
+      action: plans/aura_base/wait_for_image
+      depends_on:
+        pause_after_restock_entry_click: success|skipped
+      when: "{{ inputs.restock_enabled }}"
+      params:
+        template: "data/one_cafe/{{ inputs.profile_name }}/inventory_title.png"
+        timeout: 8
+        interval: 0.3
+        threshold: 0.82
+      on_result:
+        retry_when: "{{ not result.found }}"
+        max_retries: 0
+
+    wait_restock_hours:
+      action: plans/aura_base/wait_for_any_template_in_set
+      depends_on:
+        wait_inventory_page: success|skipped
+      when: "{{ inputs.restock_enabled }}"
+      params:
+        templates_ref: "data/one_cafe/{{ inputs.profile_name }}/restock_{{ inputs.restock_hours }}h_*.png"
+        region: [260, 535, 380, 70]
+        timeout: 5
+        interval: 0.3
+        threshold: 0.82
+      on_result:
+        retry_when: "{{ not result.match.found }}"
+        max_retries: 0
+
+    click_restock_hours:
+      action: plans/aura_base/click
+      depends_on:
+        wait_restock_hours: success|skipped
+      when: "{{ inputs.restock_enabled }}"
+      params:
+        x: "{{ nodes.wait_restock_hours.output.match.center_point[0] }}"
+        y: "{{ nodes.wait_restock_hours.output.match.center_point[1] }}"
+
+    pause_after_restock_hours_click:
+      action: plans/aura_base/sleep
+      depends_on:
+        click_restock_hours: success|skipped
+      when: "{{ inputs.restock_enabled }}"
+      params:
+        seconds: 0.7
+
+    click_inventory_restock:
+      action: plans/aura_base/find_image_and_click
+      depends_on:
+        pause_after_restock_hours_click: success|skipped
+      when: "{{ inputs.restock_enabled }}"
+      params:
+        template: "data/one_cafe/{{ inputs.profile_name }}/inventory_restock_button.png"
+        threshold: 0.82
+        move_duration: 0.3
+      on_result:
+        retry_when: "{{ result == false }}"
+        max_retries: 4
+        delay: 0.5
+
+    pause_after_inventory_restock_click:
+      action: plans/aura_base/sleep
+      depends_on:
+        click_inventory_restock: success|skipped
+      when: "{{ inputs.restock_enabled }}"
+      params:
+        seconds: 0.9
+
+    detect_inventory_full_toast:
+      action: plans/aura_base/wait_for_image
+      depends_on:
+        pause_after_inventory_restock_click: success|skipped
+      when: "{{ inputs.restock_enabled }}"
+      params:
+        template: "data/one_cafe/{{ inputs.profile_name }}/inventory_full_toast.png"
+        timeout: 2
+        interval: 0.2
+        threshold: 0.82
+
+    detect_delivery_prompt:
+      action: plans/aura_base/wait_for_image
+      depends_on:
+        detect_inventory_full_toast: success|skipped
+      when: "{{ inputs.restock_enabled }}"
+      params:
+        template: "data/one_cafe/{{ inputs.profile_name }}/delivery_prompt.png"
+        timeout: 3
+        interval: 0.2
+        threshold: 0.82
+
+    inventory_full_note:
+      action: plans/aura_base/log
+      depends_on:
+        detect_delivery_prompt: success|skipped
+      when: "{{ inputs.restock_enabled and nodes.detect_inventory_full_toast.output.found }}"
+      params:
+        message: 一咖舍补货库存已满，跳过送货上门和花费确认。
+
+    click_delivery_button:
+      action: plans/aura_base/find_image_and_click
+      depends_on:
+        detect_delivery_prompt: success|skipped
+      when: "{{ inputs.restock_enabled and nodes.detect_delivery_prompt.output.found }}"
+      params:
+        template: "data/one_cafe/{{ inputs.profile_name }}/delivery_button.png"
+        threshold: 0.82
+        move_duration: 0.3
+      on_result:
+        retry_when: "{{ result == false }}"
+        max_retries: 2
+        delay: 0.5
+
+    pause_after_delivery_button_click:
+      action: plans/aura_base/sleep
+      depends_on:
+        click_delivery_button: success|skipped
+      when: "{{ inputs.restock_enabled and nodes.detect_delivery_prompt.output.found }}"
+      params:
+        seconds: 0.8
+
+    wait_delivery_cost_prompt:
+      action: plans/aura_base/wait_for_image
+      depends_on:
+        pause_after_delivery_button_click: success|skipped
+      when: "{{ inputs.restock_enabled and nodes.detect_delivery_prompt.output.found }}"
+      params:
+        template: "data/one_cafe/{{ inputs.profile_name }}/delivery_cost_prompt.png"
+        timeout: 5
+        interval: 0.3
+        threshold: 0.82
+      on_result:
+        retry_when: "{{ not result.found }}"
+        max_retries: 0
+
+    confirm_delivery_cost:
+      action: plans/aura_base/find_image_and_click
+      depends_on:
+        wait_delivery_cost_prompt: success|skipped
+      when: "{{ inputs.restock_enabled and nodes.detect_delivery_prompt.output.found }}"
+      params:
+        template: "data/one_cafe/{{ inputs.profile_name }}/delivery_cost_confirm.png"
+        threshold: 0.82
+        move_duration: 0.3
+      on_result:
+        retry_when: "{{ result == false }}"
+        max_retries: 4
+        delay: 0.5
+
+    pause_after_delivery_cost_confirm:
+      action: plans/aura_base/sleep
+      depends_on:
+        confirm_delivery_cost: success|skipped
+      when: "{{ inputs.restock_enabled and nodes.detect_delivery_prompt.output.found }}"
+      params:
+        seconds: 0.9
+
+    wait_restock_success_toast:
+      action: plans/aura_base/wait_for_image
+      depends_on:
+        pause_after_delivery_cost_confirm: success|skipped
+      when: "{{ inputs.restock_enabled and nodes.detect_delivery_prompt.output.found }}"
+      params:
+        template: "data/one_cafe/{{ inputs.profile_name }}/restock_success_toast.png"
+        timeout: 5
+        interval: 0.3
+        threshold: 0.82
+      on_result:
+        retry_when: "{{ not result.found }}"
+        max_retries: 0
+
+    unknown_restock_state:
+      action: plans/aura_base/log
+      depends_on:
+        all:
+          - inventory_full_note: success|skipped
+          - wait_restock_success_toast: success|skipped
+      when: "{{ inputs.restock_enabled and (not nodes.detect_inventory_full_toast.output.found) and (not nodes.detect_delivery_prompt.output.found) }}"
+      params:
+        level: warning
+        message: 一咖舍补货后未识别到库存已满提示或送货上门提示。
+
+    pause_before_exit_to_city_map:
+      action: plans/aura_base/sleep
+      depends_on:
+        all:
+          - unknown_restock_state: success|skipped
+          - inventory_full_note: success|skipped
+          - wait_restock_success_toast: success|skipped
+      params:
+        seconds: 0.8
+
+    exit_to_city_map_first_esc:
+      action: plans/aura_base/press_key
+      depends_on: pause_before_exit_to_city_map
+      params:
+        key: esc
+
+    pause_after_first_exit_esc:
+      action: plans/aura_base/sleep
+      depends_on: exit_to_city_map_first_esc
+      params:
+        seconds: 0.8
+
+    detect_city_map_after_first_esc:
+      action: plans/aura_base/wait_for_image
+      depends_on: pause_after_first_exit_esc
+      params:
+        template: "data/one_cafe/{{ inputs.profile_name }}/city_tycoon_title.png"
+        timeout: 2
+        interval: 0.25
+        threshold: 0.82
+
+    exit_to_city_map_second_esc:
+      action: plans/aura_base/press_key
+      depends_on: detect_city_map_after_first_esc
+      when: "{{ not nodes.detect_city_map_after_first_esc.output.found }}"
+      params:
+        key: esc
+
+    pause_after_second_exit_esc:
+      action: plans/aura_base/sleep
+      depends_on:
+        exit_to_city_map_second_esc: success|skipped
+      when: "{{ not nodes.detect_city_map_after_first_esc.output.found }}"
+      params:
+        seconds: 0.8
+
+    wait_city_map_before_close:
+      action: plans/aura_base/wait_for_image
+      depends_on:
+        pause_after_second_exit_esc: success|skipped
+      params:
+        template: "data/one_cafe/{{ inputs.profile_name }}/city_tycoon_title.png"
+        timeout: 5
+        interval: 0.3
+        threshold: 0.82
+
+    click_city_tycoon_close:
+      action: plans/aura_base/click
+      depends_on: wait_city_map_before_close
+      when: "{{ nodes.wait_city_map_before_close.output.found }}"
+      params:
+        x: 1222
+        y: 42
+
+    pause_after_city_tycoon_close:
+      action: plans/aura_base/sleep
+      depends_on:
+        click_city_tycoon_close: success|skipped
+      when: "{{ nodes.wait_city_map_before_close.output.found }}"
+      params:
+        seconds: 1.0
+
+    wait_city_tycoon_disappear_after_close:
+      action: plans/aura_base/wait_for_templates_in_set_to_disappear
+      depends_on:
+        pause_after_city_tycoon_close: success|skipped
+      params:
+        templates_ref: "data/one_cafe/{{ inputs.profile_name }}/city_tycoon_title.png"
+        timeout: 6
+        interval: 0.3
+        threshold: 0.82
+
+    wait_world_scene:
+      action: plans/aura_base/wait_for_image
+      depends_on: wait_city_tycoon_disappear_after_close
+      params:
+        template: "data/one_cafe/{{ inputs.profile_name }}/world_hud.png"
+        timeout: 4
+        interval: 0.3
+        threshold: 0.78
+  returns:
+    status: >-
+      {{
+        'success'
+        if (nodes.wait_world_scene.output.found or nodes.wait_city_tycoon_disappear_after_close.output)
+        and (
+          (not inputs.withdraw_enabled)
+          or nodes.detect_no_revenue_toast.output.found
+          or nodes.detect_withdraw_report.output.found
+        )
+        and (
+          (not inputs.restock_enabled)
+          or nodes.detect_inventory_full_toast.output.found
+          or nodes.detect_delivery_prompt.output.found
+        )
+        else 'partial'
+      }}
+    stopped_reason: >-
+      {{
+        'completed'
+        if (nodes.wait_world_scene.output.found or nodes.wait_city_tycoon_disappear_after_close.output)
+        and (
+          (not inputs.withdraw_enabled)
+          or nodes.detect_no_revenue_toast.output.found
+          or nodes.detect_withdraw_report.output.found
+        )
+        and (
+          (not inputs.restock_enabled)
+          or nodes.detect_inventory_full_toast.output.found
+          or nodes.detect_delivery_prompt.output.found
+        )
+        else 'world_return_failed' if not (nodes.wait_world_scene.output.found or nodes.wait_city_tycoon_disappear_after_close.output)
+        else 'unknown_withdraw_state' if inputs.withdraw_enabled and (not nodes.detect_no_revenue_toast.output.found) and (not nodes.detect_withdraw_report.output.found)
+        else 'unknown_restock_state'
+      }}
+    failure_reason: >-
+      {{
+        none
+        if (nodes.wait_world_scene.output.found or nodes.wait_city_tycoon_disappear_after_close.output)
+        and (
+          (not inputs.withdraw_enabled)
+          or nodes.detect_no_revenue_toast.output.found
+          or nodes.detect_withdraw_report.output.found
+        )
+        and (
+          (not inputs.restock_enabled)
+          or nodes.detect_inventory_full_toast.output.found
+          or nodes.detect_delivery_prompt.output.found
+        )
+        else 'world_return_failed' if not (nodes.wait_world_scene.output.found or nodes.wait_city_tycoon_disappear_after_close.output)
+        else 'unknown_withdraw_state' if inputs.withdraw_enabled and (not nodes.detect_no_revenue_toast.output.found) and (not nodes.detect_withdraw_report.output.found)
+        else 'unknown_restock_state'
+      }}
+    profile_name: "{{ inputs.profile_name }}"
+    withdraw_attempted: "{{ inputs.withdraw_enabled }}"
+    withdraw_result: >-
+      {{
+        'skipped' if not inputs.withdraw_enabled
+        else 'no_revenue' if nodes.detect_no_revenue_toast.output.found
+        else 'claimed' if nodes.detect_withdraw_report.output.found
+        else 'unknown'
+      }}
+    withdraw_confirmed: "{{ inputs.withdraw_enabled and nodes.detect_withdraw_report.output.found and nodes.confirm_withdraw_report.run_state.status == 'SUCCESS' }}"
+    restock_attempted: "{{ inputs.restock_enabled }}"
+    restock_hours: "{{ inputs.restock_hours }}"
+    restock_result: >-
+      {{
+        'skipped' if not inputs.restock_enabled
+        else 'inventory_full' if nodes.detect_inventory_full_toast.output.found
+        else 'delivery_confirmed' if nodes.detect_delivery_prompt.output.found
+        else 'unknown'
+      }}
+    returned_to_world: "{{ nodes.wait_world_scene.output.found or nodes.wait_city_tycoon_disappear_after_close.output }}"
+    world_hud_found: "{{ nodes.wait_world_scene.output.found }}"
+    phase_trace:
+      - phase: open_city_tycoon
+        status: "{{ nodes.open_city_tycoon.run_state.status }}"
+      - phase: one_cafe_entry
+        clicked_point: [530, 545]
+        first_detection_found: "{{ nodes.detect_shop_management_after_first_click.output.found or (nodes.wait_shop_management_after_marker.run_state.status != 'SKIPPED' and nodes.wait_shop_management_after_marker.output.found) }}"
+        first_click_still_city_map: "{{ (not nodes.detect_shop_management_after_first_click.output.found) and nodes.detect_city_map_after_first_click.output.found }}"
+        final_detection_found: "{{ nodes.wait_shop_management.output.found }}"
+      - phase: withdraw
+        attempted: "{{ inputs.withdraw_enabled }}"
+        result: >-
+          {{
+            'skipped' if not inputs.withdraw_enabled
+            else 'no_revenue' if nodes.detect_no_revenue_toast.output.found
+            else 'claimed' if nodes.detect_withdraw_report.output.found
+            else 'unknown'
+          }}
+      - phase: restock
+        attempted: "{{ inputs.restock_enabled }}"
+        hours: "{{ inputs.restock_hours }}"
+        result: >-
+          {{
+            'skipped' if not inputs.restock_enabled
+            else 'inventory_full' if nodes.detect_inventory_full_toast.output.found
+            else 'delivery_confirmed' if nodes.detect_delivery_prompt.output.found
+            else 'unknown'
+          }}
+      - phase: exit
+        city_map_found: "{{ nodes.wait_city_map_before_close.output.found }}"
+        city_tycoon_disappeared: "{{ nodes.wait_city_tycoon_disappear_after_close.output }}"
+        world_hud_found: "{{ nodes.wait_world_scene.output.found }}"
+        returned_to_world: "{{ nodes.wait_world_scene.output.found or nodes.wait_city_tycoon_disappear_after_close.output }}"

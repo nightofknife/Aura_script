@@ -2,6 +2,8 @@ profile_name: default_1280x720_cn
 client_size:
   - 1280
   - 720
+template_dir: data/mahjong/default_1280x720_cn/templates
+template_threshold: 0.82
 
 # v1 assumes the runtime captures the game client area. The QQ reference images
 # include a window frame, but the Aura Windows runtime captures client pixels.
@@ -97,6 +99,35 @@ missing_suit_tie_break_order:
   - tiao
   - wan
 
+exchange_prompt_region:
+  - 505
+  - 415
+  - 285
+  - 55
+exchange_confirm_region:
+  - 556
+  - 485
+  - 168
+  - 39
+exchange_confirm_point:
+  - 640
+  - 504
+exchange_hand_region:
+  - 315
+  - 585
+  - 690
+  - 135
+exchange_required_tile_count: 3
+exchange_wait_timeout_sec: 8
+exchange_prompt_min_white_ratio: 0.015
+exchange_prompt_min_orange_ratio: 0.010
+exchange_confirm_present_min_body_ratio: 0.35
+exchange_confirm_enabled_white_ratio: 0.38
+exchange_suit_tie_break_order:
+  - tong
+  - tiao
+  - wan
+
 auto_switches:
   hu:
     point:
@@ -107,9 +138,8 @@ auto_switches:
       - 290
       - 68
       - 58
-    enabled_hsv_bounds:
-      - [14, 50, 70]
-      - [38, 255, 255]
+    enabled_template: switch_hu_enabled.png
+    disabled_template: switch_hu_disabled.png
   peng:
     point:
       - 56
@@ -119,9 +149,8 @@ auto_switches:
       - 357
       - 68
       - 58
-    enabled_hsv_bounds:
-      - [38, 50, 70]
-      - [95, 255, 255]
+    enabled_template: switch_peng_enabled.png
+    disabled_template: switch_peng_disabled.png
   discard:
     point:
       - 56
@@ -131,16 +160,15 @@ auto_switches:
       - 424
       - 68
       - 58
-    enabled_hsv_bounds:
-      - [85, 45, 70]
-      - [115, 255, 255]
+    enabled_template: switch_discard_enabled.png
+    disabled_template: switch_discard_disabled.png
 switch_stack_region:
   - 20
   - 280
   - 90
   - 235
-switch_min_present_dark_ratio: 0.45
-switch_min_enabled_color_ratio: 0.018
+switch_template_threshold: 0.86
+switch_template_score_margin: 0.08
 switch_retry_limit: 2
 switch_verify_delay_ms: 120
 

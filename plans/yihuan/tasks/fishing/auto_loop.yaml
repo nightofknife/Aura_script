@@ -9,10 +9,14 @@ auto_loop:
       - name: profile_name
         type: string
         default: default_1280x720_cn
+      - name: sell_fish_every_rounds
+        type: number
+        default: 0
   steps:
     run:
       action: yihuan_fishing_run_session
       params:
         max_rounds: "{{ inputs.max_rounds }}"
         profile_name: "{{ inputs.profile_name }}"
+        sell_fish_every_rounds: "{{ inputs.sell_fish_every_rounds }}"
   returns: "{{ nodes.run.output }}"

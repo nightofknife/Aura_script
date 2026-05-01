@@ -46,13 +46,17 @@ def _append_trace(
     if note:
         entry["note"] = note
     ready = dict(phase.get("ready") or {})
+    exchange = dict(phase.get("exchange") or {})
     dingque = dict(phase.get("dingque") or {})
     playing = dict(phase.get("playing") or {})
     result = dict(phase.get("result") or {})
     entry["ready_found"] = bool(ready.get("found"))
+    entry["exchange_found"] = bool(exchange.get("found"))
     entry["dingque_found"] = bool(dingque.get("found"))
     entry["playing_found"] = bool(playing.get("found"))
     entry["result_found"] = bool(result.get("found"))
+    if exchange:
+        entry["exchange_confirm_enabled"] = bool(exchange.get("confirm_enabled"))
     if dingque:
         entry["dingque_button_count"] = dingque.get("found_button_count")
     if playing:
@@ -76,6 +80,11 @@ def _final_result(
     last_phase: Mapping[str, Any] | None = None,
     dry_run: bool = False,
     missing_suit_decision: Mapping[str, Any] | None = None,
+    exchange_selected_suit: str | None = None,
+    exchange_tile_indices: list[int] | None = None,
+    exchange_tile_points: list[list[int]] | None = None,
+    exchange_result: str = "skipped",
+    click_verifications: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     return {
         "status": status,
@@ -92,6 +101,11 @@ def _final_result(
         "last_phase": dict(last_phase or {}),
         "dry_run": bool(dry_run),
         "missing_suit_decision": dict(missing_suit_decision or {}),
+        "exchange_selected_suit": exchange_selected_suit,
+        "exchange_tile_indices": list(exchange_tile_indices or []),
+        "exchange_tile_points": list(exchange_tile_points or []),
+        "exchange_result": exchange_result,
+        "click_verifications": list(click_verifications or []),
     }
 
 
@@ -106,8 +120,13 @@ def _record_mouse_action(
     dry_run: bool,
     planned_actions: list[dict[str, Any]],
     executed_actions: list[dict[str, Any]],
+    point_is_scaled: bool = False,
 ) -> None:
-    click_point = yihuan_mahjong.scale_point(capture_image, logical_point, profile=profile)
+    click_point = (
+        (int(logical_point[0]), int(logical_point[1]))
+        if point_is_scaled
+        else yihuan_mahjong.scale_point(capture_image, logical_point, profile=profile)
+    )
     record = {
         "action": action_name,
         "logical_point": [int(logical_point[0]), int(logical_point[1])],
@@ -147,6 +166,30 @@ def _wait_for_phase(
         phase, capture = _capture_phase(app, yihuan_mahjong, profile_name=str(profile["profile_name"]))
         _append_trace(phase_trace, start_time=start_time, phase=phase, note=note)
         if str(phase.get("phase")) in target_phases:
+            return phase, capture
+        if time.monotonic() >= deadline:
+            return None
+        if poll_sec > 0:
+            time.sleep(poll_sec)
+
+
+def _wait_for_exchange_confirm_or_next_phase(
+    app: Any,
+    yihuan_mahjong: YihuanMahjongService,
+    *,
+    profile: Mapping[str, Any],
+    phase_trace: list[dict[str, Any]],
+    start_time: float,
+) -> tuple[dict[str, Any], Any] | None:
+    deadline = time.monotonic() + float(profile["exchange_wait_timeout_sec"])
+    poll_sec = float(profile["poll_ms"]) / 1000.0
+    while True:
+        phase, capture = _capture_phase(app, yihuan_mahjong, profile_name=str(profile["profile_name"]))
+        _append_trace(phase_trace, start_time=start_time, phase=phase, note="exchange_confirm_wait")
+        if phase.get("phase") in {"dingque", "playing", "result"}:
+            return phase, capture
+        exchange = dict(phase.get("exchange") or {})
+        if exchange.get("found") and exchange.get("confirm_enabled"):
             return phase, capture
         if time.monotonic() >= deadline:
             return None
@@ -316,6 +359,21 @@ def yihuan_mahjong_run_session(
     missing_suit_decision: dict[str, Any] | None = None
     debug_snapshots: list[str] = []
     last_phase: dict[str, Any] | None = None
+    exchange_selected_suit: str | None = None
+    exchange_tile_indices: list[int] = []
+    exchange_tile_points: list[list[int]] = []
+    exchange_result = "skipped"
+    click_verifications: list[dict[str, Any]] = []
+
+    def _finish(**kwargs: Any) -> dict[str, Any]:
+        return _final_result(
+            **kwargs,
+            exchange_selected_suit=exchange_selected_suit,
+            exchange_tile_indices=exchange_tile_indices,
+            exchange_tile_points=exchange_tile_points,
+            exchange_result=exchange_result,
+            click_verifications=click_verifications,
+        )
 
     logger.info(
         "Mahjong[session] start profile=%s max_seconds=%.3f start_game=%s auto=%s dry_run=%s debug=%s",
@@ -337,7 +395,7 @@ def yihuan_mahjong_run_session(
                 debug_snapshots.append(path)
 
         if phase["phase"] == "result":
-            return _final_result(
+            return _finish(
                 status="success",
                 stopped_reason="level_end",
                 failure_reason=None,
@@ -356,7 +414,7 @@ def yihuan_mahjong_run_session(
 
         if phase["phase"] == "ready":
             if not start_game_enabled:
-                return _final_result(
+                return _finish(
                     status="failed",
                     stopped_reason="phase_timeout",
                     failure_reason="phase_timeout",
@@ -388,14 +446,23 @@ def yihuan_mahjong_run_session(
                 app,
                 yihuan_mahjong,
                 profile=profile,
-                target_phases={"dingque", "playing", "result"},
+                target_phases={"exchange", "dingque", "playing", "result"},
                 timeout_sec=float(profile["start_wait_timeout_sec"]),
                 phase_trace=phase_trace,
                 start_time=start_time,
                 note="after_ready",
             )
+            click_verifications.append(
+                {
+                    "action": "click_ready",
+                    "before_phase": "ready",
+                    "expected_phases": ["exchange", "dingque", "playing", "result"],
+                    "after_phase": None if waited is None else waited[0].get("phase"),
+                    "success": waited is not None,
+                }
+            )
             if waited is None:
-                return _final_result(
+                return _finish(
                     status="failed",
                     stopped_reason="phase_timeout",
                     failure_reason="phase_timeout",
@@ -415,7 +482,149 @@ def yihuan_mahjong_run_session(
             last_phase = phase
 
         if phase["phase"] == "result":
-            return _final_result(
+            return _finish(
+                status="success",
+                stopped_reason="level_end",
+                failure_reason=None,
+                profile_name=resolved_profile,
+                selected_missing_suit=selected_missing_suit,
+                hand_suit_counts=hand_suit_counts,
+                auto_toggles_enabled=auto_toggles_enabled,
+                phase_trace=phase_trace,
+                start_time=start_time,
+                planned_actions=planned_actions,
+                executed_actions=executed_actions,
+                last_phase=phase,
+                dry_run=dry_run_enabled,
+                missing_suit_decision=missing_suit_decision,
+            )
+
+        if phase["phase"] == "exchange":
+            hand = yihuan_mahjong.analyze_exchange_hand_suits(capture.image, profile_name=resolved_profile)
+            exchange_decision = yihuan_mahjong.choose_exchange_three_detail(
+                hand.get("candidates") or [],
+                profile_name=resolved_profile,
+            )
+            if not exchange_decision.get("found"):
+                exchange_result = "selection_failed"
+                return _finish(
+                    status="failed",
+                    stopped_reason="exchange_selection_failed",
+                    failure_reason="exchange_selection_failed",
+                    profile_name=resolved_profile,
+                    selected_missing_suit=selected_missing_suit,
+                    hand_suit_counts=hand_suit_counts,
+                    auto_toggles_enabled=auto_toggles_enabled,
+                    phase_trace=phase_trace,
+                    start_time=start_time,
+                    planned_actions=planned_actions,
+                    executed_actions=executed_actions,
+                    last_phase=phase,
+                    dry_run=dry_run_enabled,
+                    missing_suit_decision=missing_suit_decision,
+                )
+
+            exchange_selected_suit = str(exchange_decision["selected_suit"])
+            exchange_tile_indices = list(exchange_decision.get("tile_indices") or [])
+            exchange_tile_points = list(exchange_decision.get("tile_points") or [])
+            for index, point in enumerate(exchange_tile_points):
+                _record_mouse_action(
+                    app,
+                    yihuan_mahjong,
+                    profile=profile,
+                    capture_image=capture.image,
+                    action_name=f"exchange_select_{exchange_selected_suit}_{index + 1}",
+                    logical_point=(int(point[0]), int(point[1])),
+                    dry_run=dry_run_enabled,
+                    planned_actions=planned_actions,
+                    executed_actions=executed_actions,
+                    point_is_scaled=True,
+                )
+
+            confirm_waited = _wait_for_exchange_confirm_or_next_phase(
+                app,
+                yihuan_mahjong,
+                profile=profile,
+                phase_trace=phase_trace,
+                start_time=start_time,
+            )
+            if confirm_waited is None:
+                exchange_result = "confirm_unavailable"
+                return _finish(
+                    status="failed",
+                    stopped_reason="exchange_confirm_unavailable",
+                    failure_reason="exchange_confirm_unavailable",
+                    profile_name=resolved_profile,
+                    selected_missing_suit=selected_missing_suit,
+                    hand_suit_counts=hand_suit_counts,
+                    auto_toggles_enabled=auto_toggles_enabled,
+                    phase_trace=phase_trace,
+                    start_time=start_time,
+                    planned_actions=planned_actions,
+                    executed_actions=executed_actions,
+                    last_phase=phase,
+                    dry_run=dry_run_enabled,
+                    missing_suit_decision=missing_suit_decision,
+                )
+
+            phase, capture = confirm_waited
+            last_phase = phase
+            if phase["phase"] == "exchange":
+                _record_mouse_action(
+                    app,
+                    yihuan_mahjong,
+                    profile=profile,
+                    capture_image=capture.image,
+                    action_name="exchange_confirm",
+                    logical_point=profile["exchange_confirm_point"],
+                    dry_run=dry_run_enabled,
+                    planned_actions=planned_actions,
+                    executed_actions=executed_actions,
+                )
+                exchange_result = "planned" if dry_run_enabled else "confirmed"
+                waited = _wait_for_phase(
+                    app,
+                    yihuan_mahjong,
+                    profile=profile,
+                    target_phases={"dingque", "playing", "result"},
+                    timeout_sec=float(profile["exchange_wait_timeout_sec"]),
+                    phase_trace=phase_trace,
+                    start_time=start_time,
+                    note="after_exchange_confirm",
+                )
+                click_verifications.append(
+                    {
+                        "action": "exchange_confirm",
+                        "before_phase": "exchange",
+                        "expected_phases": ["dingque", "playing", "result"],
+                        "after_phase": None if waited is None else waited[0].get("phase"),
+                        "success": waited is not None,
+                    }
+                )
+                if waited is None:
+                    return _finish(
+                        status="failed",
+                        stopped_reason="phase_timeout",
+                        failure_reason="phase_timeout",
+                        profile_name=resolved_profile,
+                        selected_missing_suit=selected_missing_suit,
+                        hand_suit_counts=hand_suit_counts,
+                        auto_toggles_enabled=auto_toggles_enabled,
+                        phase_trace=phase_trace,
+                        start_time=start_time,
+                        planned_actions=planned_actions,
+                        executed_actions=executed_actions,
+                        last_phase=last_phase,
+                        dry_run=dry_run_enabled,
+                        missing_suit_decision=missing_suit_decision,
+                    )
+                phase, capture = waited
+                last_phase = phase
+            else:
+                exchange_result = "completed"
+
+        if phase["phase"] == "result":
+            return _finish(
                 status="success",
                 stopped_reason="level_end",
                 failure_reason=None,
@@ -463,8 +672,17 @@ def yihuan_mahjong_run_session(
                 start_time=start_time,
                 note="after_dingque",
             )
+            click_verifications.append(
+                {
+                    "action": f"select_missing_{selected_missing_suit}",
+                    "before_phase": "dingque",
+                    "expected_phases": ["playing", "result"],
+                    "after_phase": None if waited is None else waited[0].get("phase"),
+                    "success": waited is not None,
+                }
+            )
             if waited is None:
-                return _final_result(
+                return _finish(
                     status="failed",
                     stopped_reason="phase_timeout",
                     failure_reason="phase_timeout",
@@ -484,7 +702,7 @@ def yihuan_mahjong_run_session(
             last_phase = phase
 
         if phase["phase"] == "result":
-            return _final_result(
+            return _finish(
                 status="success",
                 stopped_reason="level_end",
                 failure_reason=None,
@@ -506,7 +724,7 @@ def yihuan_mahjong_run_session(
             poll_sec = float(profile["poll_ms"]) / 1000.0
             while phase["phase"] not in {"playing", "result"}:
                 if _deadline_reached(deadline) or time.monotonic() >= phase_timeout:
-                    return _final_result(
+                    return _finish(
                         status="partial" if _deadline_reached(deadline) else "failed",
                         stopped_reason="max_seconds" if _deadline_reached(deadline) else "phase_timeout",
                         failure_reason=None if _deadline_reached(deadline) else "phase_timeout",
@@ -548,7 +766,7 @@ def yihuan_mahjong_run_session(
         unknown_started_at: float | None = None
         while True:
             if phase.get("phase") == "result":
-                return _final_result(
+                return _finish(
                     status="success",
                     stopped_reason="level_end",
                     failure_reason=None,
@@ -565,7 +783,7 @@ def yihuan_mahjong_run_session(
                     missing_suit_decision=missing_suit_decision,
                 )
             if _deadline_reached(deadline):
-                return _final_result(
+                return _finish(
                     status="partial",
                     stopped_reason="max_seconds",
                     failure_reason=None,
@@ -584,7 +802,7 @@ def yihuan_mahjong_run_session(
             if phase.get("phase") == "unknown":
                 unknown_started_at = unknown_started_at or time.monotonic()
                 if time.monotonic() - unknown_started_at >= float(profile["phase_timeout_sec"]):
-                    return _final_result(
+                    return _finish(
                         status="failed",
                         stopped_reason="phase_timeout",
                         failure_reason="phase_timeout",
@@ -609,7 +827,7 @@ def yihuan_mahjong_run_session(
             _append_trace(phase_trace, start_time=start_time, phase=phase, note="monitor")
     except RuntimeError as exc:
         logger.warning("Mahjong[session] capture failed: %s", exc)
-        return _final_result(
+        return _finish(
             status="failed",
             stopped_reason="failure",
             failure_reason="capture_failed",
@@ -629,7 +847,7 @@ def yihuan_mahjong_run_session(
         raise
     except Exception as exc:  # noqa: BLE001
         logger.exception("Mahjong auto session failed.")
-        return _final_result(
+        return _finish(
             status="failed",
             stopped_reason="exception",
             failure_reason="exception",

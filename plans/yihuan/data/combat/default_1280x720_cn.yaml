@@ -1,0 +1,139 @@
+profile_name: default_1280x720_cn
+client_size:
+  - 1280
+  - 720
+
+runtime:
+  poll_ms: 100
+  combat_enter_stable_frames: 3
+  combat_exit_stable_frames: 8
+  unsupported_scene_stable_frames: 3
+  input_cooldown_ms: 120
+  target_retry_interval_ms: 1000
+  post_switch_delay_ms: 350
+  idle_timeout_sec: 10.0
+  dry_run_max_seconds: 2.0
+  trace_limit: 240
+
+keys:
+  normal_attack: mouse_left
+  skill: e
+  ultimate: q
+  arc: r
+  target: mouse_middle
+  switch_1: "1"
+  switch_2: "2"
+  switch_3: "3"
+  switch_4: "4"
+
+release_keys:
+  - w
+  - a
+  - s
+  - d
+  - e
+  - q
+  - r
+  - "1"
+  - "2"
+  - "3"
+  - "4"
+
+regions:
+  target_icon:
+    - 560
+    - 40
+    - 160
+    - 80
+  enemy_level_text:
+    - 520
+    - 20
+    - 240
+    - 80
+  enemy_health_bar:
+    - 430
+    - 65
+    - 420
+    - 45
+  boss_health_bar:
+    - 260
+    - 620
+    - 760
+    - 65
+  team_panel:
+    - 1020
+    - 120
+    - 240
+    - 330
+  skill:
+    - 1015
+    - 585
+    - 58
+    - 58
+  ultimate:
+    - 1090
+    - 575
+    - 70
+    - 70
+  arc:
+    - 935
+    - 585
+    - 58
+    - 58
+
+current_slot_regions:
+  - [1150, 135, 88, 58]
+  - [1150, 205, 88, 58]
+  - [1150, 275, 88, 58]
+  - [1150, 345, 88, 58]
+
+hsv_rules:
+  target_present:
+    lower: [0, 0, 185]
+    upper: [179, 95, 255]
+    min_ratio: 0.035
+  level_text:
+    lower: [0, 0, 180]
+    upper: [179, 80, 255]
+    min_ratio: 0.025
+  enemy_health_red:
+    lower: [0, 75, 80]
+    upper: [12, 255, 255]
+    min_ratio: 0.020
+    lower_2: [165, 75, 80]
+    upper_2: [179, 255, 255]
+  boss_health_red:
+    lower: [0, 75, 80]
+    upper: [12, 255, 255]
+    min_ratio: 0.020
+    lower_2: [165, 75, 80]
+    upper_2: [179, 255, 255]
+  team_hud:
+    lower: [0, 0, 150]
+    upper: [179, 90, 255]
+    min_ratio: 0.025
+  slot_active:
+    lower: [78, 35, 95]
+    upper: [105, 255, 255]
+    min_ratio: 0.018
+  ability_ready:
+    lower: [15, 45, 95]
+    upper: [45, 255, 255]
+    min_ratio: 0.030
+
+thresholds:
+  supported_scene_min_features: 1
+  combat_min_features: 2
+  confidence_feature_count: 5
+
+strategies:
+  default:
+    loop:
+      - if_available: arc
+      - if_available: ultimate
+      - if_available: skill
+      - normal:
+          duration_ms: 900
+      - switch: next
+
+debug_snapshot_dir: tmp/combat_debug

@@ -2,6 +2,7 @@
 
 __all__ = [
     "cafe_actions",
+    "combat_actions",
     "fishing_actions",
     "mahjong_actions",
     "package_actions",

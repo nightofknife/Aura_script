@@ -980,21 +980,93 @@ class TestYihuanFishingActions(unittest.TestCase):
         ]
 
         with patch("plans.yihuan.src.actions.fishing_actions._run_fishing_round_impl", side_effect=round_results) as run_round:
-            result = fishing_actions.yihuan_fishing_run_session(
-                app=self.app,
-                ocr=None,
-                vision=self.vision,
-                input_mapping=self.input_mapping,
-                yihuan_fishing=self.service,
-                max_rounds=4,
-                profile_name="default_1280x720_cn",
-            )
+            with patch("plans.yihuan.src.actions.fishing_actions._run_sell_fish_before_buy_bait") as sell:
+                result = fishing_actions.yihuan_fishing_run_session(
+                    app=self.app,
+                    ocr=None,
+                    vision=self.vision,
+                    input_mapping=self.input_mapping,
+                    yihuan_fishing=self.service,
+                    max_rounds=4,
+                    profile_name="default_1280x720_cn",
+                )
 
         self.assertEqual(run_round.call_count, 4)
+        sell.assert_not_called()
         self.assertEqual(result["status"], "partial")
         self.assertEqual(result["stopped_reason"], "max_rounds")
         self.assertEqual(result["failure_count"], 3)
         self.assertEqual(result["success_count"], 1)
+        self.assertEqual(result["active_sell_interval_rounds"], 0)
+        self.assertEqual(result["active_sell_count"], 0)
+
+    def test_run_session_active_sells_after_success_interval(self):
+        round_results = [
+            {"status": "success", "round_index": 1, "phase_trace": [], "failure_reason": None, "timings": {}},
+            {"status": "failed", "round_index": 2, "phase_trace": [], "failure_reason": "duel_timeout", "timings": {}},
+            {"status": "success", "round_index": 3, "phase_trace": [], "failure_reason": None, "timings": {}},
+            {"status": "success", "round_index": 4, "phase_trace": [], "failure_reason": None, "timings": {}},
+        ]
+        sell_result = {"ok": True, "status": "sold", "steps": [], "state": {"phase": "ready"}}
+
+        with patch("plans.yihuan.src.actions.fishing_actions._run_fishing_round_impl", side_effect=round_results) as run_round:
+            with patch(
+                "plans.yihuan.src.actions.fishing_actions._run_sell_fish_before_buy_bait",
+                return_value=dict(sell_result),
+            ) as sell:
+                result = fishing_actions.yihuan_fishing_run_session(
+                    app=self.app,
+                    ocr=None,
+                    vision=self.vision,
+                    input_mapping=self.input_mapping,
+                    yihuan_fishing=self.service,
+                    max_rounds=4,
+                    profile_name="default_1280x720_cn",
+                    sell_fish_every_rounds=2,
+                )
+
+        self.assertEqual(run_round.call_count, 4)
+        sell.assert_called_once()
+        self.assertEqual(result["status"], "partial")
+        self.assertEqual(result["active_sell_interval_rounds"], 2)
+        self.assertEqual(result["active_sell_count"], 1)
+        self.assertEqual(result["active_sell_failure_count"], 0)
+        self.assertEqual(result["active_sell_results"][0]["trigger_round_index"], 3)
+        self.assertEqual(result["active_sell_results"][0]["trigger_success_count"], 2)
+        self.assertEqual(result["results"][2]["active_sell_result"]["status"], "sold")
+        self.assertEqual(self.app.release_all_calls, 1)
+
+    def test_run_session_stops_when_active_sell_cannot_return_ready(self):
+        round_results = [
+            {"status": "success", "round_index": 1, "phase_trace": [], "failure_reason": None, "timings": {}},
+            {"status": "success", "round_index": 2, "phase_trace": [], "failure_reason": None, "timings": {}},
+        ]
+        sell_result = {"ok": False, "status": "failed_not_ready", "steps": [], "state": {"phase": "unknown"}}
+
+        with patch("plans.yihuan.src.actions.fishing_actions._run_fishing_round_impl", side_effect=round_results) as run_round:
+            with patch(
+                "plans.yihuan.src.actions.fishing_actions._run_sell_fish_before_buy_bait",
+                return_value=dict(sell_result),
+            ) as sell:
+                result = fishing_actions.yihuan_fishing_run_session(
+                    app=self.app,
+                    ocr=None,
+                    vision=self.vision,
+                    input_mapping=self.input_mapping,
+                    yihuan_fishing=self.service,
+                    max_rounds=2,
+                    profile_name="default_1280x720_cn",
+                    sell_fish_every_rounds=1,
+                )
+
+        self.assertEqual(run_round.call_count, 1)
+        sell.assert_called_once()
+        self.assertEqual(result["status"], "partial")
+        self.assertEqual(result["stopped_reason"], "active_sell_not_ready")
+        self.assertEqual(result["round_count"], 1)
+        self.assertEqual(result["success_count"], 1)
+        self.assertEqual(result["active_sell_count"], 1)
+        self.assertEqual(result["active_sell_failure_count"], 1)
 
     @patch("plans.yihuan.src.actions.fishing_actions._close_debug_window")
     @patch("plans.yihuan.src.actions.fishing_actions._save_monitor_debug_frame", return_value="D:/tmp/frame_000.png")

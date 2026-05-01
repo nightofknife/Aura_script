@@ -186,6 +186,17 @@ def _clamp_int(value: float, lower: int, upper: int) -> int:
     return max(min(int(round(value)), high), low)
 
 
+def _non_negative_int(value: Any, default: int = 0) -> int:
+    if value is None:
+        return max(int(default), 0)
+    try:
+        if isinstance(value, str) and not value.strip():
+            return max(int(default), 0)
+        return max(int(float(value)), 0)
+    except (TypeError, ValueError):
+        return max(int(default), 0)
+
+
 def _compute_duel_control_command(
     state: dict[str, Any],
     profile: dict[str, Any],
@@ -2651,16 +2662,24 @@ def yihuan_fishing_run_session(
     yihuan_fishing: YihuanFishingService,
     max_rounds: int = 0,
     profile_name: str = "default_1280x720_cn",
+    sell_fish_every_rounds: int = 0,
 ) -> dict[str, Any]:
     results: list[dict[str, Any]] = []
     consecutive_failures = 0
     success_count = 0
     failure_count = 0
+    active_sell_count = 0
+    active_sell_failure_count = 0
+    active_sell_results: list[dict[str, Any]] = []
     round_index = 1
     stop_reason = "max_rounds"
-    unlimited_rounds = int(max_rounds) <= 0
+    max_rounds_value = _non_negative_int(max_rounds)
+    sell_interval_rounds = _non_negative_int(sell_fish_every_rounds)
+    unlimited_rounds = max_rounds_value <= 0
+    profile = yihuan_fishing.load_profile(profile_name)
+    resolved_profile = profile["profile_name"]
 
-    while unlimited_rounds or round_index <= int(max_rounds):
+    while unlimited_rounds or round_index <= max_rounds_value:
         round_result = _run_fishing_round_impl(
             app,
             ocr,
@@ -2668,7 +2687,7 @@ def yihuan_fishing_run_session(
             input_mapping,
             yihuan_fishing,
             round_index=round_index,
-            profile_name=profile_name,
+            profile_name=resolved_profile,
             bite_timeout_sec=None,
             duel_timeout_sec=None,
         )
@@ -2676,6 +2695,46 @@ def yihuan_fishing_run_session(
         if round_result["status"] == "success":
             success_count += 1
             consecutive_failures = 0
+            if sell_interval_rounds > 0 and success_count % sell_interval_rounds == 0:
+                app.release_all()
+                sell_trace: list[dict[str, Any]] = []
+                sell_started_at = time.monotonic()
+                logger.info(
+                    "Fishing[active_sell] start interval_rounds=%s success_count=%s round_index=%s",
+                    sell_interval_rounds,
+                    success_count,
+                    round_index,
+                )
+                sell_result = _run_sell_fish_before_buy_bait(
+                    app,
+                    ocr,
+                    vision,
+                    input_mapping,
+                    yihuan_fishing,
+                    profile=profile,
+                    profile_name=resolved_profile,
+                    phase_trace=sell_trace,
+                    start_time=sell_started_at,
+                )
+                sell_result["trigger_round_index"] = int(round_index)
+                sell_result["trigger_success_count"] = int(success_count)
+                sell_result["interval_rounds"] = int(sell_interval_rounds)
+                sell_result["phase_trace"] = sell_trace
+                round_result["active_sell_result"] = sell_result
+                active_sell_results.append(sell_result)
+                active_sell_count += 1
+                sell_ok = bool(sell_result.get("ok"))
+                logger.info(
+                    "Fishing[active_sell] done ok=%s status=%s round_index=%s success_count=%s",
+                    sell_ok,
+                    sell_result.get("status"),
+                    round_index,
+                    success_count,
+                )
+                if not sell_ok:
+                    active_sell_failure_count += 1
+                    stop_reason = "active_sell_not_ready"
+                    break
         else:
             failure_count += 1
             consecutive_failures += 1
@@ -2686,6 +2745,8 @@ def yihuan_fishing_run_session(
         status = "failed"
     elif success_count > 0 and failure_count > 0:
         status = "partial"
+    if active_sell_failure_count > 0:
+        status = "failed" if success_count == 0 else "partial"
 
     return {
         "status": status,
@@ -2693,6 +2754,10 @@ def yihuan_fishing_run_session(
         "success_count": success_count,
         "failure_count": failure_count,
         "consecutive_failures": consecutive_failures,
+        "active_sell_interval_rounds": sell_interval_rounds,
+        "active_sell_count": active_sell_count,
+        "active_sell_failure_count": active_sell_failure_count,
+        "active_sell_results": active_sell_results,
         "stopped_reason": stop_reason,
         "results": results,
     }

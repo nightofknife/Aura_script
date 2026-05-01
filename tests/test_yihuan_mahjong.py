@@ -1,13 +1,27 @@
 from __future__ import annotations
 
+from pathlib import Path
 import unittest
 from unittest.mock import patch
 
+import cv2
 import numpy as np
 
 from plans.aura_base.src.platform.contracts import CaptureResult
 from plans.yihuan.src.actions import mahjong_actions
 from plans.yihuan.src.services.mahjong_service import YihuanMahjongService
+
+
+FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "yihuan" / "mahjong"
+TEMPLATE_DIR = (
+    Path(__file__).resolve().parents[1]
+    / "plans"
+    / "yihuan"
+    / "data"
+    / "mahjong"
+    / "default_1280x720_cn"
+    / "templates"
+)
 
 
 class _FakeApp:
@@ -51,6 +65,45 @@ class TestYihuanMahjongService(unittest.TestCase):
                 state = self.service.analyze_phase(image)
                 self.assertEqual(state["phase"], expected_phase)
 
+    def test_real_fixture_phase_detectors_cover_exchange_and_runtime_states(self):
+        cases = {
+            "ready_1280x720.png": ("ready", None),
+            "exchange_one_selected_1280x720.png": ("exchange", False),
+            "exchange_three_selected_1280x720.png": ("exchange", True),
+            "dingque_1280x720.png": ("dingque", None),
+            "playing_1280x720.png": ("playing", None),
+            "result_1280x720.png": ("result", None),
+        }
+
+        for filename, (expected_phase, expected_confirm) in cases.items():
+            with self.subTest(filename=filename):
+                state = self.service.analyze_phase(_load_fixture(filename))
+                self.assertEqual(state["phase"], expected_phase)
+                if expected_confirm is not None:
+                    self.assertEqual(state["exchange"]["confirm_enabled"], expected_confirm)
+
+    def test_auto_switch_detection_uses_enabled_and_disabled_templates(self):
+        enabled = self.service.analyze_playing(_make_playing_image(enabled=True))
+        disabled = self.service.analyze_playing(_make_playing_image(enabled=False))
+        real_enabled = self.service.analyze_playing(_load_fixture("playing_1280x720.png"))
+
+        self.assertTrue(enabled["found"])
+        self.assertTrue(disabled["found"])
+        self.assertTrue(real_enabled["found"])
+        self.assertEqual(
+            {name: state["enabled"] for name, state in enabled["switches"].items()},
+            {"hu": True, "peng": True, "discard": True},
+        )
+        self.assertEqual(
+            {name: state["enabled"] for name, state in disabled["switches"].items()},
+            {"hu": False, "peng": False, "discard": False},
+        )
+        self.assertEqual(
+            {name: state["enabled"] for name, state in real_enabled["switches"].items()},
+            {"hu": True, "peng": True, "discard": True},
+        )
+        self.assertEqual(disabled["enabled_switch_count"], 0)
+
     def test_hand_suit_counts_use_tile_color_rules(self):
         hand = self.service.analyze_hand_suits(_make_dingque_image({"wan": 4, "tong": 1, "tiao": 3}))
 
@@ -67,6 +120,38 @@ class TestYihuanMahjongService(unittest.TestCase):
 
         self.assertEqual(detail["selected_suit"], "tong")
         self.assertEqual(detail["reason"], "tie_break")
+
+    def test_choose_exchange_three_uses_fewest_eligible_suit(self):
+        detail = self.service.choose_exchange_three_detail(
+            [
+                {"index": 0, "suit": "wan", "rect": [10, 10, 40, 60]},
+                {"index": 1, "suit": "wan", "rect": [60, 10, 40, 60]},
+                {"index": 2, "suit": "wan", "rect": [110, 10, 40, 60]},
+                {"index": 3, "suit": "wan", "rect": [160, 10, 40, 60]},
+                {"index": 4, "suit": "tong", "rect": [210, 10, 40, 60]},
+                {"index": 5, "suit": "tong", "rect": [260, 10, 40, 60]},
+                {"index": 6, "suit": "tong", "rect": [310, 10, 40, 60]},
+                {"index": 7, "suit": "tiao", "rect": [360, 10, 40, 60]},
+                {"index": 8, "suit": "tiao", "rect": [410, 10, 40, 60]},
+            ]
+        )
+
+        self.assertTrue(detail["found"])
+        self.assertEqual(detail["selected_suit"], "tong")
+        self.assertEqual(detail["tile_indices"], [4, 5, 6])
+        self.assertEqual(detail["tile_points"], [[230, 40], [280, 40], [330, 40]])
+
+    def test_choose_exchange_three_reports_insufficient_same_suit(self):
+        detail = self.service.choose_exchange_three_detail(
+            [
+                {"index": 0, "suit": "wan", "rect": [10, 10, 40, 60]},
+                {"index": 1, "suit": "tong", "rect": [60, 10, 40, 60]},
+                {"index": 2, "suit": "tiao", "rect": [110, 10, 40, 60]},
+            ]
+        )
+
+        self.assertFalse(detail["found"])
+        self.assertEqual(detail["reason"], "insufficient_same_suit")
 
     def test_pure_future_discard_strategy_clears_missing_suit_first(self):
         result = self.service.recommend_discard(
@@ -117,6 +202,51 @@ class TestYihuanMahjongActions(unittest.TestCase):
         )
         self.assertEqual(result["auto_toggles_enabled"], {"hu": True, "peng": True, "discard": True})
 
+    def test_run_session_handles_exchange_three_before_dingque(self):
+        app = _FakeApp(
+            images=[
+                _load_fixture("ready_1280x720.png"),
+                _load_fixture("exchange_one_selected_1280x720.png"),
+                _load_fixture("exchange_three_selected_1280x720.png"),
+                _load_fixture("dingque_1280x720.png"),
+                _load_fixture("playing_1280x720.png"),
+                _make_playing_image(enabled=True),
+                _load_fixture("result_1280x720.png"),
+            ]
+        )
+
+        with patch("plans.yihuan.src.actions.mahjong_actions.time.sleep"):
+            result = mahjong_actions.yihuan_mahjong_run_session(app, self.service, max_seconds=5)
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["stopped_reason"], "level_end")
+        self.assertEqual(result["exchange_selected_suit"], "tong")
+        self.assertEqual(result["exchange_result"], "confirmed")
+        self.assertEqual(result["exchange_tile_indices"], [4, 5, 6])
+        self.assertEqual(result["exchange_tile_points"], [[718, 681], [766, 681], [814, 681]])
+        self.assertIn((640, 504, "left"), app.click_calls)
+        self.assertIn((637, 493, "left"), app.click_calls)
+        self.assertEqual(result["auto_toggles_enabled"], {"hu": True, "peng": True, "discard": True})
+        self.assertTrue(any(item["action"] == "exchange_confirm" and item["success"] for item in result["click_verifications"]))
+
+    def test_run_session_can_start_from_exchange_phase(self):
+        app = _FakeApp(
+            images=[
+                _load_fixture("exchange_one_selected_1280x720.png"),
+                _load_fixture("exchange_three_selected_1280x720.png"),
+                _load_fixture("dingque_1280x720.png"),
+                _make_playing_image(enabled=True),
+                _load_fixture("result_1280x720.png"),
+            ]
+        )
+
+        with patch("plans.yihuan.src.actions.mahjong_actions.time.sleep"):
+            result = mahjong_actions.yihuan_mahjong_run_session(app, self.service, max_seconds=5)
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["exchange_result"], "confirmed")
+        self.assertNotIn((1100, 650, "left"), app.click_calls)
+
     def test_run_session_result_screen_finishes_without_clicking(self):
         app = _FakeApp(_make_result_image())
 
@@ -153,6 +283,20 @@ class TestYihuanMahjongActions(unittest.TestCase):
         self.assertEqual(result["status"], "failed")
         self.assertEqual(result["stopped_reason"], "failure")
         self.assertEqual(result["failure_reason"], "capture_failed")
+
+
+def _load_fixture(filename: str) -> np.ndarray:
+    image = cv2.imread(str(FIXTURE_DIR / filename), cv2.IMREAD_COLOR)
+    if image is None:
+        raise FileNotFoundError(filename)
+    return cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+
+def _load_template(filename: str) -> np.ndarray:
+    image = cv2.imread(str(TEMPLATE_DIR / filename), cv2.IMREAD_COLOR)
+    if image is None:
+        raise FileNotFoundError(filename)
+    return cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
 
 def _make_base_image() -> np.ndarray:
@@ -207,21 +351,24 @@ def _draw_hand_tiles(image: np.ndarray, suits: list[str]) -> None:
 
 def _make_playing_image(*, enabled: bool) -> np.ndarray:
     image = _make_base_image()
-    switch_colors = {
-        "hu": (225, 155, 45),
-        "peng": (85, 200, 60),
-        "discard": (45, 180, 220),
-    }
     regions = {
         "hu": (28, 290, 68, 58),
         "peng": (28, 357, 68, 58),
         "discard": (28, 424, 68, 58),
     }
+    glyph_offsets = {
+        "hu": (17, 14),
+        "peng": (17, 13),
+        "discard": (18, 9),
+    }
+    state = "enabled" if enabled else "disabled"
     for name, region in regions.items():
         x, y, width, height = region
         _fill(image, region, (18, 18, 18))
-        color = switch_colors[name] if enabled else (115, 115, 115)
-        _fill(image, (x + 21, y + 14, width - 42, height - 28), color)
+        glyph = _load_template(f"switch_{name}_{state}.png")
+        offset_x, offset_y = glyph_offsets[name]
+        glyph_h, glyph_w = glyph.shape[:2]
+        image[y + offset_y : y + offset_y + glyph_h, x + offset_x : x + offset_x + glyph_w] = glyph
     _draw_hand_tiles(image, ["wan", "tong", "tiao"])
     return image
 
