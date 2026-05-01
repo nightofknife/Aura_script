@@ -445,8 +445,14 @@ class YihuanMainWindow(QMainWindow):
         self._max_rounds_spin.setMaximum(99999)
         self._max_rounds_spin.setValue(0)
         self._max_rounds_spin.setToolTip("0 表示不限制轮数，直到任务自身停止。")
+        self._sell_fish_every_rounds_spin = QSpinBox(group)
+        self._sell_fish_every_rounds_spin.setMinimum(0)
+        self._sell_fish_every_rounds_spin.setMaximum(99999)
+        self._sell_fish_every_rounds_spin.setValue(0)
+        self._sell_fish_every_rounds_spin.setToolTip("0 表示不自动卖鱼；大于 0 时每隔指定轮数尝试卖鱼。")
         form.addRow("钓鱼识别档案", self._fishing_profile_label)
         form.addRow("最大轮数（0 = 不限制轮数）", self._max_rounds_spin)
+        form.addRow("卖鱼间隔轮数（0 = 不自动卖鱼）", self._sell_fish_every_rounds_spin)
         layout.addWidget(group)
 
         hint = QLabel("只在这里放本次运行最常用的快捷参数；识别档案请到设置界面调整。", page)
@@ -907,7 +913,7 @@ class YihuanMainWindow(QMainWindow):
             self._fishing_defaults.profile_name,
             self._repo.list_fishing_profiles(),
         )
-        self._fishing_profile_label.setText(self._fishing_defaults.profile_name)
+        self._sync_fishing_widgets_from_defaults()
 
         self._cafe_defaults = self._repo.get_cafe_defaults(self._task_rows.get(TASK_CAFE_AUTO_LOOP))
         self._set_combo_items(
@@ -1261,7 +1267,7 @@ class YihuanMainWindow(QMainWindow):
             self._task_rows.get(TASK_ONE_CAFE_REVENUE_RESTOCK)
         )
         self._mahjong_defaults = self._repo.get_mahjong_defaults(self._task_rows.get(TASK_MAHJONG_AUTO_LOOP))
-        self._fishing_profile_label.setText(self._fishing_defaults.profile_name)
+        self._sync_fishing_widgets_from_defaults()
         self._cafe_profile_label.setText(self._cafe_defaults.profile_name)
         self._sync_one_cafe_widgets_from_defaults()
         self._sync_mahjong_widgets_from_defaults()
@@ -1272,6 +1278,10 @@ class YihuanMainWindow(QMainWindow):
         self.statusBar().showMessage("设置已保存，新配置将在后续任务和探针中生效。", 6000)
         self._append_log("设置已保存，新配置将在后续任务和探针中生效。")
         self._apply_task_guard()
+
+    def _sync_fishing_widgets_from_defaults(self) -> None:
+        self._fishing_profile_label.setText(self._fishing_defaults.profile_name)
+        self._sell_fish_every_rounds_spin.setValue(int(self._fishing_defaults.sell_fish_every_rounds))
 
     def _sync_one_cafe_widgets_from_defaults(self) -> None:
         self._one_cafe_profile_label.setText(self._one_cafe_defaults.profile_name)
@@ -1516,7 +1526,11 @@ class YihuanMainWindow(QMainWindow):
 
     def _collect_selected_task_inputs(self) -> dict[str, Any]:
         if self._selected_task_id == "fishing":
-            return build_auto_loop_inputs(self._max_rounds_spin.value(), self._fishing_defaults)
+            return build_auto_loop_inputs(
+                self._max_rounds_spin.value(),
+                self._sell_fish_every_rounds_spin.value(),
+                self._fishing_defaults,
+            )
         if self._selected_task_id == "cafe":
             return build_cafe_loop_inputs(
                 self._cafe_max_seconds_spin.value(),

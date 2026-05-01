@@ -172,6 +172,24 @@ class TestYihuanMainWindowWorkbench(unittest.TestCase):
 
         self.assertEqual(cancelled, ["cid-1"])
 
+    def test_fishing_inputs_include_sell_fish_interval(self):
+        window = self._make_window()
+        window._select_task_id("fishing")
+        window._fishing_defaults = window._fishing_defaults.__class__(profile_name="custom_fishing")
+        window._max_rounds_spin.setValue(12)
+        window._sell_fish_every_rounds_spin.setValue(4)
+
+        payload = window._collect_selected_task_inputs()
+
+        self.assertEqual(
+            payload,
+            {
+                "max_rounds": 12,
+                "profile_name": "custom_fishing",
+                "sell_fish_every_rounds": 4,
+            },
+        )
+
     def test_one_cafe_inputs_are_collected_from_page_and_settings_defaults(self):
         window = self._make_window()
         window._select_task_id("one_cafe")

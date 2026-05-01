@@ -271,6 +271,7 @@ class GuiPreferences:
 @dataclass(frozen=True)
 class FishingRunDefaults:
     profile_name: str = "default_1280x720_cn"
+    sell_fish_every_rounds: int = 0
 
 
 @dataclass(frozen=True)
@@ -329,10 +330,15 @@ class LiveUiState:
     latest_status: str | None = None
 
 
-def build_auto_loop_inputs(max_rounds: Any, defaults: FishingRunDefaults) -> dict[str, Any]:
+def build_auto_loop_inputs(
+    max_rounds: Any,
+    sell_fish_every_rounds: Any,
+    defaults: FishingRunDefaults,
+) -> dict[str, Any]:
     return {
         "max_rounds": int(max_rounds),
         "profile_name": str(defaults.profile_name),
+        "sell_fish_every_rounds": int(sell_fish_every_rounds),
     }
 
 
@@ -391,16 +397,21 @@ def build_mahjong_loop_inputs(
 
 
 def extract_auto_loop_defaults(task_row: Mapping[str, Any] | None) -> FishingRunDefaults:
-    default_profile = FishingRunDefaults().profile_name
+    values = {
+        "profile_name": FishingRunDefaults().profile_name,
+        "sell_fish_every_rounds": FishingRunDefaults().sell_fish_every_rounds,
+    }
     for field in (task_row or {}).get("inputs") or []:
         if not isinstance(field, Mapping):
             continue
-        if str(field.get("name") or "").strip() != "profile_name":
+        name = str(field.get("name") or "").strip()
+        if name not in values:
             continue
-        resolved = str(field.get("default") or "").strip()
-        if resolved:
-            return FishingRunDefaults(profile_name=resolved)
-    return FishingRunDefaults(profile_name=default_profile)
+        values[name] = field.get("default", values[name])
+    return FishingRunDefaults(
+        profile_name=str(values["profile_name"] or FishingRunDefaults().profile_name),
+        sell_fish_every_rounds=int(float(values["sell_fish_every_rounds"] or 0)),
+    )
 
 
 def extract_cafe_loop_defaults(task_row: Mapping[str, Any] | None) -> CafeRunDefaults:

@@ -14,6 +14,7 @@ from .logic import (
     MahjongRunDefaults,
     OneCafeRunDefaults,
     RuntimeSettings,
+    extract_auto_loop_defaults,
     extract_cafe_loop_defaults,
     extract_mahjong_loop_defaults,
     extract_one_cafe_defaults,
@@ -158,7 +159,11 @@ class YihuanConfigRepository:
         self._settings_set_value("gui/quick_stop_hotkey", str(preferences.quick_stop_hotkey).strip().upper())
 
     def get_fishing_defaults(self, auto_loop_task: Mapping[str, Any] | None = None) -> FishingRunDefaults:
-        return FishingRunDefaults(profile_name=self._resolve_auto_loop_profile_name(auto_loop_task))
+        defaults = extract_auto_loop_defaults(auto_loop_task)
+        return FishingRunDefaults(
+            profile_name=self._resolve_auto_loop_profile_name(auto_loop_task),
+            sell_fish_every_rounds=defaults.sell_fish_every_rounds,
+        )
 
     def update_fishing_defaults(self, defaults: FishingRunDefaults) -> None:
         self.validate_fishing_defaults(defaults)

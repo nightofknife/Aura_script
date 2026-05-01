@@ -41,13 +41,14 @@ from packages.yihuan_gui.logic import (
 
 class TestYihuanGuiLogic(unittest.TestCase):
     def test_build_auto_loop_inputs_uses_page_value_and_defaults(self):
-        payload = build_auto_loop_inputs(12, FishingRunDefaults(profile_name="default_1280x720_cn"))
+        payload = build_auto_loop_inputs(12, 5, FishingRunDefaults(profile_name="default_1280x720_cn"))
 
         self.assertEqual(
             payload,
             {
                 "max_rounds": 12,
                 "profile_name": "default_1280x720_cn",
+                "sell_fish_every_rounds": 5,
             },
         )
 
@@ -57,11 +58,13 @@ class TestYihuanGuiLogic(unittest.TestCase):
                 "inputs": [
                     {"name": "max_rounds", "type": "number", "default": 0},
                     {"name": "profile_name", "type": "string", "default": "custom_profile"},
+                    {"name": "sell_fish_every_rounds", "type": "number", "default": 6},
                 ]
             }
         )
 
         self.assertEqual(defaults.profile_name, "custom_profile")
+        self.assertEqual(defaults.sell_fish_every_rounds, 6)
 
     def test_build_cafe_loop_inputs_uses_page_values_and_defaults(self):
         payload = build_cafe_loop_inputs(
