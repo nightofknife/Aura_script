@@ -8,25 +8,31 @@ from packages.yihuan_gui.logic import (
     GuiPreferences,
     LiveUiState,
     MahjongRunDefaults,
+    OneCafeRunDefaults,
     RuntimeSettings,
     TASK_AUTO_LOOP,
     TASK_CAFE_AUTO_LOOP,
     TASK_LIVE_MONITOR,
     TASK_MAHJONG_AUTO_LOOP,
+    TASK_ONE_CAFE_REVENUE_RESTOCK,
     VISIBLE_HISTORY_TASK_REFS,
     TASK_PLAN_READY,
     build_auto_loop_inputs,
     build_cafe_loop_inputs,
     build_mahjong_loop_inputs,
+    build_one_cafe_inputs,
     build_settings_sections,
     cafe_loop_business_status,
     mahjong_loop_business_status,
+    one_cafe_business_status,
     extract_auto_loop_defaults,
     extract_cafe_loop_defaults,
     extract_mahjong_loop_defaults,
+    extract_one_cafe_defaults,
     render_auto_loop_brief_text,
     render_cafe_loop_brief_text,
     render_mahjong_loop_brief_text,
+    render_one_cafe_brief_text,
     reduce_live_events,
     render_task_result_html,
     task_is_enabled,
@@ -105,6 +111,41 @@ class TestYihuanGuiLogic(unittest.TestCase):
         self.assertTrue(defaults.full_assist_auto_hammer_mode)
         self.assertEqual(defaults.min_order_interval_sec, 0.75)
         self.assertEqual(defaults.min_order_duration_sec, 0.25)
+
+    def test_build_one_cafe_inputs_uses_page_values_and_defaults(self):
+        payload = build_one_cafe_inputs(
+            True,
+            False,
+            72,
+            OneCafeRunDefaults(profile_name="default_1280x720_cn"),
+        )
+
+        self.assertEqual(
+            payload,
+            {
+                "profile_name": "default_1280x720_cn",
+                "withdraw_enabled": True,
+                "restock_enabled": False,
+                "restock_hours": 72,
+            },
+        )
+
+    def test_extract_one_cafe_defaults_uses_task_defaults(self):
+        defaults = extract_one_cafe_defaults(
+            {
+                "inputs": [
+                    {"name": "profile_name", "type": "string", "default": "custom_one_cafe"},
+                    {"name": "withdraw_enabled", "type": "boolean", "default": False},
+                    {"name": "restock_enabled", "type": "boolean", "default": True},
+                    {"name": "restock_hours", "type": "number", "default": 4},
+                ]
+            }
+        )
+
+        self.assertEqual(defaults.profile_name, "custom_one_cafe")
+        self.assertFalse(defaults.withdraw_enabled)
+        self.assertTrue(defaults.restock_enabled)
+        self.assertEqual(defaults.restock_hours, 4)
 
     def test_build_mahjong_loop_inputs_uses_page_values_and_defaults(self):
         payload = build_mahjong_loop_inputs(
@@ -312,6 +353,44 @@ class TestYihuanGuiLogic(unittest.TestCase):
         self.assertIn("订单统计", html)
         self.assertIn("事件轨迹", html)
 
+    def test_task_result_renderer_handles_one_cafe(self):
+        detail = {
+            "task_name": TASK_ONE_CAFE_REVENUE_RESTOCK,
+            "final_result": {
+                "user_data": {
+                    "status": "partial",
+                    "stopped_reason": "unknown_restock_state",
+                    "failure_reason": "unknown_restock_state",
+                    "profile_name": "default_1280x720_cn",
+                    "withdraw_attempted": True,
+                    "withdraw_result": "claimed",
+                    "withdraw_confirmed": True,
+                    "restock_attempted": True,
+                    "restock_hours": 24,
+                    "restock_result": "unknown",
+                    "returned_to_world": True,
+                    "world_hud_found": False,
+                    "phase_trace": [
+                        {"phase": "open_city_tycoon", "status": "SUCCESS"},
+                        {"phase": "one_cafe_entry", "final_detection_found": True},
+                        {"phase": "withdraw", "attempted": True, "result": "claimed"},
+                        {"phase": "restock", "attempted": True, "hours": 24, "result": "unknown"},
+                        {"phase": "exit", "returned_to_world": True},
+                    ],
+                }
+            },
+        }
+
+        html = render_task_result_html(TASK_ONE_CAFE_REVENUE_RESTOCK, detail)
+
+        self.assertEqual(one_cafe_business_status(detail), "partial")
+        self.assertIn("收益 已领取", render_one_cafe_brief_text(detail))
+        self.assertIn("补货 24 小时 未知", render_one_cafe_brief_text(detail))
+        self.assertIn("一咖舍", html)
+        self.assertIn("领取收益", html)
+        self.assertIn("补货状态未知", html)
+        self.assertIn("阶段轨迹", html)
+
     def test_task_result_renderer_handles_mahjong_loop(self):
         detail = {
             "task_name": TASK_MAHJONG_AUTO_LOOP,
@@ -354,6 +433,7 @@ class TestYihuanGuiLogic(unittest.TestCase):
 
         self.assertFalse(task_is_enabled(TASK_AUTO_LOOP, active_runs))
         self.assertFalse(task_is_enabled(TASK_CAFE_AUTO_LOOP, active_runs))
+        self.assertFalse(task_is_enabled(TASK_ONE_CAFE_REVENUE_RESTOCK, active_runs))
         self.assertFalse(task_is_enabled(TASK_MAHJONG_AUTO_LOOP, active_runs))
         self.assertTrue(task_is_enabled(TASK_PLAN_READY, active_runs))
 
@@ -368,6 +448,22 @@ class TestYihuanGuiLogic(unittest.TestCase):
 
         self.assertFalse(task_is_enabled(TASK_AUTO_LOOP, active_runs))
         self.assertFalse(task_is_enabled(TASK_CAFE_AUTO_LOOP, active_runs))
+        self.assertFalse(task_is_enabled(TASK_ONE_CAFE_REVENUE_RESTOCK, active_runs))
+        self.assertFalse(task_is_enabled(TASK_MAHJONG_AUTO_LOOP, active_runs))
+        self.assertTrue(task_is_enabled(TASK_PLAN_READY, active_runs))
+
+    def test_runtime_task_guard_disables_other_runtime_tasks_when_one_cafe_active(self):
+        active_runs = {
+            "cid-1": {
+                "cid": "cid-1",
+                "task_name": TASK_ONE_CAFE_REVENUE_RESTOCK,
+                "status": "running",
+            }
+        }
+
+        self.assertFalse(task_is_enabled(TASK_AUTO_LOOP, active_runs))
+        self.assertFalse(task_is_enabled(TASK_CAFE_AUTO_LOOP, active_runs))
+        self.assertFalse(task_is_enabled(TASK_ONE_CAFE_REVENUE_RESTOCK, active_runs))
         self.assertFalse(task_is_enabled(TASK_MAHJONG_AUTO_LOOP, active_runs))
         self.assertTrue(task_is_enabled(TASK_PLAN_READY, active_runs))
 
@@ -382,6 +478,7 @@ class TestYihuanGuiLogic(unittest.TestCase):
 
         self.assertFalse(task_is_enabled(TASK_AUTO_LOOP, active_runs))
         self.assertFalse(task_is_enabled(TASK_CAFE_AUTO_LOOP, active_runs))
+        self.assertFalse(task_is_enabled(TASK_ONE_CAFE_REVENUE_RESTOCK, active_runs))
         self.assertFalse(task_is_enabled(TASK_MAHJONG_AUTO_LOOP, active_runs))
         self.assertTrue(task_is_enabled(TASK_PLAN_READY, active_runs))
 
@@ -408,8 +505,9 @@ class TestYihuanGuiLogic(unittest.TestCase):
     def test_visible_history_tasks_hide_non_workbench_gameplay_tasks(self):
         self.assertIn(TASK_AUTO_LOOP, VISIBLE_HISTORY_TASK_REFS)
         self.assertIn(TASK_CAFE_AUTO_LOOP, VISIBLE_HISTORY_TASK_REFS)
+        self.assertIn(TASK_ONE_CAFE_REVENUE_RESTOCK, VISIBLE_HISTORY_TASK_REFS)
+        self.assertIn(TASK_MAHJONG_AUTO_LOOP, VISIBLE_HISTORY_TASK_REFS)
         self.assertNotIn(TASK_LIVE_MONITOR, VISIBLE_HISTORY_TASK_REFS)
-        self.assertNotIn(TASK_MAHJONG_AUTO_LOOP, VISIBLE_HISTORY_TASK_REFS)
 
 
 if __name__ == "__main__":

@@ -10,6 +10,7 @@ from packages.yihuan_gui.logic import (
     FishingRunDefaults,
     GuiPreferences,
     MahjongRunDefaults,
+    OneCafeRunDefaults,
     RuntimeSettings,
 )
 
@@ -32,6 +33,8 @@ class TestYihuanConfigRepository(unittest.TestCase):
         (self.plan_root / "data" / "input_profiles").mkdir(parents=True)
         (self.plan_root / "data" / "fishing").mkdir(parents=True)
         (self.plan_root / "data" / "cafe").mkdir(parents=True)
+        (self.plan_root / "data" / "one_cafe" / "default_1280x720_cn").mkdir(parents=True)
+        (self.plan_root / "data" / "one_cafe" / "custom_one_cafe").mkdir(parents=True)
         (self.plan_root / "data" / "mahjong").mkdir(parents=True)
         (self.plan_root / "data" / "input_profiles" / "default_pc.yaml").write_text("actions: {}\n", encoding="utf-8")
         (self.plan_root / "data" / "input_profiles" / "gamepad.yaml").write_text("actions: {}\n", encoding="utf-8")
@@ -214,6 +217,19 @@ class TestYihuanConfigRepository(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "沙威玛识别档案不存在"):
             self.repo.validate_cafe_defaults(CafeRunDefaults(profile_name="missing_profile"))
 
+    def test_one_cafe_defaults_round_trip_preserves_unedited_fields(self):
+        self.repo.update_one_cafe_defaults(OneCafeRunDefaults(profile_name="custom_one_cafe"))
+
+        defaults = self.repo.get_one_cafe_defaults()
+        payload = self.repo.load_config()
+        self.assertEqual(defaults.profile_name, "custom_one_cafe")
+        self.assertEqual(payload["one_cafe"]["profile_name"], "custom_one_cafe")
+        self.assertEqual(payload["extra"]["keep"], True)
+
+    def test_one_cafe_defaults_validation_rejects_unknown_profile(self):
+        with self.assertRaisesRegex(ValueError, "一咖舍识别档案不存在"):
+            self.repo.validate_one_cafe_defaults(OneCafeRunDefaults(profile_name="missing_profile"))
+
     def test_mahjong_defaults_round_trip_preserves_unedited_fields(self):
         self.repo.update_mahjong_defaults(MahjongRunDefaults(profile_name="custom_mahjong"))
 
@@ -226,6 +242,10 @@ class TestYihuanConfigRepository(unittest.TestCase):
     def test_mahjong_defaults_validation_rejects_unknown_profile(self):
         with self.assertRaisesRegex(ValueError, "麻将识别档案不存在"):
             self.repo.validate_mahjong_defaults(MahjongRunDefaults(profile_name="missing_profile"))
+
+    def test_mahjong_profile_list_accepts_yaml_and_directory_profiles(self):
+        self.assertIn("default_1280x720_cn", self.repo.list_mahjong_profiles())
+        self.assertIn("custom_mahjong", self.repo.list_mahjong_profiles())
 
     def test_cafe_profile_default_seconds_reads_profile_yaml(self):
         self.assertEqual(self.repo.get_cafe_profile_default_seconds("default_1280x720_cn"), 130.0)

@@ -12,9 +12,11 @@ from .logic import (
     FishingRunDefaults,
     GuiPreferences,
     MahjongRunDefaults,
+    OneCafeRunDefaults,
     RuntimeSettings,
     extract_cafe_loop_defaults,
     extract_mahjong_loop_defaults,
+    extract_one_cafe_defaults,
 )
 
 
@@ -35,6 +37,7 @@ class YihuanConfigRepository:
         self.input_profiles_dir = self.plan_root / "data" / "input_profiles"
         self.fishing_profiles_dir = self.plan_root / "data" / "fishing"
         self.cafe_profiles_dir = self.plan_root / "data" / "cafe"
+        self.one_cafe_profiles_dir = self.plan_root / "data" / "one_cafe"
         self.mahjong_profiles_dir = self.plan_root / "data" / "mahjong"
         self._settings_store = settings_store
 
@@ -69,11 +72,19 @@ class YihuanConfigRepository:
         names = sorted(path.stem for path in self.cafe_profiles_dir.glob("*.yaml"))
         return names
 
+    def list_one_cafe_profiles(self) -> list[str]:
+        if not self.one_cafe_profiles_dir.exists():
+            return []
+        names = sorted(path.name for path in self.one_cafe_profiles_dir.iterdir() if path.is_dir())
+        names.extend(path.stem for path in self.one_cafe_profiles_dir.glob("*.yaml"))
+        return sorted(set(names))
+
     def list_mahjong_profiles(self) -> list[str]:
         if not self.mahjong_profiles_dir.exists():
             return []
-        names = sorted(path.stem for path in self.mahjong_profiles_dir.glob("*.yaml"))
-        return names
+        names = sorted(path.name for path in self.mahjong_profiles_dir.iterdir() if path.is_dir())
+        names.extend(path.stem for path in self.mahjong_profiles_dir.glob("*.yaml"))
+        return sorted(set(names))
 
     def get_runtime_settings(self) -> RuntimeSettings:
         payload = self.load_config()
@@ -182,6 +193,23 @@ class YihuanConfigRepository:
         cafe = dict(payload.get("cafe") or {})
         cafe["profile_name"] = defaults.profile_name
         payload["cafe"] = cafe
+        self.save_config(payload)
+
+    def get_one_cafe_defaults(self, one_cafe_task: Mapping[str, Any] | None = None) -> OneCafeRunDefaults:
+        defaults = extract_one_cafe_defaults(one_cafe_task)
+        return OneCafeRunDefaults(
+            profile_name=self._resolve_one_cafe_profile_name(defaults.profile_name),
+            withdraw_enabled=defaults.withdraw_enabled,
+            restock_enabled=defaults.restock_enabled,
+            restock_hours=defaults.restock_hours,
+        )
+
+    def update_one_cafe_defaults(self, defaults: OneCafeRunDefaults) -> None:
+        self.validate_one_cafe_defaults(defaults)
+        payload = self.load_config()
+        one_cafe = dict(payload.get("one_cafe") or {})
+        one_cafe["profile_name"] = defaults.profile_name
+        payload["one_cafe"] = one_cafe
         self.save_config(payload)
 
     def get_mahjong_defaults(self, mahjong_task: Mapping[str, Any] | None = None) -> MahjongRunDefaults:
@@ -295,6 +323,14 @@ class YihuanConfigRepository:
         if available_profiles and profile_name not in available_profiles:
             raise ValueError(f"沙威玛识别档案不存在：{profile_name}")
 
+    def validate_one_cafe_defaults(self, defaults: OneCafeRunDefaults) -> None:
+        profile_name = str(defaults.profile_name).strip()
+        if not profile_name:
+            raise ValueError("一咖舍识别档案不能为空。")
+        available_profiles = self.list_one_cafe_profiles()
+        if available_profiles and profile_name not in available_profiles:
+            raise ValueError(f"一咖舍识别档案不存在：{profile_name}")
+
     def validate_mahjong_defaults(self, defaults: MahjongRunDefaults) -> None:
         profile_name = str(defaults.profile_name).strip()
         if not profile_name:
@@ -334,6 +370,12 @@ class YihuanConfigRepository:
         cafe = dict(payload.get("cafe") or {})
         configured_profile = str(cafe.get("profile_name") or cafe.get("profile") or "").strip()
         return configured_profile or str(fallback_profile or CafeRunDefaults().profile_name)
+
+    def _resolve_one_cafe_profile_name(self, fallback_profile: str) -> str:
+        payload = self.load_config()
+        one_cafe = dict(payload.get("one_cafe") or {})
+        configured_profile = str(one_cafe.get("profile_name") or one_cafe.get("profile") or "").strip()
+        return configured_profile or str(fallback_profile or OneCafeRunDefaults().profile_name)
 
     def _resolve_mahjong_profile_name(self, fallback_profile: str) -> str:
         payload = self.load_config()

@@ -41,6 +41,19 @@ class TestYihuanMapOverlayData(unittest.TestCase):
             self.assertNotIn("win32gui", source, path.name)
             self.assertNotIn("ImageGrab", source, path.name)
 
+    def test_map_overlay_window_is_lightweight_display_without_settings_drawer(self):
+        overlay_window = (
+            Path(__file__).resolve().parents[1]
+            / "packages"
+            / "yihuan_gui"
+            / "map_overlay"
+            / "overlay_window.py"
+        ).read_text(encoding="utf-8")
+
+        self.assertNotIn("settings_changed", overlay_window)
+        self.assertNotIn("_drawer", overlay_window)
+        self.assertNotIn("QGroupBox", overlay_window)
+
     def test_bundled_snapshot_contains_all_translated_zeroluck_categories(self):
         data = ZeroluckRepository().load()
         categories_by_id = data.categories_by_id

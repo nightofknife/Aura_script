@@ -13,6 +13,7 @@ TASK_RUNTIME_PROBE = "tasks:checks:runtime_probe.yaml"
 TASK_AUTO_LOOP = "tasks:fishing:auto_loop.yaml"
 TASK_LIVE_MONITOR = "tasks:fishing:live_monitor.yaml"
 TASK_CAFE_AUTO_LOOP = "tasks:cafe:auto_loop.yaml"
+TASK_ONE_CAFE_REVENUE_RESTOCK = "tasks:one_cafe/revenue_restock.yaml"
 TASK_MAHJONG_AUTO_LOOP = "tasks:mahjong:auto_loop.yaml"
 
 VISIBLE_HISTORY_TASK_REFS = (
@@ -21,6 +22,8 @@ VISIBLE_HISTORY_TASK_REFS = (
     TASK_RUNTIME_PROBE,
     TASK_AUTO_LOOP,
     TASK_CAFE_AUTO_LOOP,
+    TASK_ONE_CAFE_REVENUE_RESTOCK,
+    TASK_MAHJONG_AUTO_LOOP,
 )
 DEVELOPER_TASK_REFS = (TASK_PLAN_READY, TASK_PLAN_LOADED, TASK_RUNTIME_PROBE)
 TERMINAL_STATUSES = {"success", "error", "failed", "timeout", "cancelled", "partial"}
@@ -32,6 +35,7 @@ TASK_DISPLAY_NAMES = {
     TASK_AUTO_LOOP: "自动循环钓鱼",
     TASK_LIVE_MONITOR: "钓鱼实时监视",
     TASK_CAFE_AUTO_LOOP: "沙威玛",
+    TASK_ONE_CAFE_REVENUE_RESTOCK: "一咖舍",
     TASK_MAHJONG_AUTO_LOOP: "自动麻将",
 }
 
@@ -44,6 +48,7 @@ STATUS_LABELS = {
     "timeout": "超时",
     "cancelled": "已取消",
     "partial": "部分成功",
+    "skipped": "已跳过",
     "unknown": "未知",
 }
 
@@ -58,6 +63,10 @@ STOP_REASON_LABELS = {
     "failure": "执行失败",
     "exception": "发生异常",
     "phase_timeout": "等待阶段超时",
+    "completed": "执行完成",
+    "world_return_failed": "返回世界场景失败",
+    "unknown_withdraw_state": "收益领取状态未知",
+    "unknown_restock_state": "补货状态未知",
 }
 
 FAILURE_REASON_LABELS = {
@@ -72,6 +81,10 @@ FAILURE_REASON_LABELS = {
     "level_start_timeout": "等待关卡开始超时",
     "phase_timeout": "等待阶段超时",
     "exception": "发生异常",
+    "world_return_failed": "返回世界场景失败",
+    "unknown_withdraw_state": "收益领取状态未知",
+    "unknown_restock_state": "补货状态未知",
+    "none": "无",
 }
 
 RECIPE_LABELS = {
@@ -119,6 +132,15 @@ CAFE_EVENT_LABELS = {
     "level_start_timeout": "等待关卡开始超时",
 }
 
+ONE_CAFE_RESULT_LABELS = {
+    "skipped": "已跳过",
+    "no_revenue": "暂无收益",
+    "claimed": "已领取",
+    "unknown": "未知",
+    "inventory_full": "库存已满",
+    "delivery_confirmed": "已确认送货",
+}
+
 PHASE_LABELS = {
     "ready": "可抛竿",
     "bite": "咬钩",
@@ -126,6 +148,11 @@ PHASE_LABELS = {
     "result": "结果页",
     "dingque": "定缺中",
     "playing": "行牌中",
+    "open_city_tycoon": "打开都市大亨",
+    "one_cafe_entry": "进入一咖舍",
+    "withdraw": "领取收益",
+    "restock": "补货",
+    "exit": "返回世界",
     "unknown": "未知",
     "n/a": "-",
 }
@@ -259,6 +286,14 @@ class CafeRunDefaults:
 
 
 @dataclass(frozen=True)
+class OneCafeRunDefaults:
+    profile_name: str = "default_1280x720_cn"
+    withdraw_enabled: bool = True
+    restock_enabled: bool = True
+    restock_hours: int = 24
+
+
+@dataclass(frozen=True)
 class MahjongRunDefaults:
     profile_name: str = "default_1280x720_cn"
     max_seconds: int = 0
@@ -318,6 +353,20 @@ def build_cafe_loop_inputs(
         "full_assist_auto_hammer_mode": bool(full_assist_auto_hammer_mode),
         "min_order_interval_sec": float(defaults.min_order_interval_sec),
         "min_order_duration_sec": float(defaults.min_order_duration_sec),
+    }
+
+
+def build_one_cafe_inputs(
+    withdraw_enabled: Any,
+    restock_enabled: Any,
+    restock_hours: Any,
+    defaults: OneCafeRunDefaults,
+) -> dict[str, Any]:
+    return {
+        "profile_name": str(defaults.profile_name),
+        "withdraw_enabled": bool(withdraw_enabled),
+        "restock_enabled": bool(restock_enabled),
+        "restock_hours": int(restock_hours),
     }
 
 
@@ -381,6 +430,28 @@ def extract_cafe_loop_defaults(task_row: Mapping[str, Any] | None) -> CafeRunDef
         full_assist_auto_hammer_mode=_coerce_bool(values["full_assist_auto_hammer_mode"]),
         min_order_interval_sec=float(values["min_order_interval_sec"] or 0.0),
         min_order_duration_sec=float(values["min_order_duration_sec"] or 0.0),
+    )
+
+
+def extract_one_cafe_defaults(task_row: Mapping[str, Any] | None) -> OneCafeRunDefaults:
+    values = {
+        "profile_name": OneCafeRunDefaults().profile_name,
+        "withdraw_enabled": OneCafeRunDefaults().withdraw_enabled,
+        "restock_enabled": OneCafeRunDefaults().restock_enabled,
+        "restock_hours": OneCafeRunDefaults().restock_hours,
+    }
+    for field in (task_row or {}).get("inputs") or []:
+        if not isinstance(field, Mapping):
+            continue
+        name = str(field.get("name") or "").strip()
+        if name not in values:
+            continue
+        values[name] = field.get("default", values[name])
+    return OneCafeRunDefaults(
+        profile_name=str(values["profile_name"] or OneCafeRunDefaults().profile_name),
+        withdraw_enabled=_coerce_bool(values["withdraw_enabled"]),
+        restock_enabled=_coerce_bool(values["restock_enabled"]),
+        restock_hours=int(float(values["restock_hours"] or OneCafeRunDefaults().restock_hours)),
     )
 
 
@@ -503,7 +574,7 @@ def build_settings_sections(
 def is_runtime_interacting_task(task_ref: str | None) -> bool:
     normalized = str(task_ref or "").strip()
     return normalized == TASK_RUNTIME_PROBE or normalized.startswith(
-        ("tasks:fishing:", "tasks:cafe:", "tasks:mahjong:")
+        ("tasks:fishing:", "tasks:cafe:", "tasks:one_cafe/", "tasks:one_cafe:", "tasks:mahjong:")
     )
 
 
@@ -728,6 +799,9 @@ def render_task_result_html(task_ref: str | None, detail: Mapping[str, Any] | No
     if task_name == TASK_CAFE_AUTO_LOOP and isinstance(user_data, Mapping):
         return render_cafe_loop_result_html(user_data)
 
+    if task_name == TASK_ONE_CAFE_REVENUE_RESTOCK and isinstance(user_data, Mapping):
+        return render_one_cafe_result_html(user_data)
+
     if task_name == TASK_MAHJONG_AUTO_LOOP and isinstance(user_data, Mapping):
         return render_mahjong_loop_result_html(user_data)
 
@@ -760,6 +834,21 @@ def cafe_loop_user_data(detail: Mapping[str, Any] | None) -> Mapping[str, Any] |
 
 def cafe_loop_business_status(detail: Mapping[str, Any] | None) -> str | None:
     user_data = cafe_loop_user_data(detail)
+    if not user_data:
+        return None
+    status = str(user_data.get("status") or "").strip().lower()
+    return status or None
+
+
+def one_cafe_user_data(detail: Mapping[str, Any] | None) -> Mapping[str, Any] | None:
+    payload = dict(detail or {})
+    final_result = dict(payload.get("final_result") or {})
+    user_data = final_result.get("user_data")
+    return user_data if isinstance(user_data, Mapping) else None
+
+
+def one_cafe_business_status(detail: Mapping[str, Any] | None) -> str | None:
+    user_data = one_cafe_user_data(detail)
     if not user_data:
         return None
     status = str(user_data.get("status") or "").strip().lower()
@@ -862,6 +951,39 @@ def render_cafe_loop_brief_text(detail: Mapping[str, Any] | None) -> str:
     )
 
 
+def render_one_cafe_brief_text(detail: Mapping[str, Any] | None) -> str:
+    user_data = one_cafe_user_data(detail)
+    if not user_data:
+        return "暂无一咖舍结果。"
+    return (
+        f"{status_display_name(user_data.get('status'))} / "
+        f"收益 {_one_cafe_result_display_name(user_data.get('withdraw_result'))} / "
+        f"补货 {user_data.get('restock_hours', '-')} 小时 "
+        f"{_one_cafe_result_display_name(user_data.get('restock_result'))} / "
+        f"返回世界 {'是' if _coerce_bool(user_data.get('returned_to_world')) else '否'} / "
+        f"停止原因 {stop_reason_display_name(user_data.get('stopped_reason'))}"
+    )
+
+
+def render_one_cafe_result_html(user_data: Mapping[str, Any]) -> str:
+    lines = [
+        _kv_html("业务结果", status_display_name(user_data.get("status"))),
+        _kv_html("停止原因", stop_reason_display_name(user_data.get("stopped_reason"))),
+        _kv_html("失败原因", failure_reason_display_name(user_data.get("failure_reason"))),
+        _kv_html("识别档案", user_data.get("profile_name")),
+        _kv_html("尝试领取收益", "是" if _coerce_bool(user_data.get("withdraw_attempted")) else "否"),
+        _kv_html("收益结果", _one_cafe_result_display_name(user_data.get("withdraw_result"))),
+        _kv_html("收益确认", "是" if _coerce_bool(user_data.get("withdraw_confirmed")) else "否"),
+        _kv_html("尝试补货", "是" if _coerce_bool(user_data.get("restock_attempted")) else "否"),
+        _kv_html("补货时长", f"{user_data.get('restock_hours', '-')} 小时"),
+        _kv_html("补货结果", _one_cafe_result_display_name(user_data.get("restock_result"))),
+        _kv_html("已返回世界", "是" if _coerce_bool(user_data.get("returned_to_world")) else "否"),
+        _kv_html("世界 HUD 识别", "是" if _coerce_bool(user_data.get("world_hud_found")) else "否"),
+        _render_one_cafe_phase_trace(user_data.get("phase_trace") or []),
+    ]
+    return "".join(lines)
+
+
 def render_cafe_loop_result_html(user_data: Mapping[str, Any]) -> str:
     lines = [
         _kv_html("业务结果", status_display_name(user_data.get("status"))),
@@ -887,6 +1009,52 @@ def render_cafe_loop_result_html(user_data: Mapping[str, Any]) -> str:
     if user_data.get("failure_message"):
         lines.insert(3, _kv_html("失败信息", user_data.get("failure_message")))
     return "".join(lines)
+
+
+def _one_cafe_result_display_name(result: Any) -> str:
+    normalized = str(result or "").strip().lower()
+    if not normalized:
+        return "-"
+    return ONE_CAFE_RESULT_LABELS.get(normalized, normalized)
+
+
+def _render_one_cafe_phase_trace(trace: Iterable[Mapping[str, Any]]) -> str:
+    tail = [dict(item) for item in list(trace)[-12:] if isinstance(item, Mapping)]
+    if not tail:
+        return "<p><b>阶段轨迹</b>：-</p>"
+    rows = [
+        "<p><b>阶段轨迹</b></p>"
+        "<table border='1' cellspacing='0' cellpadding='4'>"
+        "<tr><th>阶段</th><th>状态</th><th>结果</th><th>原始数据</th></tr>"
+    ]
+    for entry in tail:
+        phase = phase_display_name(entry.get("phase"))
+        status = status_display_name(entry.get("status")) if entry.get("status") is not None else "-"
+        result = _one_cafe_phase_result_text(entry)
+        rows.append(
+            "<tr>"
+            f"<td>{html.escape(phase)}</td>"
+            f"<td>{html.escape(status)}</td>"
+            f"<td>{html.escape(result)}</td>"
+            f"<td><pre>{html.escape(render_json(entry))}</pre></td>"
+            "</tr>"
+        )
+    rows.append("</table>")
+    return "".join(rows)
+
+
+def _one_cafe_phase_result_text(entry: Mapping[str, Any]) -> str:
+    phase = str(entry.get("phase") or "").strip()
+    if phase == "one_cafe_entry":
+        return "已进入" if _coerce_bool(entry.get("final_detection_found")) else "未确认进入"
+    if phase == "withdraw":
+        return _one_cafe_result_display_name(entry.get("result"))
+    if phase == "restock":
+        hours = entry.get("hours", "-")
+        return f"{hours} 小时 / {_one_cafe_result_display_name(entry.get('result'))}"
+    if phase == "exit":
+        return "已返回世界" if _coerce_bool(entry.get("returned_to_world")) else "未确认返回"
+    return "-"
 
 
 def _mahjong_suit_display_name(suit: Any) -> str:

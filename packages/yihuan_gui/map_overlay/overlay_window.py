@@ -1,26 +1,11 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 import ctypes
 import sys
 
 from PySide6.QtCore import QPoint, QRect, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
-from PySide6.QtWidgets import (
-    QAbstractButton,
-    QCheckBox,
-    QFrame,
-    QGridLayout,
-    QGroupBox,
-    QHBoxLayout,
-    QLabel,
-    QLineEdit,
-    QPushButton,
-    QScrollArea,
-    QSpinBox,
-    QVBoxLayout,
-    QWidget,
-)
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from .marker_projector import ProjectedItem
 from .models import (
@@ -65,6 +50,14 @@ class _MapCanvasWindow(QWidget):
         self._categories_by_id: dict[str, MapCategory] = {}
         self._label_counts: dict[str, int] = {}
         self._placed_label_rects: list[QRect] = []
+
+    @property
+    def items(self) -> list[ProjectedItem]:
+        return list(self._items)
+
+    @property
+    def match_polygon(self) -> list[tuple[float, float]]:
+        return list(self._match_polygon)
 
     def showEvent(self, event) -> None:  # noqa: N802
         super().showEvent(event)
@@ -119,7 +112,6 @@ class _MapCanvasWindow(QWidget):
                 self._draw_cluster(painter, item)
             else:
                 self._draw_marker(painter, item)
-        # Keep the legend above every marker/label so it remains readable in dense areas.
         self._draw_legend(painter)
         painter.end()
 
@@ -210,7 +202,7 @@ class _MapCanvasWindow(QWidget):
 
 class MapOverlayWindow(QWidget):
     refresh_requested = Signal()
-    settings_changed = Signal(object)
+    visibility_changed = Signal(bool)
     stop_requested = Signal()
     closed = Signal()
 
@@ -227,22 +219,7 @@ class MapOverlayWindow(QWidget):
                 border-radius: 14px;
                 color: #0f172a;
             }
-            QGroupBox {
-                border: 1px solid rgba(15, 23, 42, 42);
-                border-radius: 10px;
-                margin-top: 12px;
-                padding: 9px;
-                font-weight: 700;
-                color: #0f172a;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 5px;
-                color: #0f172a;
-                background: #f8fafc;
-            }
-            QLabel, QCheckBox {
+            QLabel {
                 color: #0f172a;
             }
             QPushButton {
@@ -255,28 +232,19 @@ class MapOverlayWindow(QWidget):
             QPushButton:hover {
                 background: #e0f2fe;
             }
-            QLineEdit, QSpinBox {
-                background: #ffffff;
-                border: 1px solid rgba(15, 23, 42, 46);
-                border-radius: 8px;
-                padding: 5px;
-                color: #0f172a;
-            }
-            QScrollArea {
-                background: transparent;
-                border: none;
-            }
             """
         )
         self._canvas = _MapCanvasWindow()
         self._data: ZeroluckMapData | None = None
         self._settings = MapOverlaySettings(enabled_categories=frozenset())
-        self._category_checks: dict[str, QCheckBox] = {}
-        self._expanded = False
         self._markers_visible = True
         self._status = "等待刷新"
         self._game_geometry = QRect(80, 80, 1280, 720)
         self._build_ui()
+
+    @property
+    def markers_visible(self) -> bool:
+        return self._markers_visible
 
     def set_game_geometry(self, geometry: tuple[int, int, int, int]) -> None:
         x, y, width, height = geometry
@@ -288,13 +256,10 @@ class MapOverlayWindow(QWidget):
         self._data = data
         self._settings = settings
         self._canvas.set_categories(data.categories)
-        self._rebuild_category_checks()
-        self._sync_settings_widgets()
 
     def set_status(self, status: str) -> None:
         self._status = status
         self._status_label.setText(status)
-        self._canvas.set_payload([], self._settings, status=status, markers_visible=False)
 
     def set_projected_items(
         self,
@@ -314,7 +279,17 @@ class MapOverlayWindow(QWidget):
             match_polygon=match_polygon,
             markers_visible=self._markers_visible,
         )
-        self._sync_settings_widgets()
+
+    def set_markers_visible(self, visible: bool) -> None:
+        self._markers_visible = bool(visible)
+        self._toggle_visible_button.setText("隐藏" if self._markers_visible else "显示")
+        self._canvas.set_payload(
+            self._canvas.items,
+            self._settings,
+            status=self._status,
+            match_polygon=self._canvas.match_polygon,
+            markers_visible=self._markers_visible,
+        )
 
     def show_overlay(self) -> None:
         self._canvas.show()
@@ -341,298 +316,30 @@ class MapOverlayWindow(QWidget):
         self._status_label.setMinimumWidth(180)
         self._refresh_button = QPushButton("刷新", self)
         self._toggle_visible_button = QPushButton("隐藏", self)
-        self._settings_button = QPushButton("设置", self)
+        self._stop_button = QPushButton("关闭", self)
         self._refresh_button.clicked.connect(self.refresh_requested.emit)
         self._toggle_visible_button.clicked.connect(self._toggle_markers_visible)
-        self._settings_button.clicked.connect(self._toggle_expanded)
+        self._stop_button.clicked.connect(self.stop_requested.emit)
         control_row.addWidget(self._status_label, 1)
         control_row.addWidget(self._refresh_button)
         control_row.addWidget(self._toggle_visible_button)
-        control_row.addWidget(self._settings_button)
+        control_row.addWidget(self._stop_button)
         self._root_layout.addLayout(control_row)
-
-        self._drawer_scroll = QScrollArea(self)
-        self._drawer_scroll.setWidgetResizable(True)
-        self._drawer_scroll.setFrameShape(QFrame.NoFrame)
-        self._drawer_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self._drawer_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-
-        self._drawer = QFrame(self._drawer_scroll)
-        drawer_layout = QVBoxLayout(self._drawer)
-        drawer_layout.setContentsMargins(0, 0, 0, 0)
-        drawer_layout.setSpacing(8)
-        self._drawer_scroll.setWidget(self._drawer)
-
-        data_group = QGroupBox("数据源", self._drawer)
-        data_layout = QVBoxLayout(data_group)
-        self._data_label = QLabel("ZeroLuck 离线快照", data_group)
-        self._data_label.setWordWrap(True)
-        self._stop_button = QPushButton("停止任务", data_group)
-        self._stop_button.setToolTip("关闭当前大地图点位悬浮层。")
-        self._stop_button.clicked.connect(self.stop_requested.emit)
-        data_layout.addWidget(self._data_label)
-        data_layout.addWidget(self._stop_button)
-        drawer_layout.addWidget(data_group)
-
-        filter_group = QGroupBox("ZeroLuck 分类筛选", self._drawer)
-        filter_layout = QVBoxLayout(filter_group)
-        quick_row = QHBoxLayout()
-        all_button = QPushButton("全选", filter_group)
-        none_button = QPushButton("全不选", filter_group)
-        default_button = QPushButton("恢复默认", filter_group)
-        all_button.clicked.connect(lambda: self._set_all_categories(True))
-        none_button.clicked.connect(lambda: self._set_all_categories(False))
-        default_button.clicked.connect(self._restore_default_categories)
-        quick_row.addWidget(all_button)
-        quick_row.addWidget(none_button)
-        quick_row.addWidget(default_button)
-        filter_layout.addLayout(quick_row)
-        self._search_edit = QLineEdit(filter_group)
-        self._search_edit.setPlaceholderText("搜索点位标题、分类或 ID")
-        self._search_edit.textChanged.connect(self._on_settings_widget_changed)
-        filter_layout.addWidget(self._search_edit)
-        self._category_scroll = QScrollArea(filter_group)
-        self._category_scroll.setWidgetResizable(True)
-        self._category_scroll.setMinimumHeight(120)
-        self._category_scroll.setMaximumHeight(180)
-        self._category_panel = QWidget(self._category_scroll)
-        self._category_layout = QVBoxLayout(self._category_panel)
-        self._category_layout.setContentsMargins(0, 0, 0, 0)
-        self._category_scroll.setWidget(self._category_panel)
-        filter_layout.addWidget(self._category_scroll, 1)
-        drawer_layout.addWidget(filter_group, 1)
-
-        display_group = QGroupBox("显示设置", self._drawer)
-        grid = QGridLayout(display_group)
-        self._show_labels_check = QCheckBox("显示标签", display_group)
-        self._cluster_check = QCheckBox("启用聚合", display_group)
-        self._viewport_only_check = QCheckBox("只显示当前视野点位", display_group)
-        self._auto_refresh_check = QCheckBox("定时完整刷新（实验）", display_group)
-        self._debug_confidence_check = QCheckBox("显示匹配置信度", display_group)
-        self._debug_bounds_check = QCheckBox("显示匹配边界框", display_group)
-        self._icon_size_spin = QSpinBox(display_group)
-        self._icon_size_spin.setRange(6, 32)
-        self._label_size_spin = QSpinBox(display_group)
-        self._label_size_spin.setRange(8, 24)
-        self._auto_stop_spin = QSpinBox(display_group)
-        self._auto_stop_spin.setRange(-1, 3600)
-        self._auto_stop_spin.setSpecialValueText("-1 不自动停止")
-        checks: list[QAbstractButton] = [
-            self._show_labels_check,
-            self._cluster_check,
-            self._viewport_only_check,
-            self._auto_refresh_check,
-            self._debug_confidence_check,
-            self._debug_bounds_check,
-        ]
-        for button in checks:
-            button.toggled.connect(self._on_settings_widget_changed)
-        self._icon_size_spin.valueChanged.connect(self._on_settings_widget_changed)
-        self._label_size_spin.valueChanged.connect(self._on_settings_widget_changed)
-        self._auto_stop_spin.valueChanged.connect(self._on_settings_widget_changed)
-        grid.addWidget(self._show_labels_check, 0, 0)
-        grid.addWidget(self._cluster_check, 0, 1)
-        grid.addWidget(self._viewport_only_check, 1, 0, 1, 2)
-        grid.addWidget(QLabel("图标大小", display_group), 2, 0)
-        grid.addWidget(self._icon_size_spin, 2, 1)
-        grid.addWidget(QLabel("标签字号", display_group), 3, 0)
-        grid.addWidget(self._label_size_spin, 3, 1)
-        grid.addWidget(self._auto_refresh_check, 4, 0, 1, 2)
-        grid.addWidget(QLabel("自动停止秒数", display_group), 5, 0)
-        grid.addWidget(self._auto_stop_spin, 5, 1)
-        grid.addWidget(self._debug_confidence_check, 6, 0, 1, 2)
-        grid.addWidget(self._debug_bounds_check, 7, 0, 1, 2)
-        drawer_layout.addWidget(display_group)
-
-        auto_group = QGroupBox("自动标注", self._drawer)
-        auto_grid = QGridLayout(auto_group)
-        self._auto_detect_check = QCheckBox("打开大地图后自动标注", auto_group)
-        self._auto_rematch_check = QCheckBox("地图变化后自动重新匹配", auto_group)
-        self._map_watch_interval_spin = QSpinBox(auto_group)
-        self._map_watch_interval_spin.setRange(300, 5000)
-        self._map_watch_interval_spin.setSingleStep(100)
-        self._map_watch_interval_spin.setSuffix(" ms")
-        self._match_cooldown_spin = QSpinBox(auto_group)
-        self._match_cooldown_spin.setRange(500, 15000)
-        self._match_cooldown_spin.setSingleStep(100)
-        self._match_cooldown_spin.setSuffix(" ms")
-        self._auto_detect_check.toggled.connect(self._on_settings_widget_changed)
-        self._auto_rematch_check.toggled.connect(self._on_settings_widget_changed)
-        self._map_watch_interval_spin.valueChanged.connect(self._on_settings_widget_changed)
-        self._match_cooldown_spin.valueChanged.connect(self._on_settings_widget_changed)
-        auto_grid.addWidget(self._auto_detect_check, 0, 0, 1, 2)
-        auto_grid.addWidget(self._auto_rematch_check, 1, 0, 1, 2)
-        auto_grid.addWidget(QLabel("监听间隔", auto_group), 2, 0)
-        auto_grid.addWidget(self._map_watch_interval_spin, 2, 1)
-        auto_grid.addWidget(QLabel("匹配冷却", auto_group), 3, 0)
-        auto_grid.addWidget(self._match_cooldown_spin, 3, 1)
-        drawer_layout.addWidget(auto_group)
-
-        self._root_layout.addWidget(self._drawer_scroll, 1)
-        self._drawer_scroll.setVisible(False)
-        self._drawer_scroll.setMaximumHeight(0)
-        self._reposition_control()
-
-    def _rebuild_category_checks(self) -> None:
-        _clear_layout(self._category_layout)
-        self._category_checks.clear()
-        if self._data is None:
-            return
-        for category in self._data.categories:
-            checkbox = QCheckBox(
-                f"{category.display_name}  ({category.total or _count_category(self._data, category.id)})",
-                self._category_panel,
-            )
-            checkbox.setToolTip(f"{category.name_en}\n{category.id}")
-            checkbox.setChecked(category.id in self._settings.enabled_categories)
-            checkbox.toggled.connect(self._on_category_toggled)
-            self._category_checks[category.id] = checkbox
-            self._category_layout.addWidget(checkbox)
-        self._category_layout.addStretch(1)
-        snapshot_text = "ZeroLuck 离线快照"
-        if self._data.fetched_at:
-            snapshot_text += f"\n生成时间：{self._data.fetched_at.isoformat()}"
-        snapshot_text += f"\n分类：{len(self._data.categories)}，点位：{self._data.marker_count}"
-        self._data_label.setText(snapshot_text)
-
-    def _sync_settings_widgets(self) -> None:
-        blockers: list[Callable[[], None]] = []
-        for widget in (
-            self._search_edit,
-            self._show_labels_check,
-            self._cluster_check,
-            self._viewport_only_check,
-            self._auto_refresh_check,
-            self._auto_detect_check,
-            self._auto_rematch_check,
-            self._debug_confidence_check,
-            self._debug_bounds_check,
-            self._icon_size_spin,
-            self._label_size_spin,
-            self._map_watch_interval_spin,
-            self._match_cooldown_spin,
-            self._auto_stop_spin,
-        ):
-            widget.blockSignals(True)
-            blockers.append(lambda widget=widget: widget.blockSignals(False))
-        self._search_edit.setText(self._settings.search_text)
-        self._show_labels_check.setChecked(self._settings.show_labels)
-        self._cluster_check.setChecked(self._settings.cluster_enabled)
-        self._viewport_only_check.setChecked(self._settings.viewport_only)
-        self._auto_refresh_check.setChecked(self._settings.auto_refresh_enabled)
-        self._auto_detect_check.setChecked(self._settings.auto_detect_map_enabled)
-        self._auto_rematch_check.setChecked(self._settings.auto_rematch_on_map_change)
-        self._debug_confidence_check.setChecked(self._settings.debug_show_confidence)
-        self._debug_bounds_check.setChecked(self._settings.debug_show_match_bounds)
-        self._icon_size_spin.setValue(self._settings.icon_size)
-        self._label_size_spin.setValue(self._settings.label_size)
-        self._map_watch_interval_spin.setValue(self._settings.map_watch_interval_ms)
-        self._match_cooldown_spin.setValue(self._settings.match_cooldown_ms)
-        self._auto_stop_spin.setValue(self._settings.auto_stop_seconds)
-        for category_id, checkbox in self._category_checks.items():
-            checkbox.blockSignals(True)
-            checkbox.setChecked(category_id in self._settings.enabled_categories)
-            checkbox.blockSignals(False)
-        for unblock in blockers:
-            unblock()
-
-    def _toggle_expanded(self) -> None:
-        self._expanded = not self._expanded
-        self._drawer_scroll.setVisible(self._expanded)
-        self._drawer_scroll.setMaximumHeight(16777215 if self._expanded else 0)
-        self._settings_button.setText("设置")
         self._reposition_control()
 
     def _toggle_markers_visible(self) -> None:
-        self._markers_visible = not self._markers_visible
-        self._toggle_visible_button.setText("隐藏" if self._markers_visible else "显示")
-        self._canvas.set_payload(
-            self._canvas._items,  # noqa: SLF001 - same UI component, avoids extra state duplication.
-            self._settings,
-            status=self._status,
-            match_polygon=self._canvas._match_polygon,  # noqa: SLF001
-            markers_visible=self._markers_visible,
-        )
+        self.set_markers_visible(not self._markers_visible)
+        self.visibility_changed.emit(self._markers_visible)
 
     def _reposition_control(self) -> None:
-        width = min(480, max(360, self._game_geometry.width() - 32)) if self._expanded else 360
-        height = 720 if self._expanded else 56
-        height = min(height, max(56, self._game_geometry.height() - 28))
-        if self._expanded:
-            self.setMinimumSize(0, 0)
-            self.setMaximumSize(16777215, 16777215)
-            self.setFixedSize(width, height)
-            self._drawer_scroll.setVisible(True)
-            self._drawer_scroll.setMaximumHeight(max(1, height - 74))
-        else:
-            self._drawer_scroll.setVisible(False)
-            self._drawer_scroll.setMaximumHeight(0)
-            self.setMinimumSize(0, 0)
-            self.setMaximumSize(16777215, 16777215)
-            self.setFixedSize(width, height)
+        width = min(480, max(360, self._game_geometry.width() - 32))
+        height = 56
+        self.setMinimumSize(0, 0)
+        self.setMaximumSize(16777215, 16777215)
+        self.setFixedSize(width, height)
         x = self._game_geometry.right() - width - 16
         y = self._game_geometry.top() + 14
         self.move(max(self._game_geometry.left() + 8, x), y)
-
-    def _current_settings_from_widgets(self) -> MapOverlaySettings:
-        enabled = frozenset(category_id for category_id, checkbox in self._category_checks.items() if checkbox.isChecked())
-        return MapOverlaySettings(
-            enabled_categories=enabled,
-            search_text=self._search_edit.text(),
-            show_labels=self._show_labels_check.isChecked(),
-            cluster_enabled=self._cluster_check.isChecked(),
-            icon_size=self._icon_size_spin.value(),
-            label_size=self._label_size_spin.value(),
-            viewport_only=self._viewport_only_check.isChecked(),
-            auto_refresh_enabled=self._auto_refresh_check.isChecked(),
-            auto_detect_map_enabled=self._auto_detect_check.isChecked(),
-            auto_rematch_on_map_change=self._auto_rematch_check.isChecked(),
-            map_watch_interval_ms=self._map_watch_interval_spin.value(),
-            match_cooldown_ms=self._match_cooldown_spin.value(),
-            auto_stop_seconds=self._auto_stop_spin.value(),
-            debug_show_confidence=self._debug_confidence_check.isChecked(),
-            debug_show_match_bounds=self._debug_bounds_check.isChecked(),
-            debug_save_screenshot=False,
-        )
-
-    def _on_category_toggled(self, *_args: object) -> None:
-        self._emit_settings_changed()
-
-    def _on_settings_widget_changed(self, *_args: object) -> None:
-        self._emit_settings_changed()
-
-    def _emit_settings_changed(self) -> None:
-        self._settings = self._current_settings_from_widgets()
-        self.settings_changed.emit(self._settings)
-
-    def _set_all_categories(self, checked: bool) -> None:
-        for checkbox in self._category_checks.values():
-            checkbox.blockSignals(True)
-            checkbox.setChecked(checked)
-            checkbox.blockSignals(False)
-        self._emit_settings_changed()
-
-    def _restore_default_categories(self) -> None:
-        if self._data is None:
-            return
-        defaults = {category.id for category in self._data.categories if category.default_visible}
-        for category_id, checkbox in self._category_checks.items():
-            checkbox.blockSignals(True)
-            checkbox.setChecked(category_id in defaults)
-            checkbox.blockSignals(False)
-        self._emit_settings_changed()
-
-
-def _clear_layout(layout: QVBoxLayout) -> None:
-    while layout.count():
-        item = layout.takeAt(0)
-        widget = item.widget()
-        if widget is not None:
-            widget.deleteLater()
-
-
-def _count_category(data: ZeroluckMapData, category_id: str) -> int:
-    return sum(1 for marker in data.markers if marker.category_id == category_id)
 
 
 def _label_counts(items: list[ProjectedItem]) -> dict[str, int]:
