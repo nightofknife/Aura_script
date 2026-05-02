@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import defaultdict, deque
 from typing import Any
 
 from PySide6.QtCore import QObject, QTimer, Signal, Slot
@@ -33,12 +33,17 @@ class RunnerBridge(QObject):
     control_message = Signal(object)
     error_occurred = Signal(object)
 
+    _MAX_EVENT_CACHE_RUNS = 64
+    _MAX_EVENT_CACHE_EVENTS_PER_RUN = 200
+
     def __init__(self, preferences: GuiPreferences) -> None:
         super().__init__()
         self._runner: SubprocessGameRunner | None = None
         self._poll_timer: QTimer | None = None
         self._live_state = LiveUiState()
-        self._event_cache: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        self._event_cache: dict[str, deque[dict[str, Any]]] = defaultdict(
+            lambda: deque(maxlen=self._MAX_EVENT_CACHE_EVENTS_PER_RUN)
+        )
         self._pending_detail_cids: set[str] = set()
         self._preferences = preferences
 
@@ -121,7 +126,7 @@ class RunnerBridge(QObject):
         dispatch["_task_ref"] = task_ref
         cid = str(dispatch.get("cid") or "").strip()
         if cid:
-            self._event_cache.setdefault(cid, [])
+            self._event_cache[cid]
         self.task_dispatched.emit(dispatch)
 
     @Slot(str)
@@ -169,7 +174,8 @@ class RunnerBridge(QObject):
             payload = dict(event.get("payload") or {})
             cid = str(payload.get("cid") or "").strip()
             if cid:
-                self._event_cache.setdefault(cid, []).append(event)
+                self._event_cache[cid].append(event)
+                self._prune_event_cache(protected_cid=cid)
 
         self.event_batch_received.emit(accepted)
         self._live_state, finished_cids = reduce_live_events(self._live_state, accepted)
@@ -209,6 +215,7 @@ class RunnerBridge(QObject):
             elif task_name == TASK_RUNTIME_PROBE and isinstance(user_data, dict):
                 self.runtime_probe_ready.emit(dict(user_data))
             self._pending_detail_cids.discard(cid)
+            self._event_cache.pop(cid, None)
             refreshed_history = True
 
         if refreshed_history:
@@ -268,6 +275,8 @@ class RunnerBridge(QObject):
             self._poll_timer.stop()
             self._poll_timer.deleteLater()
             self._poll_timer = None
+        self._pending_detail_cids.clear()
+        self._event_cache.clear()
         if self._runner is not None:
             try:
                 self._runner.close()
@@ -299,3 +308,12 @@ class RunnerBridge(QObject):
                 "message": message,
             }
         )
+
+    def _prune_event_cache(self, protected_cid: str | None = None) -> None:
+        active_cids = set(self._live_state.active_runs.keys()) | set(self._pending_detail_cids)
+        if protected_cid:
+            active_cids.add(str(protected_cid))
+        stale_cids = [cid for cid in list(self._event_cache.keys()) if cid not in active_cids]
+        while len(self._event_cache) > self._MAX_EVENT_CACHE_RUNS and stale_cids:
+            cid = stale_cids.pop(0)
+            self._event_cache.pop(cid, None)

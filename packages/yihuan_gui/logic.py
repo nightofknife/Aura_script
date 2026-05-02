@@ -13,7 +13,7 @@ TASK_RUNTIME_PROBE = "tasks:checks:runtime_probe.yaml"
 TASK_AUTO_LOOP = "tasks:fishing:auto_loop.yaml"
 TASK_LIVE_MONITOR = "tasks:fishing:live_monitor.yaml"
 TASK_CAFE_AUTO_LOOP = "tasks:cafe:auto_loop.yaml"
-TASK_ONE_CAFE_REVENUE_RESTOCK = "tasks:one_cafe/revenue_restock.yaml"
+TASK_ONE_CAFE_REVENUE_RESTOCK = "tasks:one_cafe:revenue_restock.yaml"
 TASK_MAHJONG_AUTO_LOOP = "tasks:mahjong:auto_loop.yaml"
 
 VISIBLE_HISTORY_TASK_REFS = (
@@ -67,6 +67,7 @@ STOP_REASON_LABELS = {
     "world_return_failed": "返回世界场景失败",
     "unknown_withdraw_state": "收益领取状态未知",
     "unknown_restock_state": "补货状态未知",
+    "cancelled": "用户停止",
 }
 
 FAILURE_REASON_LABELS = {
@@ -84,6 +85,7 @@ FAILURE_REASON_LABELS = {
     "world_return_failed": "返回世界场景失败",
     "unknown_withdraw_state": "收益领取状态未知",
     "unknown_restock_state": "补货状态未知",
+    "cancelled": "用户停止",
     "none": "无",
 }
 
@@ -204,6 +206,17 @@ RUNTIME_CODE_LABELS = {
     "input_backend_invalid_for_provider": "当前 provider 不支持该输入后端",
     "input_integrity_mismatch": "当前进程权限级别不足，无法驱动目标窗口输入",
 }
+
+RUNTIME_CODE_LABELS.update(
+    {
+        "windows_capture_api_missing": "WGC 截图模块缺少 WindowsCapture 接口",
+        "windows_capture_frame_timeout": "WGC 截图在规定时间内未获取到新鲜帧图",
+        "windows_capture_frame_unavailable": "WGC 截图会话尚未产生可用帧图",
+        "windows_capture_session_closed": "WGC 截图会话已关闭",
+        "windows_capture_session_error": "WGC 截图会话进入错误状态",
+        "windows_capture_session_stopped": "WGC 截图会话已停止，需要重建",
+    }
+)
 
 EVENT_LABELS = {
     "scheduler.started": "调度器已启动",

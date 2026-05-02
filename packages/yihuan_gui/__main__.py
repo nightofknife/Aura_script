@@ -18,7 +18,8 @@ def _infer_release_root() -> Path:
 def _prepare_release_environment() -> Path:
     root = _infer_release_root()
     os.environ.setdefault("AURA_BASE_PATH", str(root))
-    os.environ.setdefault("PYTHONNOUSERSITE", "1")
+    if getattr(sys, "frozen", False):
+        os.environ.setdefault("PYTHONNOUSERSITE", "1")
 
     root_text = str(root)
     if root_text not in sys.path:
