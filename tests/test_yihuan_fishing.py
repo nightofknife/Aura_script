@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import itertools
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -17,11 +18,22 @@ from plans.yihuan.src.services.fishing_service import YihuanFishingService
 class _FakeApp:
     def __init__(self):
         self.click_calls: list[tuple[int, int, str]] = []
+        self.move_calls: list[tuple[int, int]] = []
+        self.mouse_events: list[tuple[str, str]] = []
         self.release_all_calls = 0
         self._image = np.zeros((720, 1280, 3), dtype=np.uint8)
 
     def click(self, x=None, y=None, button="left", clicks=1, interval=None):
         self.click_calls.append((int(x), int(y), str(button)))
+
+    def move_to(self, x, y, duration=None):
+        self.move_calls.append((int(x), int(y)))
+
+    def mouse_down(self, button="left"):
+        self.mouse_events.append(("down", str(button)))
+
+    def mouse_up(self, button="left"):
+        self.mouse_events.append(("up", str(button)))
 
     def release_all(self):
         self.release_all_calls += 1
@@ -351,6 +363,8 @@ class TestYihuanFishingActions(unittest.TestCase):
         cached["duel_timeout_sec"] = 0.1
         cached["hook_timeout_sec"] = 1.0
         cached["post_duel_click_interval_ms"] = 10
+        cached["post_duel_close_interval_ms"] = 10
+        cached["post_duel_ready_stable_sec"] = 0.0
         cached["control_min_interval_ms"] = 0
         cached["control_reverse_gap_ms"] = 0
         cached["control_hold_grace_ms"] = 0
@@ -516,6 +530,67 @@ class TestYihuanFishingActions(unittest.TestCase):
         self.assertEqual(result["failure_reason"], "hook_timeout")
         self.assertIn(("fish_interact", "press", "default_1280x720_cn"), self.input_mapping.calls)
 
+    @patch("plans.yihuan.src.actions.fishing_actions._fishing_cancel_requested", return_value=True)
+    def test_run_round_returns_cancelled_before_capture(self, _cancel_requested):
+        result = fishing_actions._run_fishing_round_impl(
+            app=self.app,
+            ocr=None,
+            vision=self.vision,
+            input_mapping=self.input_mapping,
+            yihuan_fishing=self.service,
+            round_index=1,
+            profile_name="default_1280x720_cn",
+            bite_timeout_sec=0.0,
+            duel_timeout_sec=0.0,
+        )
+
+        self.assertEqual(result["status"], "cancelled")
+        self.assertEqual(result["failure_reason"], "cancelled")
+        self.assertEqual(self.app.release_all_calls, 1)
+
+    @patch("plans.yihuan.src.actions.fishing_actions._fishing_cancel_requested", return_value=True)
+    def test_hook_wait_returns_cancelled(self, _cancel_requested):
+        result = fishing_actions._wait_for_hook_success(
+            self.app,
+            self.vision,
+            self.input_mapping,
+            self.service,
+            profile=self.service.load_profile(),
+            profile_name="default_1280x720_cn",
+            phase_trace=[],
+            start_time=0.0,
+            poll_sec=0.08,
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertTrue(result["cancelled"])
+        self.assertEqual(result["failure_reason"], "cancelled")
+
+    def test_run_session_stops_when_round_returns_cancelled(self):
+        cancelled_round = {
+            "status": "cancelled",
+            "round_index": 1,
+            "failure_reason": "cancelled",
+            "phase_trace": [],
+            "timings": {},
+        }
+
+        with patch("plans.yihuan.src.actions.fishing_actions._run_fishing_round_impl", return_value=cancelled_round):
+            result = fishing_actions.yihuan_fishing_run_session(
+                app=self.app,
+                ocr=None,
+                vision=self.vision,
+                input_mapping=self.input_mapping,
+                yihuan_fishing=self.service,
+                max_rounds=3,
+                profile_name="default_1280x720_cn",
+            )
+
+        self.assertEqual(result["status"], "cancelled")
+        self.assertEqual(result["stopped_reason"], "cancelled")
+        self.assertEqual(result["round_count"], 1)
+        self.assertEqual(result["failure_count"], 0)
+
     @patch("plans.yihuan.src.actions.fishing_actions.time.sleep", return_value=None)
     def test_run_round_reports_duel_timeout(self, _sleep):
         state_sequence = iter([
@@ -596,6 +671,7 @@ class TestYihuanFishingActions(unittest.TestCase):
                 },
             },
             {"phase": "result", "control_advice": "none", "duel": {}},
+            {"phase": "unknown", "control_advice": "none", "duel": {}},
             {"phase": "ready", "control_advice": "none", "duel": {}},
         ])
 
@@ -617,7 +693,7 @@ class TestYihuanFishingActions(unittest.TestCase):
                 )
 
         self.assertEqual(result["status"], "success")
-        self.assertEqual(self.app.click_calls[-1], (300, 600, "left"))
+        self.assertIn(("menu_back", "press", "default_1280x720_cn"), self.input_mapping.calls)
         self.assertIn(("fish_right", "hold", "default_1280x720_cn"), self.input_mapping.calls)
         self.assertIn(("fish_right", "release", "default_1280x720_cn"), self.input_mapping.calls)
 
@@ -705,7 +781,45 @@ class TestYihuanFishingActions(unittest.TestCase):
                 ("fish_left", "release", "default_1280x720_cn"),
             ],
         )
-        self.assertEqual(self.app.click_calls[-1], (300, 600, "left"))
+        self.assertNotIn(("menu_back", "press", "default_1280x720_cn"), self.input_mapping.calls)
+
+    @patch("plans.yihuan.src.actions.fishing_actions.time.sleep", return_value=None)
+    def test_post_duel_cleanup_requires_stable_ready_template(self, _sleep):
+        cached = dict(self.service._profile_cache["default_1280x720_cn"])
+        cached["post_duel_close_interval_ms"] = 1000
+        cached["post_duel_ready_stable_sec"] = 0.2
+        self.service._profile_cache["default_1280x720_cn"] = cached
+
+        ready_state = {"phase": "ready", "control_advice": "none", "duel": {}}
+        unknown_state = {"phase": "unknown", "control_advice": "none", "duel": {}}
+        monotonic_values = itertools.count(step=0.05)
+
+        with patch(
+            "plans.yihuan.src.actions.fishing_actions._read_state_snapshot",
+            side_effect=[unknown_state, ready_state, ready_state, ready_state, ready_state, ready_state],
+        ) as read_state:
+            with patch(
+                "plans.yihuan.src.actions.fishing_actions.time.monotonic",
+                side_effect=lambda: next(monotonic_values),
+            ):
+                result = fishing_actions._run_post_duel_cleanup(
+                    self.app,
+                    ocr=None,
+                    vision=self.vision,
+                    input_mapping=self.input_mapping,
+                    yihuan_fishing=self.service,
+                    profile_name="default_1280x720_cn",
+                    phase_trace=[],
+                    start_time=0.0,
+                    cleanup_timeout_sec=1.0,
+                )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["ready_stable_required_sec"], 0.2)
+        self.assertGreaterEqual(result["ready_stable_elapsed_sec"], 0.2)
+        self.assertGreater(read_state.call_count, 1)
+        self.assertEqual(self.input_mapping.calls, [("menu_back", "press", "default_1280x720_cn")])
+        self.assertEqual(self.app.click_calls, [])
 
     @patch("plans.yihuan.src.actions.fishing_actions.time.sleep", return_value=None)
     def test_run_round_uses_tap_inside_zone_after_releasing_hold(self, _sleep):
@@ -914,8 +1028,42 @@ class TestYihuanFishingActions(unittest.TestCase):
         self.assertEqual(self.app.release_all_calls, 1)
 
     @patch("plans.yihuan.src.actions.fishing_actions.time.sleep", return_value=None)
-    def test_buy_universal_bait_retries_max_count_click(self, _sleep):
+    def test_sell_fish_uses_held_mouse_clicks(self, _sleep):
         profile = dict(self.service.load_profile())
+        profile["sell_click_hold_ms"] = 100
+        profile["sell_success_close_clicks"] = 1
+
+        with patch("plans.yihuan.src.actions.fishing_actions._wait_for_profile_template") as wait_template:
+            wait_template.side_effect = [
+                {"found": True, "confidence": 0.91},
+                {"found": True, "confidence": 0.92},
+            ]
+            with patch("plans.yihuan.src.actions.fishing_actions._wait_for_ready_template") as wait_ready:
+                wait_ready.return_value = {"ok": True, "state": {"phase": "ready"}}
+                result = fishing_actions._run_sell_fish_before_buy_bait(
+                    self.app,
+                    ocr=None,
+                    vision=self.vision,
+                    input_mapping=self.input_mapping,
+                    yihuan_fishing=self.service,
+                    profile=profile,
+                    profile_name="default_1280x720_cn",
+                    phase_trace=[],
+                    start_time=0.0,
+                )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["status"], "sold")
+        self.assertIn(tuple(profile["sell_one_click_point"]), self.app.move_calls)
+        self.assertIn(tuple(profile["sell_confirm_point"]), self.app.move_calls)
+        self.assertEqual(self.app.click_calls, [])
+        self.assertEqual(self.app.mouse_events.count(("down", "left")), 4)
+        self.assertEqual(self.app.mouse_events.count(("up", "left")), 4)
+
+    @patch("plans.yihuan.src.actions.fishing_actions.time.sleep", return_value=None)
+    def test_buy_universal_bait_uses_held_mouse_clicks(self, _sleep):
+        profile = dict(self.service.load_profile())
+        profile["bait_click_hold_ms"] = 100
         profile["bait_max_clicks"] = 3
         profile["bait_max_click_interval_ms"] = 350
         profile["bait_item_after_wait_ms"] = 800
@@ -938,15 +1086,23 @@ class TestYihuanFishingActions(unittest.TestCase):
                 )
 
         self.assertTrue(result["ok"])
-        max_clicks = [call for call in self.app.click_calls if call[:2] == tuple(profile["bait_max_point"])]
-        self.assertEqual(len(max_clicks), 3)
+        max_moves = [call for call in self.app.move_calls if call == tuple(profile["bait_max_point"])]
+        self.assertEqual(len(max_moves), 3)
+        self.assertIn(tuple(profile["bait_item_point"]), self.app.move_calls)
+        self.assertIn(tuple(profile["bait_buy_point"]), self.app.move_calls)
+        self.assertIn(tuple(profile["bait_confirm_point"]), self.app.move_calls)
+        self.assertIn(tuple(profile["bait_success_close_point"]), self.app.move_calls)
+        self.assertEqual(self.app.click_calls, [])
+        expected_clicks = 1 + 3 + 1 + 1 + int(profile["bait_success_close_clicks"])
+        self.assertEqual(self.app.mouse_events.count(("down", "left")), expected_clicks)
+        self.assertEqual(self.app.mouse_events.count(("up", "left")), expected_clicks)
         max_step = next(step for step in result["steps"] if step["step"] == "max_count")
         self.assertEqual(max_step["clicks"], 3)
         self.assertEqual(max_step["click_interval_ms"], 350)
         self.assertEqual(max_step["after_wait_ms"], 800)
         wait_template.assert_called_once()
-        confirm_index = self.app.click_calls.index((profile["bait_confirm_point"][0], profile["bait_confirm_point"][1], "left"))
-        buy_index = self.app.click_calls.index((profile["bait_buy_point"][0], profile["bait_buy_point"][1], "left"))
+        confirm_index = self.app.move_calls.index(tuple(profile["bait_confirm_point"]))
+        buy_index = self.app.move_calls.index(tuple(profile["bait_buy_point"]))
         self.assertGreater(confirm_index, buy_index)
 
     @patch("plans.yihuan.src.actions.fishing_actions.time.sleep", return_value=None)
@@ -1067,6 +1223,71 @@ class TestYihuanFishingActions(unittest.TestCase):
         self.assertEqual(result["success_count"], 1)
         self.assertEqual(result["active_sell_count"], 1)
         self.assertEqual(result["active_sell_failure_count"], 1)
+
+    def test_round_result_trims_phase_trace_and_reports_metadata(self):
+        phase_trace = fishing_actions._new_bounded_buffer(3, default=3)
+        for index in range(5):
+            phase_trace.append({"t_ms": index, "phase": f"phase-{index}"})
+
+        result = fishing_actions._round_result(
+            "success",
+            7,
+            phase_trace,
+            None,
+            {"total_sec": 0.0},
+            time.monotonic(),
+        )
+
+        self.assertEqual(result["phase_trace_limit"], 3)
+        self.assertEqual(result["phase_trace_truncated_count"], 2)
+        self.assertEqual(len(result["phase_trace"]), 3)
+        self.assertEqual([entry["phase"] for entry in result["phase_trace"]], ["phase-2", "phase-3", "phase-4"])
+
+    def test_run_session_trims_results_and_active_sell_history(self):
+        round_results = [
+            {"status": "success", "round_index": 1, "phase_trace": [], "failure_reason": None, "timings": {}},
+            {"status": "success", "round_index": 2, "phase_trace": [], "failure_reason": None, "timings": {}},
+            {"status": "success", "round_index": 3, "phase_trace": [], "failure_reason": None, "timings": {}},
+            {"status": "success", "round_index": 4, "phase_trace": [], "failure_reason": None, "timings": {}},
+        ]
+        sell_result = {"ok": True, "status": "sold", "steps": [], "state": {"phase": "ready"}}
+        profile = dict(self.service.load_profile())
+        profile["session_results_limit"] = 2
+        profile["active_sell_results_limit"] = 1
+        profile["trace_limit"] = 2
+
+        with (
+            patch.object(self.service, "load_profile", return_value=profile),
+            patch("plans.yihuan.src.actions.fishing_actions._run_fishing_round_impl", side_effect=round_results) as run_round,
+            patch(
+                "plans.yihuan.src.actions.fishing_actions._run_sell_fish_before_buy_bait",
+                return_value=dict(sell_result),
+            ) as sell,
+        ):
+            result = fishing_actions.yihuan_fishing_run_session(
+                app=self.app,
+                ocr=None,
+                vision=self.vision,
+                input_mapping=self.input_mapping,
+                yihuan_fishing=self.service,
+                max_rounds=4,
+                profile_name="default_1280x720_cn",
+                sell_fish_every_rounds=1,
+            )
+
+        self.assertEqual(run_round.call_count, 4)
+        self.assertEqual(sell.call_count, 4)
+        self.assertEqual(result["round_count"], 4)
+        self.assertEqual(result["results_limit"], 2)
+        self.assertEqual(result["results_retained_count"], 2)
+        self.assertEqual(result["results_truncated_count"], 2)
+        self.assertEqual([item["round_index"] for item in result["results"]], [3, 4])
+        self.assertEqual(result["active_sell_results_limit"], 1)
+        self.assertEqual(result["active_sell_results_retained_count"], 1)
+        self.assertEqual(result["active_sell_results_truncated_count"], 3)
+        self.assertEqual(result["active_sell_count"], 4)
+        self.assertEqual(result["active_sell_results"][0]["trigger_round_index"], 4)
+        self.assertEqual(result["results"][-1]["active_sell_result"]["phase_trace_limit"], 2)
 
     @patch("plans.yihuan.src.actions.fishing_actions._close_debug_window")
     @patch("plans.yihuan.src.actions.fishing_actions._save_monitor_debug_frame", return_value="D:/tmp/frame_000.png")

@@ -11,12 +11,57 @@ import cv2
 
 from packages.aura_core.api import action_info, requires_services
 from packages.aura_core.observability.logging.core_logger import logger
+from packages.aura_core.scheduler.cancellation import is_current_task_cancel_requested
 
 from ..services.fishing_service import YihuanFishingService
 
 
 _DEBUG_WINDOW_NAME = "Yihuan Fishing Duel Debug"
 _LIVE_MONITOR_WINDOW_NAME = "Yihuan Fishing Live Monitor"
+
+
+class _BoundedResultBuffer(list[dict[str, Any]]):
+    def __init__(self, limit: int) -> None:
+        super().__init__()
+        self.limit = max(int(limit), 1)
+        self.dropped_count = 0
+        self.total_count = 0
+
+    def append(self, item: dict[str, Any]) -> None:  # type: ignore[override]
+        self.total_count += 1
+        super().append(item)
+        overflow = len(self) - self.limit
+        if overflow > 0:
+            del self[:overflow]
+            self.dropped_count += overflow
+
+
+def _new_bounded_buffer(limit: Any, *, default: int) -> _BoundedResultBuffer:
+    return _BoundedResultBuffer(max(_non_negative_int(limit, default=default), 1))
+
+
+def _bounded_buffer_meta(buffer: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int | None, int]:
+    items = list(buffer)
+    if isinstance(buffer, _BoundedResultBuffer):
+        return items, int(buffer.limit), int(buffer.dropped_count)
+    return items, None, 0
+
+
+def _apply_phase_trace_payload(result: dict[str, Any], phase_trace: list[dict[str, Any]]) -> dict[str, Any]:
+    trace_items, trace_limit, truncated_count = _bounded_buffer_meta(phase_trace)
+    result["phase_trace"] = trace_items
+    if trace_limit is not None:
+        result["phase_trace_limit"] = trace_limit
+    if truncated_count > 0:
+        result["phase_trace_truncated_count"] = truncated_count
+    return result
+
+
+def _fishing_cancel_requested() -> bool:
+    try:
+        return is_current_task_cancel_requested()
+    except Exception:
+        return False
 
 
 def _read_state_snapshot(
@@ -706,13 +751,37 @@ def _sleep_for_target_period(next_tick_at: float | None, poll_sec: float) -> flo
 
     sleep_sec = float(next_tick_at - now)
     if sleep_sec > 0:
-        time.sleep(sleep_sec)
+        _sleep_interruptibly(sleep_sec)
         now = time.monotonic()
 
     updated_tick = float(next_tick_at)
     while updated_tick <= now:
         updated_tick += poll_sec
     return updated_tick
+
+
+def _sleep_is_mocked() -> bool:
+    return hasattr(time.sleep, "mock_calls")
+
+
+def _sleep_interruptibly(duration_sec: float, *, quantum_sec: float = 0.05) -> None:
+    duration = max(float(duration_sec), 0.0)
+    if _fishing_cancel_requested():
+        return
+    if duration <= 0:
+        return
+    if _sleep_is_mocked():
+        time.sleep(duration)
+        return
+
+    deadline = time.monotonic() + duration
+    while True:
+        if _fishing_cancel_requested():
+            return
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        time.sleep(min(remaining, max(float(quantum_sec), 0.01)))
 
 
 def _append_trace(
@@ -816,6 +885,16 @@ def _wait_for_hook_success(
     last_state: dict[str, Any] | None = None
 
     while True:
+        if _fishing_cancel_requested():
+            logger.info("Fishing[hook_wait] cancelled")
+            return {
+                "ok": False,
+                "failure_reason": "cancelled",
+                "cancelled": True,
+                "elapsed_sec": round(time.monotonic() - hook_started_at, 3),
+                "state": last_state,
+            }
+
         now = time.monotonic()
         if now - hook_started_at > hook_timeout_sec:
             return {
@@ -914,6 +993,27 @@ def _profile_interval_sec(profile: dict[str, Any], key: str) -> float:
     return max(float(profile.get(key, fallback_ms) or 0) / 1000.0, 0.0)
 
 
+def _click_point(
+    app: Any,
+    *,
+    x: int,
+    y: int,
+    button: str = "left",
+    hold_ms: int = 0,
+) -> None:
+    resolved_hold_ms = max(int(hold_ms), 0)
+    if resolved_hold_ms <= 0:
+        app.click(x=x, y=y, button=button, clicks=1, interval=0.0)
+        return
+
+    app.move_to(int(x), int(y))
+    app.mouse_down(button=button)
+    try:
+        _sleep_interruptibly(float(resolved_hold_ms) / 1000.0)
+    finally:
+        app.mouse_up(button=button)
+
+
 def _click_config_point(
     app: Any,
     profile: dict[str, Any],
@@ -923,11 +1023,19 @@ def _click_config_point(
     start_time: float,
     log_scope: str,
     step: str,
+    hold_ms: int = 0,
 ) -> tuple[int, int]:
     x, y = profile[point_key]
-    app.click(x=x, y=y, button="left", clicks=1, interval=0.0)
+    _click_point(app, x=int(x), y=int(y), hold_ms=hold_ms)
     _append_trace(phase_trace, start_time=start_time, note=f"{log_scope}_{step}")
-    logger.info("Fishing[%s] step=%s ok=True point=(%s,%s)", log_scope, step, x, y)
+    logger.info(
+        "Fishing[%s] step=%s ok=True point=(%s,%s) hold_ms=%s",
+        log_scope,
+        step,
+        x,
+        y,
+        max(int(hold_ms), 0),
+    )
     return int(x), int(y)
 
 
@@ -1002,6 +1110,9 @@ def _wait_for_ready_template(
     deadline = time.monotonic() + max(float(timeout_sec), 0.1)
     last_state: dict[str, Any] | None = None
     while True:
+        if _fishing_cancel_requested():
+            logger.info("Fishing[ready_wait] cancelled note=%s", note)
+            return {"ok": False, "state": last_state, "cancelled": True}
         state = _read_state_snapshot(
             app,
             ocr,
@@ -1016,7 +1127,7 @@ def _wait_for_ready_template(
             return {"ok": True, "state": state}
         if time.monotonic() >= deadline:
             return {"ok": False, "state": last_state}
-        time.sleep(0.1)
+        _sleep_interruptibly(0.1)
 
 
 def _wait_for_profile_template(
@@ -1036,6 +1147,15 @@ def _wait_for_profile_template(
     deadline = time.monotonic() + max(float(timeout_sec), 0.1)
     last_match: dict[str, Any] | None = None
     while True:
+        if _fishing_cancel_requested():
+            logger.info("Fishing[%s] step=%s cancelled", log_scope, step)
+            return {
+                "found": False,
+                "reason": "cancelled",
+                "confidence": 0.0,
+                "match_rect": None,
+                "cancelled": True,
+            }
         match = _capture_and_match_profile_template(
             app,
             vision,
@@ -1063,7 +1183,7 @@ def _wait_for_profile_template(
                 float(match.get("confidence") or 0.0),
             )
             return last_match
-        time.sleep(0.1)
+        _sleep_interruptibly(0.1)
 
 
 def _click_repeated(
@@ -1076,24 +1196,28 @@ def _click_repeated(
     start_time: float,
     log_scope: str,
     step: str,
+    hold_ms: int = 0,
 ) -> int:
     x, y = int(point[0]), int(point[1])
     total = max(int(clicks), 0)
     interval_sec = max(float(interval_ms) / 1000.0, 0.0)
     for index in range(total):
-        app.click(x=x, y=y, button="left", clicks=1, interval=0.0)
+        if _fishing_cancel_requested():
+            return index
+        _click_point(app, x=x, y=y, hold_ms=hold_ms)
         _append_trace(phase_trace, start_time=start_time, note=f"{log_scope}_{step}")
         logger.info(
-            "Fishing[%s] step=%s ok=True point=(%s,%s) click_index=%s/%s",
+            "Fishing[%s] step=%s ok=True point=(%s,%s) click_index=%s/%s hold_ms=%s",
             log_scope,
             step,
             x,
             y,
             index + 1,
             total,
+            max(int(hold_ms), 0),
         )
         if index + 1 < total and interval_sec > 0:
-            time.sleep(interval_sec)
+            _sleep_interruptibly(interval_sec)
     return total
 
 
@@ -1108,15 +1232,18 @@ def _click_config_point_repeated(
     start_time: float,
     log_scope: str,
     step: str,
+    hold_ms: int = 0,
 ) -> tuple[int, int, int]:
     x, y = profile[point_key]
     total = max(int(clicks), 1)
     interval_sec = max(float(interval_ms) / 1000.0, 0.0)
     for index in range(total):
-        app.click(x=x, y=y, button="left", clicks=1, interval=0.0)
+        if _fishing_cancel_requested():
+            return int(x), int(y), index
+        _click_point(app, x=int(x), y=int(y), hold_ms=hold_ms)
         _append_trace(phase_trace, start_time=start_time, note=f"{log_scope}_{step}")
         logger.info(
-            "Fishing[%s] step=%s ok=True point=(%s,%s) click_index=%s/%s interval_ms=%s",
+            "Fishing[%s] step=%s ok=True point=(%s,%s) click_index=%s/%s interval_ms=%s hold_ms=%s",
             log_scope,
             step,
             x,
@@ -1124,10 +1251,30 @@ def _click_config_point_repeated(
             index + 1,
             total,
             int(interval_ms),
+            max(int(hold_ms), 0),
         )
         if index + 1 < total and interval_sec > 0:
-            time.sleep(interval_sec)
+            _sleep_interruptibly(interval_sec)
     return int(x), int(y), total
+
+
+def _cancelled_operation_result(
+    *,
+    started_at: float,
+    steps: list[dict[str, Any]] | None = None,
+    status: str = "cancelled",
+    **extra: Any,
+) -> dict[str, Any]:
+    result = {
+        "ok": False,
+        "status": status,
+        "failure_reason": "cancelled",
+        "cancelled": True,
+        "steps": steps or [],
+        "elapsed_sec": round(time.monotonic() - started_at, 3),
+    }
+    result.update(extra)
+    return result
 
 
 def _run_sell_fish_before_buy_bait(
@@ -1145,11 +1292,20 @@ def _run_sell_fish_before_buy_bait(
     started_at = time.monotonic()
     steps: list[dict[str, Any]] = []
     step_interval_sec = _profile_interval_sec(profile, "sell_step_interval_ms")
+    click_hold_ms = int(profile.get("sell_click_hold_ms") or 0)
     result_status = "failed_not_ready"
     confirm_match: dict[str, Any] | None = None
     success_match: dict[str, Any] | None = None
 
     try:
+        if _fishing_cancel_requested():
+            return _cancelled_operation_result(
+                started_at=started_at,
+                steps=steps,
+                confirm_match=confirm_match,
+                success_match=success_match,
+                state=None,
+            )
         _press_config_action(
             input_mapping,
             app,
@@ -1161,8 +1317,16 @@ def _run_sell_fish_before_buy_bait(
             log_scope="sell",
             step="open_shop",
         )
-        time.sleep(step_interval_sec)
+        _sleep_interruptibly(step_interval_sec)
         steps.append({"step": "open_shop", "ok": True, "action": profile["sell_open_action"]})
+        if _fishing_cancel_requested():
+            return _cancelled_operation_result(
+                started_at=started_at,
+                steps=steps,
+                confirm_match=confirm_match,
+                success_match=success_match,
+                state=None,
+            )
 
         _click_config_point(
             app,
@@ -1172,9 +1336,18 @@ def _run_sell_fish_before_buy_bait(
             start_time=start_time,
             log_scope="sell",
             step="open_sell_tab",
+            hold_ms=click_hold_ms,
         )
-        time.sleep(step_interval_sec)
+        _sleep_interruptibly(step_interval_sec)
         steps.append({"step": "open_sell_tab", "ok": True, "point": list(profile["sell_tab_point"])})
+        if _fishing_cancel_requested():
+            return _cancelled_operation_result(
+                started_at=started_at,
+                steps=steps,
+                confirm_match=confirm_match,
+                success_match=success_match,
+                state=None,
+            )
 
         _click_config_point(
             app,
@@ -1184,9 +1357,18 @@ def _run_sell_fish_before_buy_bait(
             start_time=start_time,
             log_scope="sell",
             step="one_click_sell",
+            hold_ms=click_hold_ms,
         )
-        time.sleep(step_interval_sec)
+        _sleep_interruptibly(step_interval_sec)
         steps.append({"step": "one_click_sell", "ok": True, "point": list(profile["sell_one_click_point"])})
+        if _fishing_cancel_requested():
+            return _cancelled_operation_result(
+                started_at=started_at,
+                steps=steps,
+                confirm_match=confirm_match,
+                success_match=success_match,
+                state=None,
+            )
 
         confirm_match = _wait_for_profile_template(
             app,
@@ -1208,6 +1390,14 @@ def _run_sell_fish_before_buy_bait(
                 "confidence": float(confirm_match.get("confidence") or 0.0),
             }
         )
+        if bool(confirm_match.get("cancelled")):
+            return _cancelled_operation_result(
+                started_at=started_at,
+                steps=steps,
+                confirm_match=confirm_match,
+                success_match=success_match,
+                state=None,
+            )
 
         if bool(confirm_match.get("found")):
             _click_config_point(
@@ -1218,10 +1408,19 @@ def _run_sell_fish_before_buy_bait(
                 start_time=start_time,
                 log_scope="sell",
                 step="confirm_sell",
+                hold_ms=click_hold_ms,
             )
-            time.sleep(step_interval_sec)
+            _sleep_interruptibly(step_interval_sec)
             steps.append({"step": "confirm_sell", "ok": True, "point": list(profile["sell_confirm_point"])})
             result_status = "sold"
+            if _fishing_cancel_requested():
+                return _cancelled_operation_result(
+                    started_at=started_at,
+                    steps=steps,
+                    confirm_match=confirm_match,
+                    success_match=success_match,
+                    state=None,
+                )
 
             success_match = _wait_for_profile_template(
                 app,
@@ -1243,6 +1442,14 @@ def _run_sell_fish_before_buy_bait(
                     "confidence": float(success_match.get("confidence") or 0.0),
                 }
             )
+            if bool(success_match.get("cancelled")):
+                return _cancelled_operation_result(
+                    started_at=started_at,
+                    steps=steps,
+                    confirm_match=confirm_match,
+                    success_match=success_match,
+                    state=None,
+                )
             close_count = _click_repeated(
                 app,
                 profile["sell_success_close_point"],
@@ -1252,9 +1459,10 @@ def _run_sell_fish_before_buy_bait(
                 start_time=start_time,
                 log_scope="sell",
                 step="close_success",
+                hold_ms=click_hold_ms,
             )
             steps.append({"step": "close_success", "ok": True, "clicks": close_count})
-            time.sleep(step_interval_sec)
+            _sleep_interruptibly(step_interval_sec)
         else:
             result_status = "no_fish_or_no_confirm"
 
@@ -1269,7 +1477,7 @@ def _run_sell_fish_before_buy_bait(
             log_scope="sell",
             step="return_ready",
         )
-        time.sleep(step_interval_sec)
+        _sleep_interruptibly(step_interval_sec)
         ready = _wait_for_ready_template(
             app,
             ocr,
@@ -1282,6 +1490,14 @@ def _run_sell_fish_before_buy_bait(
             note="sell_return_ready",
         )
         steps.append({"step": "return_ready", "ok": bool(ready["ok"])})
+        if bool(ready.get("cancelled")):
+            return _cancelled_operation_result(
+                started_at=started_at,
+                steps=steps,
+                confirm_match=confirm_match,
+                success_match=success_match,
+                state=ready.get("state"),
+            )
         if not bool(ready["ok"]):
             result_status = "failed_not_ready"
         logger.info("Fishing[sell] done status=%s ready=%s", result_status, bool(ready["ok"]))
@@ -1349,8 +1565,16 @@ def _run_buy_universal_bait(
     started_at = time.monotonic()
     steps: list[dict[str, Any]] = []
     step_interval_sec = _profile_interval_sec(profile, "bait_step_interval_ms")
+    click_hold_ms = int(profile.get("bait_click_hold_ms") or profile.get("sell_click_hold_ms") or 0)
     buy_confirm_match: dict[str, Any] | None = None
     try:
+        if _fishing_cancel_requested():
+            return _cancelled_operation_result(
+                started_at=started_at,
+                steps=steps,
+                buy_confirm_match=buy_confirm_match,
+                state=None,
+            )
         _press_config_action(
             input_mapping,
             app,
@@ -1362,8 +1586,15 @@ def _run_buy_universal_bait(
             log_scope="bait",
             step="open_shop",
         )
-        time.sleep(step_interval_sec)
+        _sleep_interruptibly(step_interval_sec)
         steps.append({"step": "open_shop", "ok": True, "action": profile["bait_shop_open_action"]})
+        if _fishing_cancel_requested():
+            return _cancelled_operation_result(
+                started_at=started_at,
+                steps=steps,
+                buy_confirm_match=buy_confirm_match,
+                state=None,
+            )
 
         _click_config_point(
             app,
@@ -1373,9 +1604,10 @@ def _run_buy_universal_bait(
             start_time=start_time,
             log_scope="bait",
             step="select_universal",
+            hold_ms=click_hold_ms,
         )
         item_wait_sec = max(float(profile["bait_item_after_wait_ms"]) / 1000.0, step_interval_sec)
-        time.sleep(item_wait_sec)
+        _sleep_interruptibly(item_wait_sec)
         steps.append(
             {
                 "step": "select_universal",
@@ -1384,6 +1616,13 @@ def _run_buy_universal_bait(
                 "after_wait_ms": int(round(item_wait_sec * 1000)),
             }
         )
+        if _fishing_cancel_requested():
+            return _cancelled_operation_result(
+                started_at=started_at,
+                steps=steps,
+                buy_confirm_match=buy_confirm_match,
+                state=None,
+            )
 
         _, _, max_clicks = _click_config_point_repeated(
             app,
@@ -1395,9 +1634,10 @@ def _run_buy_universal_bait(
             start_time=start_time,
             log_scope="bait",
             step="max_count",
+            hold_ms=click_hold_ms,
         )
         max_after_wait_sec = max(float(profile["bait_max_after_wait_ms"]) / 1000.0, step_interval_sec)
-        time.sleep(max_after_wait_sec)
+        _sleep_interruptibly(max_after_wait_sec)
         steps.append(
             {
                 "step": "max_count",
@@ -1408,6 +1648,13 @@ def _run_buy_universal_bait(
                 "after_wait_ms": int(round(max_after_wait_sec * 1000)),
             }
         )
+        if _fishing_cancel_requested():
+            return _cancelled_operation_result(
+                started_at=started_at,
+                steps=steps,
+                buy_confirm_match=buy_confirm_match,
+                state=None,
+            )
 
         _click_config_point(
             app,
@@ -1417,9 +1664,17 @@ def _run_buy_universal_bait(
             start_time=start_time,
             log_scope="bait",
             step="buy",
+            hold_ms=click_hold_ms,
         )
-        time.sleep(step_interval_sec)
+        _sleep_interruptibly(step_interval_sec)
         steps.append({"step": "buy", "ok": True, "point": list(profile["bait_buy_point"])})
+        if _fishing_cancel_requested():
+            return _cancelled_operation_result(
+                started_at=started_at,
+                steps=steps,
+                buy_confirm_match=buy_confirm_match,
+                state=None,
+            )
 
         buy_confirm_match = _wait_for_profile_template(
             app,
@@ -1441,6 +1696,13 @@ def _run_buy_universal_bait(
                 "confidence": float(buy_confirm_match.get("confidence") or 0.0),
             }
         )
+        if bool(buy_confirm_match.get("cancelled")):
+            return _cancelled_operation_result(
+                started_at=started_at,
+                steps=steps,
+                buy_confirm_match=buy_confirm_match,
+                state=None,
+            )
         if not bool(buy_confirm_match.get("found")):
             return {
                 "ok": False,
@@ -1459,9 +1721,17 @@ def _run_buy_universal_bait(
             start_time=start_time,
             log_scope="bait",
             step="confirm",
+            hold_ms=click_hold_ms,
         )
-        time.sleep(step_interval_sec)
+        _sleep_interruptibly(step_interval_sec)
         steps.append({"step": "confirm", "ok": True, "point": list(profile["bait_confirm_point"])})
+        if _fishing_cancel_requested():
+            return _cancelled_operation_result(
+                started_at=started_at,
+                steps=steps,
+                buy_confirm_match=buy_confirm_match,
+                state=None,
+            )
 
         close_count = _click_repeated(
             app,
@@ -1472,9 +1742,17 @@ def _run_buy_universal_bait(
             start_time=start_time,
             log_scope="bait",
             step="close_success",
+            hold_ms=click_hold_ms,
         )
         steps.append({"step": "close_success", "ok": True, "clicks": close_count})
-        time.sleep(step_interval_sec)
+        _sleep_interruptibly(step_interval_sec)
+        if _fishing_cancel_requested():
+            return _cancelled_operation_result(
+                started_at=started_at,
+                steps=steps,
+                buy_confirm_match=buy_confirm_match,
+                state=None,
+            )
 
         _press_config_action(
             input_mapping,
@@ -1487,7 +1765,7 @@ def _run_buy_universal_bait(
             log_scope="bait",
             step="return_ready",
         )
-        time.sleep(step_interval_sec)
+        _sleep_interruptibly(step_interval_sec)
         ready = _wait_for_ready_template(
             app,
             ocr,
@@ -1500,6 +1778,13 @@ def _run_buy_universal_bait(
             note="buy_bait_return_ready",
         )
         steps.append({"step": "return_ready", "ok": bool(ready["ok"])})
+        if bool(ready.get("cancelled")):
+            return _cancelled_operation_result(
+                started_at=started_at,
+                steps=steps,
+                buy_confirm_match=buy_confirm_match,
+                state=ready.get("state"),
+            )
         ok = bool(ready["ok"])
         return {
             "ok": ok,
@@ -1537,6 +1822,13 @@ def _run_change_universal_bait(
     started_at = time.monotonic()
     steps: list[dict[str, Any]] = []
     try:
+        if _fishing_cancel_requested():
+            return _cancelled_operation_result(
+                started_at=started_at,
+                steps=steps,
+                title_match=None,
+                state=None,
+            )
         logger.info("Fishing[bait] change_start")
         _press_config_action(
             input_mapping,
@@ -1549,8 +1841,15 @@ def _run_change_universal_bait(
             log_scope="bait",
             step="change_start",
         )
-        time.sleep(float(profile["bait_change_open_wait_sec"]))
+        _sleep_interruptibly(float(profile["bait_change_open_wait_sec"]))
         steps.append({"step": "change_start", "ok": True, "action": profile["bait_change_open_action"]})
+        if _fishing_cancel_requested():
+            return _cancelled_operation_result(
+                started_at=started_at,
+                steps=steps,
+                title_match=None,
+                state=None,
+            )
 
         title_match = _capture_and_match_profile_template(
             app,
@@ -1586,7 +1885,14 @@ def _run_change_universal_bait(
         )
         logger.info("Fishing[bait] change_confirm")
         steps.append({"step": "change_confirm", "ok": True, "point": list(profile["bait_change_confirm_point"])})
-        time.sleep(float(profile["bait_change_after_click_wait_sec"]))
+        _sleep_interruptibly(float(profile["bait_change_after_click_wait_sec"]))
+        if _fishing_cancel_requested():
+            return _cancelled_operation_result(
+                started_at=started_at,
+                steps=steps,
+                title_match=title_match,
+                state=None,
+            )
 
         ready = _wait_for_ready_template(
             app,
@@ -1600,6 +1906,13 @@ def _run_change_universal_bait(
             note="change_bait_return_ready",
         )
         steps.append({"step": "change_done", "ok": bool(ready["ok"])})
+        if bool(ready.get("cancelled")):
+            return _cancelled_operation_result(
+                started_at=started_at,
+                steps=steps,
+                title_match=title_match,
+                state=ready.get("state"),
+            )
         logger.info("Fishing[bait] change_done ok=%s", bool(ready["ok"]))
         ok = bool(ready["ok"])
         return {
@@ -1643,6 +1956,16 @@ def _run_bait_recovery(
     logger.info("Fishing[bait] recovery_start sell_before_buy=%s", sell_before_buy)
     app.release_all()
 
+    if _fishing_cancel_requested():
+        return _cancelled_operation_result(
+            started_at=started_at,
+            steps=[],
+            sell_result=sell_result,
+            buy_bait_result=buy_bait_result,
+            change_bait_result=change_bait_result,
+            state=None,
+        )
+
     if sell_before_buy:
         sell_result = _run_sell_fish_before_buy_bait(
             app,
@@ -1655,6 +1978,15 @@ def _run_bait_recovery(
             phase_trace=phase_trace,
             start_time=start_time,
         )
+        if bool(sell_result.get("cancelled")):
+            return _cancelled_operation_result(
+                started_at=started_at,
+                steps=[],
+                sell_result=sell_result,
+                buy_bait_result=None,
+                change_bait_result=None,
+                state=sell_result.get("state"),
+            )
         if str(sell_result.get("status")) == "failed_not_ready":
             elapsed = round(time.monotonic() - started_at, 3)
             logger.info("Fishing[bait] recovery_done ok=False elapsed=%.3f", elapsed)
@@ -1679,6 +2011,15 @@ def _run_bait_recovery(
         phase_trace=phase_trace,
         start_time=start_time,
     )
+    if bool(buy_bait_result.get("cancelled")):
+        return _cancelled_operation_result(
+            started_at=started_at,
+            steps=[],
+            sell_result=sell_result,
+            buy_bait_result=buy_bait_result,
+            change_bait_result=None,
+            state=buy_bait_result.get("state"),
+        )
     if not bool(buy_bait_result.get("ok")):
         elapsed = round(time.monotonic() - started_at, 3)
         logger.info("Fishing[bait] recovery_done ok=False elapsed=%.3f", elapsed)
@@ -1703,6 +2044,15 @@ def _run_bait_recovery(
         phase_trace=phase_trace,
         start_time=start_time,
     )
+    if bool(change_bait_result.get("cancelled")):
+        return _cancelled_operation_result(
+            started_at=started_at,
+            steps=[],
+            sell_result=sell_result,
+            buy_bait_result=buy_bait_result,
+            change_bait_result=change_bait_result,
+            state=change_bait_result.get("state"),
+        )
     elapsed = round(time.monotonic() - started_at, 3)
     ok = bool(change_bait_result.get("ok"))
     logger.info("Fishing[bait] recovery_done ok=%s elapsed=%.3f", ok, elapsed)
@@ -1721,6 +2071,7 @@ def _run_post_duel_cleanup(
     app: Any,
     ocr: Any,
     vision: Any,
+    input_mapping: Any,
     yihuan_fishing: YihuanFishingService,
     *,
     profile_name: str | None,
@@ -1729,32 +2080,36 @@ def _run_post_duel_cleanup(
     cleanup_timeout_sec: float | None = None,
 ) -> dict[str, Any]:
     profile = yihuan_fishing.load_profile(profile_name)
-    close_x, close_y = profile["result_close_point"]
-    click_interval_sec = max(float(profile["post_duel_click_interval_ms"]) / 1000.0, 0.01)
+    close_action = str(profile.get("result_close_action") or "menu_back")
+    close_interval_sec = max(float(profile["post_duel_close_interval_ms"]) / 1000.0, 0.01)
+    ready_stable_required_sec = max(float(profile.get("post_duel_ready_stable_sec", 1.0) or 0.0), 0.0)
     deadline = (
         time.monotonic() + max(float(cleanup_timeout_sec), 0.1)
         if cleanup_timeout_sec is not None and cleanup_timeout_sec > 0
         else None
     )
-    next_click_at: float | None = None
-    click_count = 0
+    next_close_at: float | None = None
+    close_count = 0
     last_state: dict[str, Any] | None = None
+    ready_stable_started_at: float | None = None
+    ready_stable_elapsed_sec = 0.0
 
     while True:
+        if _fishing_cancel_requested():
+            logger.info("Fishing[post_duel_cleanup] cancelled")
+            return {
+                "ok": False,
+                "click_count": close_count,
+                "close_count": close_count,
+                "close_action": close_action,
+                "final_state": last_state,
+                "cancelled": True,
+                "ready_stable_required_sec": ready_stable_required_sec,
+                "ready_stable_elapsed_sec": ready_stable_elapsed_sec,
+            }
         now = time.monotonic()
         if deadline is not None and now > deadline:
             break
-        if next_click_at is None or now >= next_click_at:
-            app.click(x=close_x, y=close_y, button="left", clicks=1, interval=0.0)
-            click_count += 1
-            _append_trace(phase_trace, start_time=start_time, note="post_duel_click")
-            logger.info(
-                "Fishing[input] action=click button=left point=(%s,%s) note=post_duel_cleanup click_index=%s",
-                close_x,
-                close_y,
-                click_count,
-            )
-            next_click_at = now + click_interval_sec
 
         state = _read_state_snapshot(
             app,
@@ -1766,18 +2121,58 @@ def _run_post_duel_cleanup(
         )
         last_state = state
         if _has_ready_template(state):
-            _append_trace(phase_trace, start_time=start_time, state=state, note="post_duel_cleanup_done")
-            return {
-                "ok": True,
-                "click_count": click_count,
-                "final_state": state,
-            }
-
-        if next_click_at is None:
+            sample_at = time.monotonic()
+            if ready_stable_started_at is None:
+                ready_stable_started_at = sample_at
+                logger.info(
+                    "Fishing[post_duel_cleanup] ready_candidate stable_required_sec=%.3f close_count=%s",
+                    ready_stable_required_sec,
+                    close_count,
+                )
+            ready_stable_elapsed_sec = max(sample_at - ready_stable_started_at, 0.0)
+            if ready_stable_elapsed_sec >= ready_stable_required_sec:
+                _append_trace(phase_trace, start_time=start_time, state=state, note="post_duel_cleanup_done")
+                logger.info(
+                    "Fishing[post_duel_cleanup] ready_confirmed stable_elapsed_sec=%.3f close_count=%s",
+                    ready_stable_elapsed_sec,
+                    close_count,
+                )
+                return {
+                    "ok": True,
+                    "click_count": close_count,
+                    "close_count": close_count,
+                    "close_action": close_action,
+                    "final_state": state,
+                    "ready_stable_required_sec": ready_stable_required_sec,
+                    "ready_stable_elapsed_sec": round(ready_stable_elapsed_sec, 3),
+                }
+            _sleep_interruptibly(0.05)
             continue
-        sleep_sec = min(0.1, max(next_click_at - time.monotonic(), 0.0))
+        else:
+            if ready_stable_started_at is not None:
+                logger.info(
+                    "Fishing[post_duel_cleanup] ready_candidate_reset stable_elapsed_sec=%.3f phase=%s",
+                    ready_stable_elapsed_sec,
+                    state.get("phase"),
+                )
+            ready_stable_started_at = None
+            ready_stable_elapsed_sec = 0.0
+
+        now = time.monotonic()
+        if next_close_at is None or now >= next_close_at:
+            _press_input_action(input_mapping, app, action_name=close_action, profile_name=profile["profile_name"])
+            close_count += 1
+            _append_trace(phase_trace, start_time=start_time, note="post_duel_close")
+            logger.info(
+                "Fishing[input] action=%s phase=press note=post_duel_cleanup close_index=%s",
+                close_action,
+                close_count,
+            )
+            next_close_at = now + close_interval_sec
+
+        sleep_sec = min(0.1, max(next_close_at - time.monotonic(), 0.0))
         if sleep_sec > 0:
-            time.sleep(sleep_sec)
+            _sleep_interruptibly(sleep_sec)
 
     if last_state is None:
         last_state = _read_state_snapshot(
@@ -1788,17 +2183,33 @@ def _run_post_duel_cleanup(
             profile_name=profile["profile_name"],
             enable_ocr=False,
         )
-    if _has_ready_template(last_state):
+    if _has_ready_template(last_state) and (
+        ready_stable_required_sec <= 0.0
+        or (
+            ready_stable_started_at is not None
+            and time.monotonic() - ready_stable_started_at >= ready_stable_required_sec
+        )
+    ):
+        if ready_stable_started_at is not None:
+            ready_stable_elapsed_sec = max(time.monotonic() - ready_stable_started_at, 0.0)
         _append_trace(phase_trace, start_time=start_time, state=last_state, note="post_duel_cleanup_done")
         return {
             "ok": True,
-            "click_count": click_count,
+            "click_count": close_count,
+            "close_count": close_count,
+            "close_action": close_action,
             "final_state": last_state,
+            "ready_stable_required_sec": ready_stable_required_sec,
+            "ready_stable_elapsed_sec": round(ready_stable_elapsed_sec, 3),
         }
     return {
         "ok": False,
-        "click_count": click_count,
+        "click_count": close_count,
+        "close_count": close_count,
+        "close_action": close_action,
         "final_state": last_state,
+        "ready_stable_required_sec": ready_stable_required_sec,
+        "ready_stable_elapsed_sec": round(ready_stable_elapsed_sec, 3),
     }
 
 
@@ -1822,7 +2233,7 @@ def _run_fishing_round_impl(
     duel_timeout = float(duel_timeout_sec) if duel_timeout_sec and duel_timeout_sec > 0 else float(profile["duel_timeout_sec"])
 
     start_time = time.monotonic()
-    phase_trace: list[dict[str, Any]] = []
+    phase_trace = _new_bounded_buffer(profile.get("trace_limit"), default=240)
     timings = {
         "ready_wait_sec": 0.0,
         "bite_wait_sec": 0.0,
@@ -1848,7 +2259,31 @@ def _run_fishing_round_impl(
         "bait_shortage": None,
     }
 
+    def _cancelled_round_result() -> dict[str, Any]:
+        logger.info("Fishing[round] cancelled round_index=%s", round_index)
+        return _round_result(
+            "cancelled",
+            round_index,
+            phase_trace,
+            "cancelled",
+            timings,
+            start_time,
+            duel_debug_artifact,
+            (
+                _finalize_detection_stats(
+                    detection_stats,
+                    previous_status=last_detection_status,
+                    previous_sample_at=last_detection_sample_at,
+                )
+                if detection_stats is not None
+                else None
+            ),
+            extra=round_extra,
+        )
+
     try:
+        if _fishing_cancel_requested():
+            return _cancelled_round_result()
         state = _read_state_snapshot(app, ocr, vision, yihuan_fishing, profile_name=resolved_profile)
         _append_trace(phase_trace, start_time=start_time, state=state, note="initial")
         _log_state_details("initial", state)
@@ -1858,11 +2293,14 @@ def _run_fishing_round_impl(
                 app,
                 ocr,
                 vision,
+                input_mapping,
                 yihuan_fishing,
                 profile_name=resolved_profile,
                 phase_trace=phase_trace,
                 start_time=start_time,
             )
+            if bool(cleanup_result.get("cancelled")):
+                return _cancelled_round_result()
             if not cleanup_result["ok"]:
                 failure_reason = "result_close_timeout"
                 return _round_result(
@@ -1878,10 +2316,14 @@ def _run_fishing_round_impl(
 
         max_recovery_attempts = int(profile["bait_recovery_max_attempts_per_round"])
         while True:
+            if _fishing_cancel_requested():
+                return _cancelled_round_result()
             ready_wait_started = time.monotonic()
             ready_deadline = ready_wait_started + 5.0
             next_ready_poll_at: float | None = None
             while state["phase"] != "ready":
+                if _fishing_cancel_requested():
+                    return _cancelled_round_result()
                 if time.monotonic() > ready_deadline:
                     failure_reason = "not_ready"
                     logger.info("Fishing[ready_wait] timed_out phase=%s", state.get("phase"))
@@ -1900,6 +2342,8 @@ def _run_fishing_round_impl(
                 _log_state_details("ready_wait", state)
             timings["ready_wait_sec"] = round(float(timings["ready_wait_sec"]) + time.monotonic() - ready_wait_started, 3)
 
+            if _fishing_cancel_requested():
+                return _cancelled_round_result()
             _press_input_action(input_mapping, app, action_name="fish_interact", profile_name=resolved_profile)
             _append_trace(phase_trace, start_time=start_time, state=state, note="cast")
             logger.info("Fishing[input] action=fish_interact phase=press note=cast")
@@ -1925,6 +2369,8 @@ def _run_fishing_round_impl(
                 break
 
             failure_reason = str(hook_result["failure_reason"] or "hook_timeout")
+            if failure_reason == "cancelled" or bool(hook_result.get("cancelled")):
+                return _cancelled_round_result()
             round_extra["bait_shortage"] = hook_result.get("bait_shortage")
             if (
                 failure_reason == "bait_shortage"
@@ -1944,6 +2390,11 @@ def _run_fishing_round_impl(
                     start_time=start_time,
                 )
                 round_extra["bait_recovery_result"] = recovery_result
+                if bool(recovery_result.get("cancelled")):
+                    round_extra["sell_result"] = recovery_result.get("sell_result")
+                    round_extra["buy_bait_result"] = recovery_result.get("buy_bait_result")
+                    round_extra["change_bait_result"] = recovery_result.get("change_bait_result")
+                    return _cancelled_round_result()
                 round_extra["sell_result"] = recovery_result.get("sell_result")
                 round_extra["buy_bait_result"] = recovery_result.get("buy_bait_result")
                 round_extra["change_bait_result"] = recovery_result.get("change_bait_result")
@@ -1986,6 +2437,15 @@ def _run_fishing_round_impl(
         detection_stats = _new_detection_stats()
         next_duel_poll_at: float | None = None
         while True:
+            if _fishing_cancel_requested():
+                held_direction_action, _ = _set_held_direction(
+                    input_mapping,
+                    app,
+                    current_action_name=held_direction_action,
+                    desired_action_name=None,
+                    profile_name=resolved_profile,
+                )
+                return _cancelled_round_result()
             if time.monotonic() > duel_deadline:
                 held_direction_action, _ = _set_held_direction(
                     input_mapping,
@@ -2234,16 +2694,19 @@ def _run_fishing_round_impl(
                             app,
                             ocr,
                             vision,
+                            input_mapping,
                             yihuan_fishing,
                             profile_name=resolved_profile,
                             phase_trace=phase_trace,
                             start_time=start_time,
                         )
+                        if bool(cleanup_result.get("cancelled")):
+                            return _cancelled_round_result()
                         final_state = dict(cleanup_result["final_state"] or {})
                         logger.info(
-                            "Fishing[duel_end] cleanup_ok=%s click_count=%s terminal_phase=%s final_phase=%s",
+                            "Fishing[duel_end] cleanup_ok=%s close_count=%s terminal_phase=%s final_phase=%s",
                             cleanup_result["ok"],
-                            cleanup_result["click_count"],
+                            cleanup_result.get("close_count", cleanup_result.get("click_count")),
                             duel_terminal_phase,
                             final_state.get("phase"),
                         )
@@ -2311,7 +2774,6 @@ def _round_result(
     result = {
         "status": status,
         "round_index": int(round_index),
-        "phase_trace": phase_trace,
         "failure_reason": failure_reason,
         "timings": timings,
         "duel_debug_artifact": duel_debug_artifact,
@@ -2319,7 +2781,7 @@ def _round_result(
     }
     if extra:
         result.update(extra)
-    return result
+    return _apply_phase_trace_payload(result, phase_trace)
 
 
 @action_info(
@@ -2354,7 +2816,7 @@ def yihuan_fishing_debug_monitor(
     screenshot_interval_sec = max(float(screenshot_interval_sec), 0.1)
 
     start_time = time.monotonic()
-    phase_trace: list[dict[str, Any]] = []
+    phase_trace = _new_bounded_buffer(profile.get("trace_limit"), default=240)
     detection_stats: dict[str, Any] | None = None
     last_detection_status: dict[str, Any] | None = None
     last_detection_sample_at: float | None = None
@@ -2382,6 +2844,7 @@ def yihuan_fishing_debug_monitor(
                 app,
                 ocr,
                 vision,
+                input_mapping,
                 yihuan_fishing,
                 profile_name=resolved_profile,
                 phase_trace=phase_trace,
@@ -2571,7 +3034,7 @@ def yihuan_fishing_live_monitor(
     deadline = None if duration_limit_sec <= 0 else time.monotonic() + duration_limit_sec
 
     start_time = time.monotonic()
-    phase_trace: list[dict[str, Any]] = []
+    phase_trace = _new_bounded_buffer(profile.get("trace_limit"), default=240)
     detection_stats = _new_detection_stats()
     last_detection_status: dict[str, Any] | None = None
     last_detection_sample_at: float | None = None
@@ -2664,13 +3127,11 @@ def yihuan_fishing_run_session(
     profile_name: str = "default_1280x720_cn",
     sell_fish_every_rounds: int = 0,
 ) -> dict[str, Any]:
-    results: list[dict[str, Any]] = []
     consecutive_failures = 0
     success_count = 0
     failure_count = 0
     active_sell_count = 0
     active_sell_failure_count = 0
-    active_sell_results: list[dict[str, Any]] = []
     round_index = 1
     stop_reason = "max_rounds"
     max_rounds_value = _non_negative_int(max_rounds)
@@ -2678,8 +3139,14 @@ def yihuan_fishing_run_session(
     unlimited_rounds = max_rounds_value <= 0
     profile = yihuan_fishing.load_profile(profile_name)
     resolved_profile = profile["profile_name"]
+    results = _new_bounded_buffer(profile.get("session_results_limit"), default=60)
+    active_sell_results = _new_bounded_buffer(profile.get("active_sell_results_limit"), default=20)
 
     while unlimited_rounds or round_index <= max_rounds_value:
+        if _fishing_cancel_requested():
+            stop_reason = "cancelled"
+            logger.info("Fishing[session] cancelled before round_index=%s", round_index)
+            break
         round_result = _run_fishing_round_impl(
             app,
             ocr,
@@ -2692,12 +3159,20 @@ def yihuan_fishing_run_session(
             duel_timeout_sec=None,
         )
         results.append(round_result)
+        if round_result.get("status") == "cancelled":
+            stop_reason = "cancelled"
+            logger.info("Fishing[session] cancelled during round_index=%s", round_index)
+            break
         if round_result["status"] == "success":
             success_count += 1
             consecutive_failures = 0
             if sell_interval_rounds > 0 and success_count % sell_interval_rounds == 0:
+                if _fishing_cancel_requested():
+                    stop_reason = "cancelled"
+                    logger.info("Fishing[session] cancelled before active_sell round_index=%s", round_index)
+                    break
                 app.release_all()
-                sell_trace: list[dict[str, Any]] = []
+                sell_trace = _new_bounded_buffer(profile.get("trace_limit"), default=240)
                 sell_started_at = time.monotonic()
                 logger.info(
                     "Fishing[active_sell] start interval_rounds=%s success_count=%s round_index=%s",
@@ -2719,10 +3194,18 @@ def yihuan_fishing_run_session(
                 sell_result["trigger_round_index"] = int(round_index)
                 sell_result["trigger_success_count"] = int(success_count)
                 sell_result["interval_rounds"] = int(sell_interval_rounds)
-                sell_result["phase_trace"] = sell_trace
+                _apply_phase_trace_payload(sell_result, sell_trace)
                 round_result["active_sell_result"] = sell_result
                 active_sell_results.append(sell_result)
                 active_sell_count += 1
+                if bool(sell_result.get("cancelled")) or sell_result.get("status") == "cancelled":
+                    stop_reason = "cancelled"
+                    logger.info(
+                        "Fishing[session] cancelled during active_sell round_index=%s success_count=%s",
+                        round_index,
+                        success_count,
+                    )
+                    break
                 sell_ok = bool(sell_result.get("ok"))
                 logger.info(
                     "Fishing[active_sell] done ok=%s status=%s round_index=%s success_count=%s",
@@ -2740,25 +3223,37 @@ def yihuan_fishing_run_session(
             consecutive_failures += 1
         round_index += 1
 
-    status = "success"
-    if success_count == 0 and failure_count > 0:
+    status = "cancelled" if stop_reason == "cancelled" else "success"
+    if stop_reason == "cancelled":
+        pass
+    elif success_count == 0 and failure_count > 0:
         status = "failed"
     elif success_count > 0 and failure_count > 0:
         status = "partial"
-    if active_sell_failure_count > 0:
+    if stop_reason != "cancelled" and active_sell_failure_count > 0:
         status = "failed" if success_count == 0 else "partial"
 
+    retained_results, results_limit, results_truncated_count = _bounded_buffer_meta(results)
+    retained_active_sell_results, active_sell_results_limit, active_sell_results_truncated_count = _bounded_buffer_meta(
+        active_sell_results
+    )
     return {
         "status": status,
-        "round_count": len(results),
+        "round_count": getattr(results, "total_count", len(retained_results)),
         "success_count": success_count,
         "failure_count": failure_count,
         "consecutive_failures": consecutive_failures,
         "active_sell_interval_rounds": sell_interval_rounds,
         "active_sell_count": active_sell_count,
         "active_sell_failure_count": active_sell_failure_count,
-        "active_sell_results": active_sell_results,
+        "active_sell_results": retained_active_sell_results,
+        "active_sell_results_limit": active_sell_results_limit,
+        "active_sell_results_retained_count": len(retained_active_sell_results),
+        "active_sell_results_truncated_count": active_sell_results_truncated_count,
         "stopped_reason": stop_reason,
-        "results": results,
+        "results": retained_results,
+        "results_limit": results_limit,
+        "results_retained_count": len(retained_results),
+        "results_truncated_count": results_truncated_count,
     }
 

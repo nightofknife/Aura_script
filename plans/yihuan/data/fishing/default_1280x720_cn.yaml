@@ -56,8 +56,11 @@ ready_anchor_region:
 result_close_point:
   - 300
   - 600
+result_close_action: menu_back
 duel_end_missing_sec: 1.0
 post_duel_click_interval_ms: 1000
+post_duel_close_interval_ms: 1000
+post_duel_ready_stable_sec: 1.0
 ocr_texts:
   bite_required: []
   result_required:
@@ -83,7 +86,7 @@ control_outside_max_pulse_ms: 65
 control_pulse_gain_ms_per_px: 0.35
 control_min_interval_ms: 0
 control_reverse_gap_ms: 0
-control_hold_margin_px: 10
+control_hold_margin_px: 20
 control_hold_grace_ms: 150
 control_detection_jump_window_ms: 250
 control_zone_jump_px: 55
@@ -113,6 +116,7 @@ bait_shortage_dark_row_ratio: 0.80
 bait_shortage_dark_min_height_px: 35
 sell_open_action: fish_sell_shop
 sell_step_interval_ms: 1000
+sell_click_hold_ms: 100
 sell_tab_point:
   - 110
   - 280
@@ -146,6 +150,7 @@ sell_success_match_threshold: 0.78
 sell_success_wait_timeout_sec: 3.0
 bait_shop_open_action: fish_bait_shop
 bait_step_interval_ms: 800
+bait_click_hold_ms: 100
 bait_item_kind: universal_bait
 bait_item_point:
   - 374
@@ -189,3 +194,6 @@ bait_change_region:
   - 760
   - 160
 bait_change_match_threshold: 0.78
+trace_limit: 240
+session_results_limit: 60
+active_sell_results_limit: 20

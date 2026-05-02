@@ -7,6 +7,7 @@ from typing import Any
 
 from packages.aura_core.api import action_info, requires_services
 from packages.aura_core.observability.logging.core_logger import logger
+from packages.aura_core.scheduler.cancellation import is_current_task_cancel_requested
 
 from ..services.cafe_service import YihuanCafeService
 
@@ -18,6 +19,32 @@ RECIPE_STOCK: dict[str, str] = {
     "egg_croissant": "croissant",
     "jam_cake": "cake",
 }
+
+
+class _CafeSessionCancelled(Exception):
+    """Internal marker used to stop the sync cafe action cooperatively."""
+
+
+def _cafe_cancel_requested() -> bool:
+    try:
+        return is_current_task_cancel_requested()
+    except Exception:
+        return False
+
+
+def _raise_if_cancelled() -> None:
+    if _cafe_cancel_requested():
+        raise _CafeSessionCancelled()
+
+
+def _release_all(app: Any) -> None:
+    try:
+        if hasattr(app, "release_all"):
+            app.release_all()
+        elif hasattr(app, "controller") and hasattr(app.controller, "release_all"):
+            app.controller.release_all()
+    except Exception:
+        logger.debug("Cafe[input] release_all failed during cleanup.", exc_info=True)
 
 
 def _coerce_bool(value: Any) -> bool:
@@ -51,6 +78,7 @@ def _profile_int(profile: dict[str, Any], key: str, default: int) -> int:
 
 
 def _click_point(app: Any, point: tuple[int, int], *, note: str, profile: dict[str, Any]) -> None:
+    _raise_if_cancelled()
     x, y = int(point[0]), int(point[1])
     repeat_count = max(int(profile.get("click_repeat_count", 2) or 2), 1)
     single_click_notes = {str(item) for item in list(profile.get("single_click_notes") or [])}
@@ -69,16 +97,42 @@ def _click_point(app: Any, point: tuple[int, int], *, note: str, profile: dict[s
     )
     app.move_to(x, y, duration=0.0)
     for index in range(repeat_count):
+        _raise_if_cancelled()
         app.mouse_down(button="left")
-        _sleep_ms(hold_ms)
-        app.mouse_up(button="left")
+        try:
+            _sleep_ms(hold_ms)
+        finally:
+            app.mouse_up(button="left")
+        _raise_if_cancelled()
         if index < repeat_count - 1:
             _sleep_ms(repeat_interval_ms)
 
 
 def _sleep_ms(ms: int) -> None:
-    if ms > 0:
-        time.sleep(float(ms) / 1000.0)
+    _sleep_interruptibly(float(ms) / 1000.0)
+
+
+def _sleep_is_mocked() -> bool:
+    return hasattr(time.sleep, "mock_calls")
+
+
+def _sleep_interruptibly(duration_sec: float, *, quantum_sec: float = 0.05) -> None:
+    duration = max(float(duration_sec), 0.0)
+    _raise_if_cancelled()
+    if duration <= 0:
+        return
+    if _sleep_is_mocked():
+        time.sleep(duration)
+        _raise_if_cancelled()
+        return
+
+    deadline = time.monotonic() + duration
+    while True:
+        _raise_if_cancelled()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        time.sleep(min(remaining, max(float(quantum_sec), 0.01)))
 
 
 def _append_trace(
@@ -307,7 +361,7 @@ def _wait_for_stock_ready(
     )
     wait_start = time.monotonic()
     if remaining_sec > 0:
-        time.sleep(remaining_sec)
+        _sleep_interruptibly(remaining_sec)
     _perf_time(perf_stats, "stock_async_wait", time.monotonic() - wait_start)
     _perf_count(perf_stats, "stock_async_wait_count")
     _complete_ready_stock_batches(
@@ -785,6 +839,7 @@ def _drive_fake_customer_if_needed(
     start_time: float,
     fake_customer_state: dict[str, Any],
 ) -> tuple[dict[str, Any], bool]:
+    _raise_if_cancelled()
     if not bool(profile.get("fake_customer_enabled", True)):
         return {
             "detected": False,
@@ -932,6 +987,7 @@ def _drive_fake_customer_if_needed(
             logger.warning("Cafe[fake_customer] failed to save hammer debug image: %s", exc)
 
     for index, _candidate in enumerate(candidates):
+        _raise_if_cancelled()
         _click_point(app, hammer_point, note="fake_customer_hammer", profile=profile)
         if index < len(candidates) - 1:
             _sleep_ms(multi_hammer_interval_ms)
@@ -1016,6 +1072,7 @@ def _execute_recipe(
     *,
     stocks: dict[str, int],
 ) -> str:
+    _raise_if_cancelled()
     stock_id = _stock_id_for_recipe(recipe_id)
     if stock_id not in _enabled_stock_profiles(profile):
         raise ValueError(f"Cafe stock disabled for recipe {recipe_id}: {stock_id}")
@@ -1027,28 +1084,36 @@ def _execute_recipe(
     if recipe_id == "latte_coffee":
         _click_point(app, profile["glass_point"], note="latte_glass", profile=profile)
         _sleep_ms(step_delay_ms)
+        _raise_if_cancelled()
         _click_stock_item(app, profile, stock_id=stock_id, note="latte_coffee_stock")
         _sleep_ms(step_delay_ms)
+        _raise_if_cancelled()
         _click_point(app, profile["latte_art_point"], note="latte_art", profile=profile)
     elif recipe_id == "cream_coffee":
         _click_point(app, profile["coffee_cup_point"], note="cream_cup", profile=profile)
         _sleep_ms(step_delay_ms)
+        _raise_if_cancelled()
         _click_stock_item(app, profile, stock_id=stock_id, note="cream_coffee_stock")
         _sleep_ms(step_delay_ms)
+        _raise_if_cancelled()
         _click_point(app, profile["cream_point"], note="cream", profile=profile)
     elif recipe_id == "bacon_bread":
         _click_stock_item(app, profile, stock_id=stock_id, note="bacon_bread_stock")
         _sleep_ms(step_delay_ms)
+        _raise_if_cancelled()
         _click_point(app, profile["bacon_point"], note="bacon", profile=profile)
     elif recipe_id == "egg_croissant":
         _click_stock_item(app, profile, stock_id=stock_id, note="egg_croissant_stock")
         _sleep_ms(step_delay_ms)
+        _raise_if_cancelled()
         _click_point(app, profile["egg_point"], note="egg", profile=profile)
     elif recipe_id == "jam_cake":
         _click_stock_item(app, profile, stock_id=stock_id, note="jam_cake_stock")
         _sleep_ms(step_delay_ms)
+        _raise_if_cancelled()
         _click_point(app, profile["jam_point"], note="jam", profile=profile)
 
+    _raise_if_cancelled()
     stocks[stock_id] = max(int(stocks.get(stock_id, 0)) - 1, 0)
     _sleep_ms(int(profile["craft_delay_ms"]))
     return stock_id
@@ -1094,6 +1159,7 @@ def _wait_level_started(
     )
 
     while time.monotonic() < deadline:
+        _raise_if_cancelled()
         capture = app.capture()
         if not capture.success or capture.image is None:
             logger.error("Cafe[level_start] capture failed")
@@ -1282,6 +1348,7 @@ def yihuan_cafe_run_session(
     )
 
     try:
+        _raise_if_cancelled()
         if start_game_value:
             click_start = time.monotonic()
             _click_point(app, profile["start_game_point"], note="start_game", profile=profile)
@@ -1294,10 +1361,11 @@ def yihuan_cafe_run_session(
                 payload={"point": list(profile["start_game_point"])},
             )
             delay_start = time.monotonic()
-            time.sleep(float(profile["start_game_delay_sec"]))
+            _sleep_interruptibly(float(profile["start_game_delay_sec"]))
             _perf_time(perf_stats, "start_game_delay", time.monotonic() - delay_start)
 
         if wait_level_started_value:
+            _raise_if_cancelled()
             wait_start = time.monotonic()
             level_started, failure_reason, detection = _wait_level_started(
                 app,
@@ -1345,6 +1413,7 @@ def yihuan_cafe_run_session(
             )
 
             while True:
+                _raise_if_cancelled()
                 now = time.monotonic()
                 if now >= deadline:
                     stopped_reason = "max_seconds"
@@ -1385,12 +1454,13 @@ def yihuan_cafe_run_session(
                     sleep_sec = min(level_end_poll_sec, max(deadline - time.monotonic(), 0.0))
                     if sleep_sec > 0:
                         sleep_start = time.monotonic()
-                        time.sleep(sleep_sec)
+                        _sleep_interruptibly(sleep_sec)
                         _perf_time(perf_stats, "full_assist_wait", time.monotonic() - sleep_start)
                     continue
 
                 now = time.monotonic()
                 if now >= next_hammer_at:
+                    _raise_if_cancelled()
                     _click_point(app, hammer_point, note="fake_customer_hammer", profile=profile)
                     fake_customers_driven += 1
                     _perf_count(perf_stats, "full_assist_hammer_click_count")
@@ -1413,7 +1483,7 @@ def yihuan_cafe_run_session(
                 )
                 if sleep_sec > 0:
                     sleep_start = time.monotonic()
-                    time.sleep(sleep_sec)
+                    _sleep_interruptibly(sleep_sec)
                     _perf_time(perf_stats, "full_assist_wait", time.monotonic() - sleep_start)
 
             logger.info(
@@ -1437,6 +1507,7 @@ def yihuan_cafe_run_session(
             )
 
         while True:
+            _raise_if_cancelled()
             now = time.monotonic()
             ready_stocks = _complete_ready_stock_batches(
                 pending_batches,
@@ -1512,7 +1583,7 @@ def yihuan_cafe_run_session(
                             },
                         )
                         wait_start = time.monotonic()
-                        time.sleep(wait_sec)
+                        _sleep_interruptibly(wait_sec)
                         actual_wait_sec = time.monotonic() - wait_start
                         _perf_time(perf_stats, "order_pacing_wait", actual_wait_sec)
                         _perf_count(perf_stats, "order_pacing_wait_count")
@@ -1534,6 +1605,7 @@ def yihuan_cafe_run_session(
                     break
 
             capture_start = time.monotonic()
+            _raise_if_cancelled()
             capture = app.capture()
             _perf_time(perf_stats, "capture_before_stock", time.monotonic() - capture_start)
             _perf_count(perf_stats, "capture_count")
@@ -1570,6 +1642,7 @@ def yihuan_cafe_run_session(
                 continue
 
             fake_scan_start = time.monotonic()
+            _raise_if_cancelled()
             fake_detection, fake_driven = _drive_fake_customer_if_needed(
                 app,
                 yihuan_cafe,
@@ -1598,6 +1671,7 @@ def yihuan_cafe_run_session(
                 _perf_count(perf_stats, "fake_customer_cooldown_skip_count")
 
             stock_sync_start = time.monotonic()
+            _raise_if_cancelled()
             stock_sync_result = _sync_stocks_from_visual(
                 yihuan_cafe,
                 capture.image,
@@ -1615,6 +1689,7 @@ def yihuan_cafe_run_session(
             )
 
             restock_start = time.monotonic()
+            _raise_if_cancelled()
             started_stocks = _start_depleted_stocks_async(
                 app,
                 profile,
@@ -1639,6 +1714,7 @@ def yihuan_cafe_run_session(
 
             if started_stocks:
                 capture_start = time.monotonic()
+                _raise_if_cancelled()
                 capture = app.capture()
                 _perf_time(perf_stats, "capture_before_scan", time.monotonic() - capture_start)
                 _perf_count(perf_stats, "capture_count")
@@ -1677,6 +1753,7 @@ def yihuan_cafe_run_session(
                 continue
 
             fake_scan_start = time.monotonic()
+            _raise_if_cancelled()
             fake_detection, fake_driven = _drive_fake_customer_if_needed(
                 app,
                 yihuan_cafe,
@@ -1713,6 +1790,7 @@ def yihuan_cafe_run_session(
                 )
 
             scan_start = time.monotonic()
+            _raise_if_cancelled()
             orders = yihuan_cafe.analyze_orders(capture.image, profile_name=resolved_profile)
             scan_elapsed = time.monotonic() - scan_start
             scan_debug = {}
@@ -1971,6 +2049,7 @@ def yihuan_cafe_run_session(
 
             recipe_start = time.monotonic()
             stock_wait_start = time.monotonic()
+            _raise_if_cancelled()
             stock_ready = _wait_for_stock_ready(
                 app,
                 profile,
@@ -1995,6 +2074,7 @@ def yihuan_cafe_run_session(
             if not stock_ready:
                 raise RuntimeError(f"Cafe stock not ready for recipe {recipe_id}: {selected_stock_id}")
             order_make_started_at = time.monotonic()
+            _raise_if_cancelled()
             consumed_stock_id = _execute_recipe(app, profile, recipe_id, stocks=stocks)
             order_track_removed = False
             if hasattr(yihuan_cafe, "mark_order_completed"):
@@ -2045,6 +2125,7 @@ def yihuan_cafe_run_session(
             )
 
             capture_start = time.monotonic()
+            _raise_if_cancelled()
             capture = app.capture()
             _perf_time(perf_stats, "capture_after_order", time.monotonic() - capture_start)
             _perf_count(perf_stats, "capture_count")
@@ -2122,6 +2203,7 @@ def yihuan_cafe_run_session(
                     },
                 )
                 restock_start = time.monotonic()
+                _raise_if_cancelled()
                 started_stocks = _start_depleted_stocks_async(
                     app,
                     profile,
@@ -2158,6 +2240,13 @@ def yihuan_cafe_run_session(
             stopped_reason=stopped_reason,
             failure_reason_value=None,
         )
+    except _CafeSessionCancelled:
+        logger.info("Cafe[session] cancelled orders_completed=%s stocks=%s batches=%s", orders_completed, stocks, batches_made)
+        return result_payload(
+            status="cancelled",
+            stopped_reason="cancelled",
+            failure_reason_value="cancelled",
+        )
     except Exception as exc:  # noqa: BLE001
         failure_reason = type(exc).__name__
         logger.exception("Cafe[session] failed: %s", exc)
@@ -2168,3 +2257,5 @@ def yihuan_cafe_run_session(
             failure_reason_value=failure_reason,
             extra={"failure_message": str(exc)},
         )
+    finally:
+        _release_all(app)

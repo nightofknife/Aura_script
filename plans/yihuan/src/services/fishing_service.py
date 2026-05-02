@@ -84,8 +84,21 @@ class YihuanFishingService:
             "result_text_region": self._coerce_region(payload.get("result_text_region")),
             "ready_anchor_region": self._coerce_region(payload.get("ready_anchor_region")),
             "result_close_point": self._coerce_point(payload.get("result_close_point")),
+            "result_close_action": self._profile_str(payload, "result_close_action", "menu_back"),
             "duel_end_missing_sec": max(float(payload.get("duel_end_missing_sec", 1.0) or 0.0), 0.0),
             "post_duel_click_interval_ms": max(int(payload.get("post_duel_click_interval_ms", 1000) or 1000), 10),
+            "post_duel_close_interval_ms": max(
+                self._profile_int(
+                    payload,
+                    "post_duel_close_interval_ms",
+                    int(payload.get("post_duel_click_interval_ms", 1000) or 1000),
+                ),
+                10,
+            ),
+            "post_duel_ready_stable_sec": max(
+                self._profile_float(payload, "post_duel_ready_stable_sec", 1.0),
+                0.0,
+            ),
             "ocr_texts": {
                 "bite_required": self._coerce_text_list((payload.get("ocr_texts") or {}).get("bite_required")),
                 "result_required": self._coerce_text_list((payload.get("ocr_texts") or {}).get("result_required")),
@@ -171,6 +184,7 @@ class YihuanFishingService:
             ),
             "sell_open_action": self._profile_str(payload, "sell_open_action", "fish_sell_shop"),
             "sell_step_interval_ms": max(self._profile_int(payload, "sell_step_interval_ms", 1000), 0),
+            "sell_click_hold_ms": max(self._profile_int(payload, "sell_click_hold_ms", 100), 0),
             "sell_tab_point": self._coerce_point(payload.get("sell_tab_point") or (110, 280)),
             "sell_one_click_point": self._coerce_point(payload.get("sell_one_click_point") or (710, 640)),
             "sell_confirm_point": self._coerce_point(payload.get("sell_confirm_point") or (780, 470)),
@@ -211,6 +225,7 @@ class YihuanFishingService:
             ),
             "bait_shop_open_action": self._profile_str(payload, "bait_shop_open_action", "fish_bait_shop"),
             "bait_step_interval_ms": max(self._profile_int(payload, "bait_step_interval_ms", 800), 0),
+            "bait_click_hold_ms": max(self._profile_int(payload, "bait_click_hold_ms", 100), 0),
             "bait_item_kind": self._profile_str(payload, "bait_item_kind", "universal_bait"),
             "bait_item_point": self._coerce_point(payload.get("bait_item_point") or (374, 165)),
             "bait_item_after_wait_ms": max(self._profile_int(payload, "bait_item_after_wait_ms", 500), 0),
@@ -266,6 +281,9 @@ class YihuanFishingService:
                 "bait_change_match_threshold",
                 0.78,
             ),
+            "trace_limit": max(self._profile_int(payload, "trace_limit", 240), 1),
+            "session_results_limit": max(self._profile_int(payload, "session_results_limit", 60), 1),
+            "active_sell_results_limit": max(self._profile_int(payload, "active_sell_results_limit", 20), 1),
         }
         self._profile_cache[resolved_name] = normalized
         return dict(normalized)

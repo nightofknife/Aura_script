@@ -284,6 +284,16 @@ class TestYihuanMahjongActions(unittest.TestCase):
         self.assertEqual(result["stopped_reason"], "failure")
         self.assertEqual(result["failure_reason"], "capture_failed")
 
+    @patch("plans.yihuan.src.actions.mahjong_actions._mahjong_cancel_requested", return_value=True)
+    def test_run_session_returns_cancelled_when_stop_is_requested(self, _cancel_requested):
+        app = _FakeApp(_make_ready_image())
+
+        result = mahjong_actions.yihuan_mahjong_run_session(app, self.service, max_seconds=5)
+
+        self.assertEqual(result["status"], "cancelled")
+        self.assertEqual(result["stopped_reason"], "cancelled")
+        self.assertEqual(result["failure_reason"], "cancelled")
+
 
 def _load_fixture(filename: str) -> np.ndarray:
     image = cv2.imread(str(FIXTURE_DIR / filename), cv2.IMREAD_COLOR)

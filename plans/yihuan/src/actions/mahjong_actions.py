@@ -11,6 +11,7 @@ import cv2
 
 from packages.aura_core.api import action_info, requires_services
 from packages.aura_core.observability.logging.core_logger import logger
+from packages.aura_core.scheduler.cancellation import is_current_task_cancel_requested
 
 from ..services.mahjong_service import YihuanMahjongService
 
@@ -19,12 +20,62 @@ class _MahjongSessionStop(Exception):
     """Internal control-flow marker for an already classified session stop."""
 
 
+class _MahjongSessionCancelled(Exception):
+    """Internal marker used to stop the sync mahjong action cooperatively."""
+
+
+def _mahjong_cancel_requested() -> bool:
+    try:
+        return is_current_task_cancel_requested()
+    except Exception:
+        return False
+
+
+def _raise_if_cancelled() -> None:
+    if _mahjong_cancel_requested():
+        raise _MahjongSessionCancelled()
+
+
+def _sleep_is_mocked() -> bool:
+    return hasattr(time.sleep, "mock_calls")
+
+
+def _sleep_interruptibly(duration_sec: float, *, quantum_sec: float = 0.05) -> None:
+    duration = max(float(duration_sec), 0.0)
+    _raise_if_cancelled()
+    if duration <= 0:
+        return
+    if _sleep_is_mocked():
+        time.sleep(duration)
+        _raise_if_cancelled()
+        return
+
+    deadline = time.monotonic() + duration
+    while True:
+        _raise_if_cancelled()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        time.sleep(min(remaining, max(float(quantum_sec), 0.01)))
+
+
+def _release_all(app: Any) -> None:
+    try:
+        if hasattr(app, "release_all"):
+            app.release_all()
+        elif hasattr(app, "controller") and hasattr(app.controller, "release_all"):
+            app.controller.release_all()
+    except Exception:
+        logger.debug("Mahjong[input] release_all failed during cancellation cleanup.", exc_info=True)
+
+
 def _capture_phase(
     app: Any,
     yihuan_mahjong: YihuanMahjongService,
     *,
     profile_name: str,
 ) -> tuple[dict[str, Any], Any]:
+    _raise_if_cancelled()
     capture = app.capture()
     if not capture.success or capture.image is None:
         raise RuntimeError("Failed to capture the Yihuan Mahjong screen.")
@@ -122,6 +173,7 @@ def _record_mouse_action(
     executed_actions: list[dict[str, Any]],
     point_is_scaled: bool = False,
 ) -> None:
+    _raise_if_cancelled()
     click_point = (
         (int(logical_point[0]), int(logical_point[1]))
         if point_is_scaled
@@ -139,10 +191,11 @@ def _record_mouse_action(
         return
     logger.info("Mahjong[action] click action=%s point=%s", action_name, click_point)
     app.click(int(click_point[0]), int(click_point[1]), button="left", clicks=1)
+    _raise_if_cancelled()
     executed_actions.append(record)
     delay_sec = float(profile["post_click_delay_ms"]) / 1000.0
     if delay_sec > 0:
-        time.sleep(delay_sec)
+        _sleep_interruptibly(delay_sec)
 
 
 def _deadline_reached(deadline: float | None) -> bool:
@@ -163,6 +216,7 @@ def _wait_for_phase(
     deadline = time.monotonic() + max(float(timeout_sec), 0.0)
     poll_sec = float(profile["poll_ms"]) / 1000.0
     while True:
+        _raise_if_cancelled()
         phase, capture = _capture_phase(app, yihuan_mahjong, profile_name=str(profile["profile_name"]))
         _append_trace(phase_trace, start_time=start_time, phase=phase, note=note)
         if str(phase.get("phase")) in target_phases:
@@ -170,7 +224,7 @@ def _wait_for_phase(
         if time.monotonic() >= deadline:
             return None
         if poll_sec > 0:
-            time.sleep(poll_sec)
+            _sleep_interruptibly(poll_sec)
 
 
 def _wait_for_exchange_confirm_or_next_phase(
@@ -184,6 +238,7 @@ def _wait_for_exchange_confirm_or_next_phase(
     deadline = time.monotonic() + float(profile["exchange_wait_timeout_sec"])
     poll_sec = float(profile["poll_ms"]) / 1000.0
     while True:
+        _raise_if_cancelled()
         phase, capture = _capture_phase(app, yihuan_mahjong, profile_name=str(profile["profile_name"]))
         _append_trace(phase_trace, start_time=start_time, phase=phase, note="exchange_confirm_wait")
         if phase.get("phase") in {"dingque", "playing", "result"}:
@@ -194,7 +249,7 @@ def _wait_for_exchange_confirm_or_next_phase(
         if time.monotonic() >= deadline:
             return None
         if poll_sec > 0:
-            time.sleep(poll_sec)
+            _sleep_interruptibly(poll_sec)
 
 
 def _ensure_auto_switches(
@@ -218,6 +273,7 @@ def _ensure_auto_switches(
     verify_delay_sec = float(profile["switch_verify_delay_ms"]) / 1000.0
 
     while True:
+        _raise_if_cancelled()
         playing = dict(current_phase.get("playing") or {})
         switches = dict(playing.get("switches") or {})
         remaining = []
@@ -235,6 +291,7 @@ def _ensure_auto_switches(
             break
 
         for name in remaining:
+            _raise_if_cancelled()
             switch_profile = dict(dict(profile["auto_switches"]).get(name) or {})
             point = switch_profile.get("point")
             if not point:
@@ -255,7 +312,7 @@ def _ensure_auto_switches(
         if dry_run:
             break
         if verify_delay_sec > 0:
-            time.sleep(verify_delay_sec)
+            _sleep_interruptibly(verify_delay_sec)
         current_phase, current_capture = _capture_phase(
             app,
             yihuan_mahjong,
@@ -386,6 +443,7 @@ def yihuan_mahjong_run_session(
     )
 
     try:
+        _raise_if_cancelled()
         phase, capture = _capture_phase(app, yihuan_mahjong, profile_name=resolved_profile)
         last_phase = phase
         _append_trace(phase_trace, start_time=start_time, phase=phase, note="initial")
@@ -723,6 +781,7 @@ def yihuan_mahjong_run_session(
             phase_timeout = time.monotonic() + float(profile["phase_timeout_sec"])
             poll_sec = float(profile["poll_ms"]) / 1000.0
             while phase["phase"] not in {"playing", "result"}:
+                _raise_if_cancelled()
                 if _deadline_reached(deadline) or time.monotonic() >= phase_timeout:
                     return _finish(
                         status="partial" if _deadline_reached(deadline) else "failed",
@@ -741,7 +800,7 @@ def yihuan_mahjong_run_session(
                         missing_suit_decision=missing_suit_decision,
                     )
                 if poll_sec > 0:
-                    time.sleep(poll_sec)
+                    _sleep_interruptibly(poll_sec)
                 phase, capture = _capture_phase(app, yihuan_mahjong, profile_name=resolved_profile)
                 last_phase = phase
                 _append_trace(phase_trace, start_time=start_time, phase=phase, note="phase_wait")
@@ -765,6 +824,7 @@ def yihuan_mahjong_run_session(
         poll_sec = float(profile["poll_ms"]) / 1000.0
         unknown_started_at: float | None = None
         while True:
+            _raise_if_cancelled()
             if phase.get("phase") == "result":
                 return _finish(
                     status="success",
@@ -821,10 +881,29 @@ def yihuan_mahjong_run_session(
             else:
                 unknown_started_at = None
             if poll_sec > 0:
-                time.sleep(poll_sec)
+                _sleep_interruptibly(poll_sec)
             phase, capture = _capture_phase(app, yihuan_mahjong, profile_name=resolved_profile)
             last_phase = phase
             _append_trace(phase_trace, start_time=start_time, phase=phase, note="monitor")
+    except _MahjongSessionCancelled:
+        logger.info("Mahjong[session] cancelled phase=%s", (last_phase or {}).get("phase"))
+        _release_all(app)
+        return _finish(
+            status="cancelled",
+            stopped_reason="cancelled",
+            failure_reason="cancelled",
+            profile_name=resolved_profile,
+            selected_missing_suit=selected_missing_suit,
+            hand_suit_counts=hand_suit_counts,
+            auto_toggles_enabled=auto_toggles_enabled,
+            phase_trace=phase_trace,
+            start_time=start_time,
+            planned_actions=planned_actions,
+            executed_actions=executed_actions,
+            last_phase=last_phase,
+            dry_run=dry_run_enabled,
+            missing_suit_decision=missing_suit_decision,
+        )
     except RuntimeError as exc:
         logger.warning("Mahjong[session] capture failed: %s", exc)
         return _finish(
