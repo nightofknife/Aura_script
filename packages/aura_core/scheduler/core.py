@@ -110,8 +110,10 @@ class Scheduler:
         self.interrupt_queue: Optional[asyncio.Queue[Dict]] = None
         self.state = SchedulerRuntimeState()
 
-        # API log queue is thread-safe queue.Queue for cross-thread streaming.
-        self.api_log_queue: queue.Queue = queue.Queue(maxsize=0)
+        # API log queue is bounded to avoid unbounded log growth when no consumer is attached.
+        self.api_log_queue: queue.Queue = queue.Queue(
+            maxsize=max(int(get_config_value("logging.api_queue_maxsize", 2000)), 1)
+        )
 
         # --- 服务实例 ---
         self.config_service = ConfigService()

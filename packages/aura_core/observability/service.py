@@ -37,9 +37,11 @@ class ObservabilityService:
         self.cleanup_interval = int(get_config_value("observability.cleanup_interval", 300))
         # 最大保留的已完成任务数量，默认1000
         self.max_completed_tasks = int(get_config_value("observability.max_completed_tasks", 1000))
+        self.metrics_emit_interval_ms = max(int(get_config_value("observability.metrics_emit_interval_ms", 250)), 0)
 
         # 后台清理任务
         self._cleanup_task: Optional[asyncio.Task] = None
+        self._last_metrics_emit_ms = 0
 
         runs_dir_cfg = get_config_value(
             "observability.runs.dir",
@@ -72,7 +74,8 @@ class ObservabilityService:
             "updated_at": time.time(),
         }
 
-        self._ui_event_queue: queue.Queue = queue.Queue(maxsize=0)
+        self._ui_event_queue_maxsize = max(int(get_config_value("observability.ui_event_queue_maxsize", 2000)), 1)
+        self._ui_event_queue: queue.Queue = queue.Queue(maxsize=self._ui_event_queue_maxsize)
 
     def get_ui_event_queue(self) -> queue.Queue:
         return self._ui_event_queue
@@ -89,9 +92,27 @@ class ObservabilityService:
     async def mirror_event_to_ui_queue(self, event: Event):
         if self._ui_event_queue:
             try:
-                self._ui_event_queue.put_nowait(event.to_dict())
-            except queue.Full:
+                self._put_queue_item_bounded(self._ui_event_queue, event.to_dict())
+            except Exception:
                 pass
+
+    @staticmethod
+    def _put_queue_item_bounded(target_queue: queue.Queue, item: Any) -> None:
+        try:
+            target_queue.put_nowait(item)
+            return
+        except queue.Full:
+            pass
+
+        try:
+            target_queue.get_nowait()
+        except queue.Empty:
+            return
+
+        try:
+            target_queue.put_nowait(item)
+        except queue.Full:
+            pass
 
     def _update_metrics_from_event(self, name: str, payload: Dict[str, Any]) -> bool:
         changed = False
@@ -427,9 +448,24 @@ class ObservabilityService:
 
         if persist_event and run_snapshot and self.persist_runs:
             await self._persist_run_snapshot(cid, run_snapshot)
-        if metrics_changed and self._event_bus:
+        if metrics_changed and self._event_bus and self._should_publish_metrics_event(name):
             snap = self.get_metrics_snapshot()
             await self._event_bus.publish(Event(name="metrics.update", payload=snap))
+
+    def _should_publish_metrics_event(self, event_name: str) -> bool:
+        if self.metrics_emit_interval_ms <= 0:
+            return True
+
+        now_ms = int(time.monotonic() * 1000)
+        normalized = str(event_name or "").strip().lower()
+        if normalized in {"task.started", "task.finished"}:
+            self._last_metrics_emit_ms = now_ms
+            return True
+
+        if now_ms - self._last_metrics_emit_ms >= self.metrics_emit_interval_ms:
+            self._last_metrics_emit_ms = now_ms
+            return True
+        return False
 
     def get_queue_overview(self) -> Dict[str, Any]:
         now = time.time()
@@ -746,8 +782,19 @@ class ObservabilityService:
                 self._obs_completed = to_keep
                 removed_count += removed
 
+            self._rebuild_trace_index_unlocked()
+
         if removed_count > 0:
             logger.debug(f"[ObservabilityService] Cleaned up {removed_count} completed tasks")
+
+    def _rebuild_trace_index_unlocked(self) -> None:
+        rebuilt: Dict[str, str] = {}
+        for source in (self._obs_runs, self._obs_completed):
+            for cid, run in source.items():
+                trace_id = str(run.get("trace_id") or "").strip()
+                if trace_id and trace_id not in rebuilt:
+                    rebuilt[trace_id] = cid
+        self._obs_runs_by_trace = rebuilt
 
     async def _cleanup_loop(self):
         """后台清理循环任务。"""

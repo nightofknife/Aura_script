@@ -18,6 +18,9 @@ except ImportError:
     ValidationError = Exception  # type: ignore
 
 from packages.aura_core.observability.logging.core_logger import logger
+from packages.aura_core.observability.logging.core_logger import current_cid
+from packages.aura_core.scheduler.cancellation import request_task_cancel
+from packages.aura_core.config.loader import get_config_value
 
 from ..api import ACTION_REGISTRY, ActionDefinition
 from ..config.template import TemplateRenderer
@@ -89,10 +92,39 @@ class ActionInjector:
 
         loop = asyncio.get_running_loop()
         context_snapshot = contextvars.copy_context()
-        return await loop.run_in_executor(
+        future = loop.run_in_executor(
             None,
             lambda: context_snapshot.run(action_def.func, **call_args),
         )
+        try:
+            return await asyncio.shield(future)
+        except asyncio.CancelledError:
+            cid = current_cid()
+            request_task_cancel(cid)
+            grace_sec = max(float(get_config_value("execution.sync_action_cancel_grace_sec", 2.0) or 2.0), 0.0)
+            if grace_sec > 0:
+                try:
+                    await asyncio.wait_for(asyncio.shield(future), timeout=grace_sec)
+                    logger.info(
+                        "Sync action '%s' finished cleanup after cancellation request (cid=%s).",
+                        action_def.name,
+                        cid,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "Sync action '%s' did not finish within %.1fs after cancellation request (cid=%s).",
+                        action_def.name,
+                        grace_sec,
+                        cid,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug(
+                        "Sync action '%s' ended with %s during cancellation cleanup (cid=%s).",
+                        action_def.name,
+                        type(exc).__name__,
+                        cid,
+                    )
+            raise
 
     async def _execute_run_task(self, raw_params: Dict[str, Any]) -> Any:
         logger.info("Executing sub-task via aura.run_task")

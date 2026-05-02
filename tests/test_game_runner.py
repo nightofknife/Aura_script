@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import threading
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
+from packages.aura_core.scheduler.cancellation import clear_task_cancel, is_task_cancel_requested
+from packages.aura_core.scheduler.task_dispatcher import TaskDispatcher
 from packages.aura_core.runtime import AdminPrivilegeRequiredError
 from packages.aura_game import EmbeddedGameRunner, SubprocessGameRunner
 
@@ -155,6 +158,35 @@ class TestGameRunners(unittest.TestCase):
                     runner.list_games()
         finally:
             runner.close()
+
+    def test_dispatcher_cancel_marks_cooperative_cancel_request(self):
+        class FakeTask:
+            def __init__(self):
+                self.cancel_called = False
+
+            def done(self):
+                return False
+
+            def cancel(self):
+                self.cancel_called = True
+
+        task = FakeTask()
+        scheduler = SimpleNamespace(
+            fallback_lock=threading.RLock(),
+            running_tasks={"cid-123": task},
+            _running_task_meta={},
+            _loop=None,
+        )
+        clear_task_cancel("cid-123")
+
+        try:
+            result = TaskDispatcher(scheduler).cancel_task("cid-123")
+
+            self.assertEqual(result["status"], "success")
+            self.assertTrue(task.cancel_called)
+            self.assertTrue(is_task_cancel_requested("cid-123"))
+        finally:
+            clear_task_cancel("cid-123")
 
 
 if __name__ == "__main__":

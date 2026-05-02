@@ -27,6 +27,7 @@ from typing import Dict, Any, Optional, List, TYPE_CHECKING
 from ...api import hook_manager
 from ...types import TaskRefResolver
 from packages.aura_core.scheduler.queues.task_queue import Tasklet
+from packages.aura_core.scheduler.cancellation import request_task_cancel
 from packages.aura_core.observability.logging.core_logger import logger, set_cid, reset_cid
 from packages.aura_core.config.loader import get_config_value
 
@@ -110,6 +111,11 @@ class ExecutionManager:
 
         task_id_for_status = tasklet.payload.get('id') if tasklet.payload else None
         task_name_for_log = task_id_for_status or tasklet.task_name
+        plan_name_for_meta = None
+        if isinstance(tasklet.payload, dict):
+            plan_name_for_meta = tasklet.payload.get('plan_name')
+        if not plan_name_for_meta and tasklet.task_name and "/" in tasklet.task_name:
+            plan_name_for_meta = tasklet.task_name.split("/", 1)[0]
         now = datetime.now()
         task_context = {"tasklet": tasklet, "start_time": now}
 
@@ -124,6 +130,7 @@ class ExecutionManager:
             with self.scheduler.fallback_lock:
                 self.scheduler.running_tasks[tasklet.cid] = current_task
                 self.scheduler._running_task_meta[tasklet.cid] = {
+                    'plan_name': plan_name_for_meta,
                     'task_name': tasklet.task_name,
                     'start_time': now,
                     'tasklet': tasklet
@@ -175,9 +182,21 @@ class ExecutionManager:
         except (asyncio.TimeoutError, asyncio.CancelledError, StatePlanningError) as e:
             status_update = {'status': 'idle', 'last_run': now}
             if isinstance(e, asyncio.TimeoutError):
+                if tasklet.cid and request_task_cancel(tasklet.cid):
+                    logger.info(
+                        "Task '%s' timeout requested cooperative cancellation for cid=%s.",
+                        task_name_for_log,
+                        tasklet.cid,
+                    )
                 logger.error(f"任务 '{task_name_for_log}' 超时 (超过 {tasklet.timeout} 秒)。")
                 status_update['result'] = 'timeout'
             elif isinstance(e, asyncio.CancelledError):
+                if tasklet.cid and request_task_cancel(tasklet.cid):
+                    logger.info(
+                        "Task '%s' cancellation requested cooperative cancellation for cid=%s.",
+                        task_name_for_log,
+                        tasklet.cid,
+                    )
                 logger.warning(f"任务 '{task_name_for_log}' 被取消。")
                 status_update['result'] = 'cancelled'
             else:  # StatePlanningError

@@ -44,7 +44,7 @@ class Tasklet:
     initial_context: Optional[Dict[str, Any]] = field(default_factory=dict)
     execution_mode: Literal['sync', 'async'] = 'sync'
     resource_tags: List[str] = field(default_factory=list)
-    timeout: Optional[float] = 3600.0
+    timeout: Optional[float] = 43200.0
     cpu_bound: bool = False
     enqueued_at: float = field(default_factory=time.time)
     planning_depth: int = 0  # ✅ 新增：状态规划递归深度

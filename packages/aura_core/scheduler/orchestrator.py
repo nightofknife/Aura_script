@@ -374,6 +374,15 @@ class Orchestrator:
                 else:
                     user_data = True
 
+        except asyncio.CancelledError:
+            final_status = 'CANCELLED'
+            error_details = {'message': 'Task cancellation requested.', 'type': 'CancelledError'}
+            logger.warning(
+                "Task execution cancelled at orchestrator level for '%s:%s'.",
+                task_file_path,
+                task_key,
+            )
+            raise
         except Exception as exc:
             final_status = 'ERROR'
             error_details = {'message': str(exc), 'type': type(exc).__name__}

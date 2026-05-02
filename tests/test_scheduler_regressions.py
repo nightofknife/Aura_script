@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import queue
 import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
 import yaml
+from unittest.mock import patch
 
 from packages.aura_core.api.definitions import ActionDefinition, ServiceDefinition
 from packages.aura_core.context.execution import ExecutionContext
@@ -20,10 +23,15 @@ from packages.aura_core.packaging.core.package_manager import PackageManager
 from packages.aura_core.packaging.core.task_validator import TaskDefinitionValidator, TaskValidationError
 from packages.aura_core.packaging.manifest.schema import PackageInfo, PluginManifest
 from packages.aura_core.api import ACTION_REGISTRY, service_registry
+from packages.aura_core.observability.events import Event
+from packages.aura_core.observability.logging.core_logger import QueueLogHandler
+from packages.aura_core.observability.service import ObservabilityService
 from packages.aura_core.scheduler import orchestrator as orchestrator_module
+from packages.aura_core.scheduler.cancellation import clear_task_cancel, is_task_cancel_requested
 from packages.aura_core.scheduler.execution.dispatcher import DispatchService
 from packages.aura_core.scheduler.execution.manager import ExecutionManager
 from packages.aura_core.scheduler.queues.task_queue import Tasklet
+from packages.aura_core.scheduler.runtime_lifecycle import RuntimeLifecycleService
 from packages.aura_core.scheduler.run_query import RunQueryService
 from packages.aura_core.scheduler import scheduling_service as scheduling_module
 from packages.aura_core.utils.middleware import Middleware, middleware_manager
@@ -97,6 +105,35 @@ class _TraceMiddleware(Middleware):
         result = await next_handler(action_def, context, next_params)
         self.sink.append("after")
         return result * 2
+
+
+class _DummyEventBus:
+    def __init__(self):
+        self.published: list[Event] = []
+
+    async def publish(self, event: Event):
+        self.published.append(event)
+
+
+class _RecordingEventBus:
+    def __init__(self):
+        self.subscriptions: list[dict] = []
+        self.cleared_keep_persistent: list[bool] = []
+
+    async def subscribe(self, **kwargs):
+        self.subscriptions.append(dict(kwargs))
+
+    async def clear_subscriptions(self, keep_persistent=True):
+        self.cleared_keep_persistent.append(bool(keep_persistent))
+
+    def get_stats(self):
+        return {
+            "total_subscriptions": len(self.subscriptions),
+            "persistent_subscriptions": len(self.subscriptions),
+            "transient_subscriptions": 0,
+            "active_loops": 0,
+            "unique_patterns": len({item["event_pattern"] for item in self.subscriptions}),
+        }
 
 
 def _build_manifest() -> PluginManifest:
@@ -192,6 +229,45 @@ def test_resource_tag_parser_accepts_colon_rich_tags():
     assert len(semaphores) == 3
     assert "__mutex_group__:alpha" in manager._resource_sems
     assert "__max_instances__:demo/task" in manager._resource_sems
+
+
+def test_tasklet_default_timeout_is_12_hours():
+    assert Tasklet(task_name="demo/task").timeout == 12 * 60 * 60
+
+
+def test_execution_manager_requests_cooperative_cancel_on_timeout(monkeypatch):
+    cid = "timeout-cid"
+    clear_task_cancel(cid)
+
+    scheduler = SimpleNamespace(
+        fallback_lock=threading.RLock(),
+        running_tasks={},
+        _running_task_meta={},
+        all_tasks_definitions={"demo/task": {"meta": {}}},
+        update_run_status=lambda *_args, **_kwargs: None,
+    )
+    manager = ExecutionManager(scheduler=scheduler)
+    manager._io_pool = object()
+    manager._cpu_pool = object()
+
+    async def _timeout_run(_tasklet):
+        raise asyncio.TimeoutError()
+
+    monkeypatch.setattr(manager, "_run_execution_chain", _timeout_run)
+
+    asyncio.run(
+        manager.submit(
+            Tasklet(
+                task_name="demo/task",
+                cid=cid,
+                payload={"id": f"adhoc:{cid}"},
+                timeout=1.0,
+            )
+        )
+    )
+
+    assert is_task_cancel_requested(cid) is True
+    clear_task_cancel(cid)
 
 
 def test_services_api_serialization_handles_manifest_plugins_and_unknown_objects():
@@ -459,6 +535,128 @@ def test_sleep_action_awaits_asyncio_sleep(monkeypatch):
 
     assert asyncio.run(wait_actions_module.sleep(0.5)) is True
     assert observed == [0.5]
+
+
+def test_observability_ui_queue_is_bounded_and_drops_oldest(monkeypatch, tmp_path):
+    def _fake_get_config_value(key, default=None):
+        if key == "observability.ui_event_queue_maxsize":
+            return 2
+        return default
+
+    monkeypatch.setattr("packages.aura_core.observability.service.get_config_value", _fake_get_config_value)
+
+    service = ObservabilityService(event_bus=None, base_path=tmp_path)
+
+    asyncio.run(service.mirror_event_to_ui_queue(Event(name="one", payload={"i": 1})))
+    asyncio.run(service.mirror_event_to_ui_queue(Event(name="two", payload={"i": 2})))
+    asyncio.run(service.mirror_event_to_ui_queue(Event(name="three", payload={"i": 3})))
+
+    queued = []
+    while not service.get_ui_event_queue().empty():
+        queued.append(service.get_ui_event_queue().get_nowait()["name"])
+
+    assert queued == ["two", "three"]
+
+
+def test_observability_metrics_update_is_rate_limited(monkeypatch, tmp_path):
+    bus = _DummyEventBus()
+
+    def _fake_get_config_value(key, default=None):
+        if key == "observability.metrics_emit_interval_ms":
+            return 1000
+        return default
+
+    monkeypatch.setattr("packages.aura_core.observability.service.get_config_value", _fake_get_config_value)
+
+    service = ObservabilityService(event_bus=bus, base_path=tmp_path)
+
+    asyncio.run(
+        service.ingest_event(
+            Event(name="queue.enqueued", payload={"cid": "cid-1", "game_name": "yihuan", "task_name": "tasks:demo"})
+        )
+    )
+    asyncio.run(
+        service.ingest_event(
+            Event(name="queue.dequeued", payload={"cid": "cid-1", "game_name": "yihuan", "task_name": "tasks:demo"})
+        )
+    )
+
+    metric_events = [event for event in bus.published if event.name == "metrics.update"]
+    assert len(metric_events) == 1
+
+
+def test_observability_trace_index_is_pruned_with_completed_runs(monkeypatch, tmp_path):
+    service = ObservabilityService(event_bus=None, base_path=tmp_path)
+
+    asyncio.run(
+        service.ingest_event(
+            Event(name="task.started", payload={"cid": "cid-1", "trace_id": "trace-1", "task_name": "tasks:demo"})
+        )
+    )
+    asyncio.run(
+        service.ingest_event(
+            Event(
+                name="task.finished",
+                payload={"cid": "cid-1", "trace_id": "trace-1", "task_name": "tasks:demo", "final_status": "success"},
+            )
+        )
+    )
+
+    assert service._obs_runs_by_trace["trace-1"] == "cid-1"
+
+    service.completed_task_ttl = 0
+    for run in service._obs_completed.values():
+        run["completed_timestamp"] = 0.0
+
+    service._cleanup_completed_tasks()
+
+    assert "trace-1" not in service._obs_runs_by_trace
+
+
+def test_queue_log_handler_drops_oldest_when_bounded_queue_is_full():
+    log_queue = queue.Queue(maxsize=1)
+    handler = QueueLogHandler(log_queue)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+
+    first = logging.LogRecord("test", logging.INFO, __file__, 1, "first", (), None)
+    second = logging.LogRecord("test", logging.INFO, __file__, 2, "second", (), None)
+
+    handler.emit(first)
+    handler.emit(second)
+
+    assert log_queue.qsize() == 1
+    assert log_queue.get_nowait() == "second"
+
+
+def test_runtime_lifecycle_registers_explicit_ui_subscriptions_only():
+    event_bus = _RecordingEventBus()
+    scheduler = SimpleNamespace(
+        _core_subscriptions_ready=False,
+        event_bus=event_bus,
+        runtime_profile=SimpleNamespace(enable_event_triggers=False),
+        dispatcher=SimpleNamespace(subscribe_event_triggers=None),
+        observability=SimpleNamespace(
+            mirror_event_to_ui_queue=lambda *_args, **_kwargs: None,
+            ingest_event=lambda *_args, **_kwargs: None,
+        ),
+    )
+    service = RuntimeLifecycleService(scheduler)
+
+    asyncio.run(service.async_reload_subscriptions())
+
+    patterns = [item["event_pattern"] for item in event_bus.subscriptions]
+    assert "*" not in patterns
+    assert patterns == [
+        "scheduler.started",
+        "metrics.update",
+        "queue.*",
+        "task.*",
+        "node.*",
+        "task.*",
+        "node.*",
+        "queue.*",
+    ]
+    assert scheduler._core_subscriptions_ready is True
 
 
 def test_yolo_wait_for_target_uses_async_polling_path(monkeypatch):

@@ -76,7 +76,31 @@ class RuntimeLifecycleService:
         scheduler = self._scheduler
         if not scheduler._core_subscriptions_ready:
             await scheduler.event_bus.subscribe(
-                event_pattern="*",
+                event_pattern="scheduler.started",
+                callback=self.mirror_event_to_ui_queue,
+                channel="*",
+                persistent=True,
+            )
+            await scheduler.event_bus.subscribe(
+                event_pattern="metrics.update",
+                callback=self.mirror_event_to_ui_queue,
+                channel="*",
+                persistent=True,
+            )
+            await scheduler.event_bus.subscribe(
+                event_pattern="queue.*",
+                callback=self.mirror_event_to_ui_queue,
+                channel="*",
+                persistent=True,
+            )
+            await scheduler.event_bus.subscribe(
+                event_pattern="task.*",
+                callback=self.mirror_event_to_ui_queue,
+                channel="*",
+                persistent=True,
+            )
+            await scheduler.event_bus.subscribe(
+                event_pattern="node.*",
                 callback=self.mirror_event_to_ui_queue,
                 channel="*",
                 persistent=True,

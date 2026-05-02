@@ -46,7 +46,17 @@ class QueueLogHandler(logging.Handler):
         它会格式化日志记录，然后将其放入队列中。
         """
         log_entry = self.format(record)
-        self.log_queue.put(log_entry)
+        try:
+            self.log_queue.put_nowait(log_entry)
+        except queue.Full:
+            try:
+                self.log_queue.get_nowait()
+            except queue.Empty:
+                return
+            try:
+                self.log_queue.put_nowait(log_entry)
+            except queue.Full:
+                pass
 
 
 # --- 自定义 TRACE 日志级别 ---
@@ -227,25 +237,33 @@ class Logger:
             console_handler.setLevel(console_level)
 
         # --- 传统 UI 队列处理器 ---
-        if ui_log_queue and not self._get_handler("ui_queue"):
-            queue_handler = QueueLogHandler(ui_log_queue)
-            queue_handler.set_name("ui_queue")
-            queue_handler.setLevel(logging.DEBUG)
-            ui_formatter = logging.Formatter('%(asctime)s - %(levelname)-8s - [cid:%(cid)s] - %(message)s', datefmt='%H:%M:%S')
-            queue_handler.setFormatter(ui_formatter)
-            self.logger.addHandler(queue_handler)
+        if ui_log_queue:
+            ui_handler = self._get_handler("ui_queue")
+            if isinstance(ui_handler, QueueLogHandler):
+                ui_handler.log_queue = ui_log_queue
+            elif ui_handler is None:
+                queue_handler = QueueLogHandler(ui_log_queue)
+                queue_handler.set_name("ui_queue")
+                queue_handler.setLevel(logging.DEBUG)
+                ui_formatter = logging.Formatter('%(asctime)s - %(levelname)-8s - [cid:%(cid)s] - %(message)s', datefmt='%H:%M:%S')
+                queue_handler.setFormatter(ui_formatter)
+                self.logger.addHandler(queue_handler)
 
         # --- API WebSocket 日志流处理器 ---
-        if api_log_queue and not self._get_handler("api_queue"):
-            if isinstance(api_log_queue, queue.Queue):
-                api_queue_handler = QueueLogHandler(api_log_queue)
-                api_queue_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)-8s - [cid:%(cid)s] - %(message)s', datefmt='%H:%M:%S'))
+        if api_log_queue:
+            api_handler = self._get_handler("api_queue")
+            if api_handler and hasattr(api_handler, "log_queue"):
+                api_handler.log_queue = api_log_queue  # type: ignore[attr-defined]
             else:
-                api_queue_handler = AsyncioQueueHandler(api_log_queue)
-            api_queue_handler.set_name("api_queue")
-            api_queue_handler.setLevel(logging.DEBUG)
-            self.logger.addHandler(api_queue_handler)
-            self.info("API log streaming queue is connected.")
+                if isinstance(api_log_queue, queue.Queue):
+                    api_queue_handler = QueueLogHandler(api_log_queue)
+                    api_queue_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)-8s - [cid:%(cid)s] - %(message)s', datefmt='%H:%M:%S'))
+                else:
+                    api_queue_handler = AsyncioQueueHandler(api_log_queue)
+                api_queue_handler.set_name("api_queue")
+                api_queue_handler.setLevel(logging.DEBUG)
+                self.logger.addHandler(api_queue_handler)
+                self.info("API log streaming queue is connected.")
 
         # --- 文件处理器 ---
         if log_dir and task_name:

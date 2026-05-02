@@ -10,6 +10,9 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 from pathlib import Path
 from packages.aura_core.observability.logging.core_logger import logger
 from packages.aura_core.observability.events import Event
+from packages.aura_core.api import service_registry
+from packages.aura_core.context.plan import current_plan_name
+from packages.aura_core.scheduler.cancellation import request_task_cancel
 
 if TYPE_CHECKING:
     from .core import Scheduler
@@ -33,6 +36,42 @@ class TaskDispatcher:
             scheduler: 父调度器实例
         """
         self.scheduler = scheduler
+
+    def _release_inputs_for_cancelled_task(self, cid: str) -> None:
+        """Best-effort safety release for tasks stopped from outside their action."""
+        meta = {}
+        try:
+            meta = dict(getattr(self.scheduler, "_running_task_meta", {}).get(cid) or {})
+        except Exception:
+            meta = {}
+
+        plan_name = str(meta.get("plan_name") or "").strip()
+        tasklet = meta.get("tasklet")
+        payload = getattr(tasklet, "payload", None)
+        if not plan_name and isinstance(payload, dict):
+            plan_name = str(payload.get("plan_name") or "").strip()
+        if not plan_name:
+            task_name = str(meta.get("task_name") or getattr(tasklet, "task_name", "") or "").strip()
+            if "/" in task_name:
+                plan_name = task_name.split("/", 1)[0]
+        if not plan_name:
+            return
+
+        token = current_plan_name.set(plan_name)
+        try:
+            target_runtime = service_registry.get_service_instance("target_runtime")
+            if hasattr(target_runtime, "release_all"):
+                target_runtime.release_all()
+                logger.info("Released all inputs for cancelled task '%s' in plan '%s'.", cid, plan_name)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Failed to release inputs for cancelled task '%s' in plan '%s': %s",
+                cid,
+                plan_name,
+                exc,
+            )
+        finally:
+            current_plan_name.reset(token)
 
     def run_manual_task(self, task_id: str):
         """执行手动调度任务
@@ -303,6 +342,8 @@ class TaskDispatcher:
 
                 task = self.scheduler.running_tasks.get(cid)
                 if task and not task.done():
+                    request_task_cancel(cid)
+                    self._release_inputs_for_cancelled_task(cid)
                     task.cancel()
                     logger.info(f"Task with cid '{cid}' has been cancelled.")
                     return {"status": "success", "message": f"Task '{cid}' cancellation initiated."}

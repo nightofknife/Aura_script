@@ -333,7 +333,9 @@ class LifecycleManager:
         self.scheduler.is_running = asyncio.Event()
 
         if not hasattr(self.scheduler, "api_log_queue") or self.scheduler.api_log_queue is None:
-            self.scheduler.api_log_queue = queue.Queue(maxsize=0)
+            self.scheduler.api_log_queue = queue.Queue(
+                maxsize=max(int(get_config_value("logging.api_queue_maxsize", 2000)), 1)
+            )
 
         self.scheduler.task_queue = TaskQueue(
             maxsize=int(get_config_value("scheduler.queue.main_maxsize", 1000))
