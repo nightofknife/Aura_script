@@ -2146,6 +2146,30 @@ exports:
       type: Any
       required: false
       default: null
+  - name: windows.stress_capture_backend
+    module: plans.aura_base.src.actions.windows_diagnostics_actions
+    function: windows_stress_capture_backend
+    public: true
+    read_only: true
+    timeout: null
+    description: ''
+    parameters:
+    - name: backend
+      type: Any
+      required: false
+      default: null
+    - name: iterations
+      type: Any
+      required: false
+      default: 100
+    - name: interval_ms
+      type: Any
+      required: false
+      default: 0
+    - name: settle_after_close_ms
+      type: Any
+      required: false
+      default: 500
   - name: windows.probe_capture_candidates
     module: plans.aura_base.src.actions.windows_diagnostics_actions
     function: windows_probe_capture_candidates

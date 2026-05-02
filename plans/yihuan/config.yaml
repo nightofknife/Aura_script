@@ -10,7 +10,7 @@ runtime:
       - Unreal Engine
     allow_borderless: true
   capture:
-    backend: wgc
+    backend: gdi
   input:
     backend: sendinput
     mouse_move_duration_ms: 220

@@ -118,6 +118,23 @@ def windows_probe_capture_backend(
     return windows_diagnostics.probe_capture_backend(backend=backend, rect=resolved_rect)
 
 
+@action_info(name="windows.stress_capture_backend", public=True, read_only=True)
+@requires_services(windows_diagnostics="windows_diagnostics")
+def windows_stress_capture_backend(
+    windows_diagnostics: WindowsDiagnosticsService,
+    backend: str | None = None,
+    iterations: int = 100,
+    interval_ms: int = 0,
+    settle_after_close_ms: int = 500,
+) -> dict[str, Any]:
+    return windows_diagnostics.stress_capture_backend(
+        backend=backend,
+        iterations=iterations,
+        interval_ms=interval_ms,
+        settle_after_close_ms=settle_after_close_ms,
+    )
+
+
 @action_info(name="windows.probe_capture_candidates", public=True, read_only=True)
 @requires_services(windows_diagnostics="windows_diagnostics")
 def windows_probe_capture_candidates(

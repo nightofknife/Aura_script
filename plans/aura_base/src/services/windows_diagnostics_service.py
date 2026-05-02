@@ -1,7 +1,10 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import time
 from typing import Any, Mapping, Optional
+
+import psutil
 
 from packages.aura_core.api import service_info
 from packages.aura_core.config.service import ConfigService
@@ -230,6 +233,121 @@ class WindowsDiagnosticsService:
             except Exception:
                 pass
 
+    def stress_capture_backend(
+        self,
+        *,
+        backend: str | None = None,
+        iterations: int = 100,
+        interval_ms: int = 0,
+        settle_after_close_ms: int = 500,
+    ) -> dict[str, Any]:
+        resolved = resolve_runtime_config(self.config)
+        if resolved.provider != "windows":
+            raise TargetRuntimeError(
+                "provider_unsupported",
+                "windows_diagnostics only supports runtime.provider='windows'.",
+                {"provider": resolved.provider},
+            )
+
+        requested_backend = str(backend or resolved.capture.backend).strip().lower()
+        capture_config = RuntimeCaptureConfig(
+            backend=requested_backend,
+            max_stale_ms=resolved.capture.max_stale_ms,
+            crop_to_client=resolved.capture.crop_to_client,
+            capture_cursor=resolved.capture.capture_cursor,
+            candidates=resolved.capture.candidates,
+            windows=resolved.capture.windows,
+            mumu=resolved.capture.mumu,
+        )
+        target = WindowTarget.create(resolved.target)
+        process = psutil.Process()
+        baseline_private_mb = self._current_process_private_mb(process)
+        max_iterations = max(int(iterations), 1)
+        sleep_interval_sec = max(int(interval_ms), 0) / 1000.0
+        settle_after_close_sec = max(int(settle_after_close_ms), 0) / 1000.0
+        samples: list[dict[str, Any]] = []
+        peak_private_mb = baseline_private_mb
+        end_private_mb = baseline_private_mb
+        after_close_private_mb = baseline_private_mb
+        backend_health: dict[str, Any] = {}
+
+        try:
+            backend_impl = build_capture_backend(
+                requested_backend,
+                target,
+                capture_config.provider_options("windows"),
+            )
+        except TargetRuntimeError as exc:
+            return {
+                "ok": False,
+                "backend": requested_backend,
+                "target": target.to_summary(),
+                "samples": samples,
+                "baseline_private_mb": baseline_private_mb,
+                "peak_private_mb": peak_private_mb,
+                "end_private_mb": end_private_mb,
+                "after_close_private_mb": after_close_private_mb,
+                "delta_mb": round(end_private_mb - baseline_private_mb, 3),
+                "backend_health": backend_health,
+                "error": exc.to_dict(),
+            }
+
+        try:
+            started_at = time.monotonic()
+            for index in range(max_iterations):
+                capture = backend_impl.capture()
+                current_private_mb = self._current_process_private_mb(process)
+                peak_private_mb = max(peak_private_mb, current_private_mb)
+                end_private_mb = current_private_mb
+                samples.append(
+                    {
+                        "iteration": index + 1,
+                        "elapsed_ms": int((time.monotonic() - started_at) * 1000),
+                        "private_mb": current_private_mb,
+                        "image_size": list(capture.image_size) if capture.image_size is not None else None,
+                        "relative_rect": list(capture.relative_rect) if capture.relative_rect is not None else None,
+                    }
+                )
+                if sleep_interval_sec > 0:
+                    time.sleep(sleep_interval_sec)
+            backend_health = backend_impl.self_check()
+        except TargetRuntimeError as exc:
+            backend_health = backend_impl.self_check()
+            return {
+                "ok": False,
+                "backend": requested_backend,
+                "target": target.to_summary(),
+                "samples": samples,
+                "baseline_private_mb": baseline_private_mb,
+                "peak_private_mb": peak_private_mb,
+                "end_private_mb": end_private_mb,
+                "after_close_private_mb": after_close_private_mb,
+                "delta_mb": round(end_private_mb - baseline_private_mb, 3),
+                "backend_health": backend_health,
+                "error": exc.to_dict(),
+            }
+        finally:
+            try:
+                backend_impl.close()
+            except Exception:
+                pass
+
+        if settle_after_close_sec > 0:
+            time.sleep(settle_after_close_sec)
+        after_close_private_mb = self._current_process_private_mb(process)
+        return {
+            "ok": True,
+            "backend": requested_backend,
+            "target": target.to_summary(),
+            "samples": samples,
+            "baseline_private_mb": baseline_private_mb,
+            "peak_private_mb": peak_private_mb,
+            "end_private_mb": end_private_mb,
+            "after_close_private_mb": after_close_private_mb,
+            "delta_mb": round(end_private_mb - baseline_private_mb, 3),
+            "backend_health": backend_health,
+        }
+
     def probe_capture_candidates(self) -> list[dict[str, Any]]:
         resolved = resolve_runtime_config(self.config)
         configured = [dict(candidate) for candidate in resolved.capture.candidates]
@@ -312,3 +430,13 @@ class WindowsDiagnosticsService:
             client_size=(int(client_rect[2]), int(client_rect[3])),
             config=transform_config,
         )
+
+    @staticmethod
+    def _current_process_private_mb(process: psutil.Process) -> float:
+        info = process.memory_info()
+        private_bytes = getattr(info, "private", None)
+        if private_bytes is None:
+            private_bytes = getattr(info, "private_usage", None)
+        if private_bytes is None:
+            private_bytes = int(info.rss)
+        return round(float(private_bytes) / (1024.0 * 1024.0), 3)

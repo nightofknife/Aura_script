@@ -15,6 +15,7 @@ import win32ui
 
 from ..contracts import CaptureResult, TargetRuntimeError
 from .window_target import WindowTarget
+from .wgc_session import PersistentWgcSession
 
 
 class BaseWindowsCaptureBackend:
@@ -91,193 +92,62 @@ class WindowsWgcCaptureBackend(BaseWindowsCaptureBackend):
 
     def __init__(self, target: WindowTarget, config: dict[str, Any] | None = None):
         super().__init__(target, config)
-        module_name = str(self.config.get("module_name") or "windows_capture")
+        self.module_name = str(self.config.get("module_name") or "windows_capture").strip() or "windows_capture"
         self.capture_cursor = bool(self.config.get("capture_cursor", False))
-        self.frame_timeout_ms = max(int(self.config.get("frame_timeout_ms") or 2000), 100)
-        self._api_style = ""
-        self._windows_capture_cls = None
-        try:
-            self._module = importlib.import_module(module_name)
-        except Exception as exc:
-            raise TargetRuntimeError(
-                "windows_capture_init_failed",
-                f"Unable to import WGC capture module '{module_name}'.",
-                {"backend": self.backend_name, "module_name": module_name, "error": str(exc)},
-            ) from exc
+        self.frame_timeout_ms = max(int(self.config.get("frame_timeout_ms") or 1000), 100)
+        self.minimum_update_interval_ms = max(int(self.config.get("minimum_update_interval_ms") or 16), 0)
+        self.dirty_region = bool(self.config.get("dirty_region", True))
+        self.draw_border = bool(self.config.get("draw_border", False))
+        self.secondary_window = bool(self.config.get("secondary_window", False))
+        self.max_stale_ms = max(int(self.config.get("max_stale_ms") or 100), 0)
 
-        self._capturer = self._build_capturer()
+        self._session_lock = threading.RLock()
+        self._session = self._create_session(int(self.target.hwnd))
 
-    def _build_capturer(self) -> Any:
-        # Preferred style: windows_capture.WindowsGraphicsCapture(...)
-        capture_cls = getattr(self._module, "WindowsGraphicsCapture", None)
-        if callable(capture_cls):
-            self._api_style = "windows_graphics_capture"
-            try:
-                return capture_cls(capture_cursor=self.capture_cursor)
-            except TypeError:
-                return capture_cls()
-            except Exception as exc:
-                raise TargetRuntimeError(
-                    "windows_capture_init_failed",
-                    "Failed to initialize the configured WGC capture class.",
-                    {"backend": self.backend_name, "error": str(exc)},
-                ) from exc
+    def close(self) -> None:
+        with self._session_lock:
+            if self._session is not None:
+                try:
+                    self._session.close()
+                finally:
+                    self._session = None
 
-        # Function style fallback: module.capture_window(hwnd=...)
-        capture_fn = getattr(self._module, "capture_window", None)
-        if callable(capture_fn):
-            self._api_style = "capture_window_function"
-            return None
-
-        # windows-capture>=2 exposes WindowsCapture(window_hwnd=...) with frame callbacks.
-        capture_cls = getattr(self._module, "WindowsCapture", None)
-        if callable(capture_cls):
-            self._api_style = "windows_capture_v2"
-            self._windows_capture_cls = capture_cls
-            return None
-
-        raise TargetRuntimeError(
-            "windows_capture_init_failed",
-            "The configured WGC capture module does not expose a supported API.",
-            {
-                "backend": self.backend_name,
-                "module_name": getattr(self._module, "__name__", None),
-                "expected": ["WindowsGraphicsCapture", "capture_window", "WindowsCapture"],
-            },
+    def capture(self, rect: tuple[int, int, int, int] | None = None) -> CaptureResult:
+        self.target.ensure_valid()
+        roi = _normalize_client_roi(self.target, rect)
+        client_rect = self.target.get_client_rect()
+        image = self._capture_roi_with_single_rebuild(roi)
+        return CaptureResult(
+            success=True,
+            image=image,
+            window_rect=client_rect,
+            relative_rect=roi,
+            backend=self.backend_name,
         )
 
     def _capture_roi(self, roi: tuple[int, int, int, int]) -> np.ndarray:
-        frame = self._capture_full_client_frame()
+        frame = self._snapshot_client_frame()
         x, y, width, height = roi
         return frame[y : y + height, x : x + width].copy()
 
-    def _capture_full_client_frame(self) -> np.ndarray:
-        if self._api_style == "windows_capture_v2":
-            return self._capture_windows_capture_v2_client_frame()
-
-        hwnd = self.target.hwnd
-        frame = None
-
-        if self._capturer is not None and hasattr(self._capturer, "capture_window"):
+    def _capture_roi_with_single_rebuild(self, roi: tuple[int, int, int, int]) -> np.ndarray:
+        rebuild_attempted = False
+        while True:
             try:
-                frame = self._capturer.capture_window(hwnd)
-            except Exception as exc:
-                raise TargetRuntimeError(
-                    "windows_capture_failed",
-                    f"WGC capture failed for hwnd={hwnd}: {exc}",
-                    {"backend": self.backend_name, "hwnd": hwnd},
-                ) from exc
-        else:
-            capture_fn = getattr(self._module, "capture_window", None)
-            try:
-                frame = capture_fn(hwnd=hwnd, capture_cursor=self.capture_cursor)
-            except TypeError:
-                frame = capture_fn(hwnd)
-            except Exception as exc:
-                raise TargetRuntimeError(
-                    "windows_capture_failed",
-                    f"WGC capture failed for hwnd={hwnd}: {exc}",
-                    {"backend": self.backend_name, "hwnd": hwnd},
-                ) from exc
+                return self._capture_roi(roi)
+            except TargetRuntimeError as exc:
+                if rebuild_attempted or exc.code not in self._rebuildable_error_codes():
+                    raise
+                rebuild_attempted = True
+                self._rebuild_session()
 
-        if frame is None:
-            raise TargetRuntimeError(
-                "windows_capture_failed",
-                "WGC capture returned an empty frame.",
-                {"backend": self.backend_name, "hwnd": hwnd},
-            )
-        return _coerce_rgb_frame(frame, backend=self.backend_name)
-
-    def _capture_windows_capture_v2_client_frame(self) -> np.ndarray:
-        if self._windows_capture_cls is None:
-            raise TargetRuntimeError(
-                "windows_capture_init_failed",
-                "WGC WindowsCapture API was selected but no capture class is available.",
-                {"backend": self.backend_name},
-            )
-
-        frame_event = threading.Event()
-        state: dict[str, Any] = {"frame": None, "error": None}
-
-        try:
-            capturer = self._windows_capture_cls(
-                cursor_capture=self.capture_cursor,
-                draw_border=False,
-                window_hwnd=int(self.target.hwnd),
-            )
-        except TypeError:
-            capturer = self._windows_capture_cls(
-                cursor_capture=self.capture_cursor,
-                window_hwnd=int(self.target.hwnd),
-            )
-        except Exception as exc:
-            raise TargetRuntimeError(
-                "windows_capture_init_failed",
-                f"Failed to initialize the configured WGC WindowsCapture class: {exc}",
-                {"backend": self.backend_name, "hwnd": int(self.target.hwnd)},
-            ) from exc
-
-        @capturer.event
-        def on_frame_arrived(frame, control):  # noqa: ANN001
-            try:
-                frame_buffer = getattr(frame, "frame_buffer", frame)
-                state["frame"] = np.asarray(frame_buffer).copy()
-                control.stop()
-            except Exception as exc:  # noqa: BLE001
-                state["error"] = str(exc)
-            finally:
-                frame_event.set()
-
-        @capturer.event
-        def on_closed():
-            frame_event.set()
-
-        control = None
-        try:
-            control = capturer.start_free_threaded()
-            if not frame_event.wait(float(self.frame_timeout_ms) / 1000.0):
-                raise TargetRuntimeError(
-                    "windows_capture_failed",
-                    "WGC WindowsCapture did not deliver a frame before timeout.",
-                    {
-                        "backend": self.backend_name,
-                        "hwnd": int(self.target.hwnd),
-                        "timeout_ms": int(self.frame_timeout_ms),
-                    },
-                )
-            if state.get("error"):
-                raise TargetRuntimeError(
-                    "windows_capture_failed",
-                    f"WGC WindowsCapture frame callback failed: {state['error']}",
-                    {"backend": self.backend_name, "hwnd": int(self.target.hwnd)},
-                )
-            frame = state.get("frame")
-            if frame is None:
-                raise TargetRuntimeError(
-                    "windows_capture_failed",
-                    "WGC WindowsCapture returned no frame.",
-                    {"backend": self.backend_name, "hwnd": int(self.target.hwnd)},
-                )
-            rgb = _coerce_rgb_frame(frame, backend=self.backend_name)
-            return self._crop_wgc_frame_to_client(rgb)
-        except TargetRuntimeError:
-            raise
-        except Exception as exc:
-            raise TargetRuntimeError(
-                "windows_capture_failed",
-                f"WGC WindowsCapture failed for hwnd={self.target.hwnd}: {exc}",
-                {"backend": self.backend_name, "hwnd": int(self.target.hwnd)},
-            ) from exc
-        finally:
-            if control is not None:
-                try:
-                    control.stop()
-                except Exception:
-                    pass
-                try:
-                    control.wait()
-                except Exception:
-                    pass
+    def _snapshot_client_frame(self) -> np.ndarray:
+        session = self._ensure_session_matches_target()
+        session.start_if_needed()
+        session.wait_for_fresh_frame(self.max_stale_ms, self.frame_timeout_ms)
+        frame = session.snapshot_full_frame()
+        rgb = _coerce_rgb_frame(frame, backend=self.backend_name)
+        return self._crop_wgc_frame_to_client(rgb)
 
     def _crop_wgc_frame_to_client(self, frame: np.ndarray) -> np.ndarray:
         _, _, client_width, client_height = self.target.get_client_rect()
@@ -313,9 +183,54 @@ class WindowsWgcCaptureBackend(BaseWindowsCaptureBackend):
 
     def self_check(self) -> dict[str, Any]:
         payload = super().self_check()
-        payload["module_name"] = getattr(self._module, "__name__", None)
+        session = self._ensure_session_matches_target()
+        payload.update(session.health())
         payload["capture_cursor"] = self.capture_cursor
+        payload["minimum_update_interval_ms"] = int(self.minimum_update_interval_ms)
+        payload["dirty_region"] = self.dirty_region
+        payload["draw_border"] = self.draw_border
+        payload["secondary_window"] = self.secondary_window
+        payload["frame_timeout_ms"] = int(self.frame_timeout_ms)
+        payload["max_stale_ms"] = int(self.max_stale_ms)
         return payload
+
+    def _ensure_session_matches_target(self) -> PersistentWgcSession:
+        with self._session_lock:
+            current_hwnd = int(self.target.hwnd)
+            if self._session is None or int(self._session.hwnd) != current_hwnd:
+                if self._session is not None:
+                    self._session.close()
+                self._session = self._create_session(current_hwnd)
+            return self._session
+
+    def _rebuild_session(self) -> None:
+        with self._session_lock:
+            current_hwnd = int(self.target.hwnd)
+            if self._session is not None:
+                self._session.close()
+            self._session = self._create_session(current_hwnd)
+
+    def _create_session(self, hwnd: int) -> PersistentWgcSession:
+        return PersistentWgcSession(
+            hwnd=int(hwnd),
+            module_name=self.module_name,
+            capture_cursor=self.capture_cursor,
+            draw_border=self.draw_border,
+            secondary_window=self.secondary_window,
+            minimum_update_interval_ms=self.minimum_update_interval_ms,
+            dirty_region=self.dirty_region,
+        )
+
+    @staticmethod
+    def _rebuildable_error_codes() -> set[str]:
+        return {
+            "windows_capture_failed",
+            "windows_capture_frame_timeout",
+            "windows_capture_frame_unavailable",
+            "windows_capture_session_closed",
+            "windows_capture_session_error",
+            "windows_capture_session_stopped",
+        }
 
 
 class WindowsDxgiCaptureBackend(BaseWindowsCaptureBackend):
