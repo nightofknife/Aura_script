@@ -353,20 +353,20 @@ function Build-GuiRootLauncher {
     New-Item -ItemType Directory -Force -Path $DistPath | Out-Null
     New-Item -ItemType Directory -Force -Path $WorkPath | Out-Null
 
-    Write-Host "Building AuraYihuan root launcher ..."
+    Write-Host "Building AuraYihuanGui root launcher ..."
     & $PythonPath -m PyInstaller `
         --noconfirm `
         --clean `
         --onefile `
         --windowed `
         --uac-admin `
-        --name AuraYihuan `
+        --name AuraYihuanGui `
         --distpath $DistPath `
         --workpath $WorkPath `
         $LauncherSource
 
     if ($LASTEXITCODE -ne 0) {
-        throw "AuraYihuan root launcher build failed with exit code $LASTEXITCODE."
+        throw "AuraYihuanGui root launcher build failed with exit code $LASTEXITCODE."
     }
 }
 
@@ -510,7 +510,7 @@ $LauncherWorkPath = Join-Path $RuntimeRootPath "build\\launcher"
 $ReleaseRoot = Join-Path $RuntimeRootPath "release\\$ReleaseName"
 $BuiltRuntimeDir = Join-Path $DistPath "aura"
 $BuiltGuiRuntimeExe = Join-Path $BuiltRuntimeDir "AuraYihuanRuntime.exe"
-$BuiltGuiLauncherExe = Join-Path $LauncherDistPath "AuraYihuan.exe"
+$BuiltGuiLauncherExe = Join-Path $LauncherDistPath "AuraYihuanGui.exe"
 $ReleaseRuntimeDir = Join-Path $ReleaseRoot "runtime"
 $ReleasePlansDir = Join-Path $ReleaseRoot "plans"
 $ReleaseOcrModelsDir = Join-Path $ReleaseRoot "models\\ocr"
@@ -589,7 +589,7 @@ if (-not $SkipBuild) {
             -LauncherSource $GuiLauncherSource `
             -DistPath $LauncherDistPath `
             -WorkPath $LauncherWorkPath
-        Assert-PathExists -PathValue $BuiltGuiLauncherExe -Label "Built AuraYihuan root launcher executable"
+        Assert-PathExists -PathValue $BuiltGuiLauncherExe -Label "Built AuraYihuanGui root launcher executable"
     }
 }
 
@@ -597,7 +597,7 @@ if (-not $SkipAssemble) {
     Assert-PathExists -PathValue $BuiltRuntimeDir -Label "Built runtime directory"
     if ($IncludeGui) {
         Assert-PathExists -PathValue $BuiltGuiRuntimeExe -Label "Built Yihuan GUI runtime executable"
-        Assert-PathExists -PathValue $BuiltGuiLauncherExe -Label "Built AuraYihuan root launcher executable"
+        Assert-PathExists -PathValue $BuiltGuiLauncherExe -Label "Built AuraYihuanGui root launcher executable"
     }
     Update-MsvcRuntimeForOnnxRuntime -RuntimeDir $BuiltRuntimeDir
 
@@ -611,7 +611,7 @@ if (-not $SkipAssemble) {
     Write-Host "Assembling release root ..."
     Invoke-RobocopySafe -Source $BuiltRuntimeDir -Destination $ReleaseRuntimeDir
     if ($IncludeGui) {
-        Copy-Item -LiteralPath $BuiltGuiLauncherExe -Destination (Join-Path $ReleaseRoot "AuraYihuan.exe") -Force
+        Copy-Item -LiteralPath $BuiltGuiLauncherExe -Destination (Join-Path $ReleaseRoot "AuraYihuanGui.exe") -Force
     }
     Update-MsvcRuntimeForOnnxRuntime -RuntimeDir $ReleaseRuntimeDir
     Copy-PlanPackages -Source $SourcePlansDir -Destination $ReleasePlansDir
@@ -660,7 +660,7 @@ if (-not $SkipAssemble) {
     if ($IncludeGui) {
         $summaryLines += @(
             "gui=true"
-            "gui_entrypoint=AuraYihuan.exe"
+            "gui_entrypoint=AuraYihuanGui.exe"
             "gui_runtime=runtime\\AuraYihuanRuntime.exe"
         )
     }

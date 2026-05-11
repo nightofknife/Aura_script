@@ -7,7 +7,7 @@ import subprocess
 import sys
 
 
-APP_TITLE = "Aura Yihuan"
+APP_TITLE = "Aura Yihuan GUI"
 
 
 def _release_root() -> Path:

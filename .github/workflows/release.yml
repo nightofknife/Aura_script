@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Target GitHub Release tag, for example v0.1.0"
+        description: "Target GitHub Release tag, for example v0.02"
         required: true
         type: string
       publish_release:
@@ -57,7 +57,7 @@ jobs:
           python -m venv .venv-release-cpu-onnx
           .\.venv-release-cpu-onnx\Scripts\python.exe -m pip install -U pip
           .\.venv-release-cpu-onnx\Scripts\python.exe -m pip install `
-            -r requirements\runtime.txt `
+            -r requirements\gui.txt `
             -r requirements\optional-vision-onnx-cpu.txt `
             "pyinstaller==$env:PYINSTALLER_VERSION"
 
@@ -155,6 +155,7 @@ jobs:
             -ReleaseName $env:CPU_RELEASE_NAME `
             -RuntimeRoot .runtime-cpu `
             -OnnxRuntimeProfile cpu `
+            -IncludeGui `
             -CreateZip
 
       - name: Validate CPU release
@@ -165,7 +166,10 @@ jobs:
             "models\ocr\ppocrv5_server\ocr.meta.json",
             "models\ocr\ppocrv5_server\det.onnx",
             "models\ocr\ppocrv5_server\rec.onnx",
+            "AuraYihuanGui.exe",
             "runtime\aura.exe",
+            "runtime\AuraYihuanRuntime.exe",
+            "runtime\_internal\PySide6",
             "run.ps1",
             "config.yaml",
             "BUILD-INFO.txt"
@@ -199,6 +203,19 @@ jobs:
           if ($buildInfo -notcontains "onnxruntime_distribution=onnxruntime") {
             throw "CPU release BUILD-INFO.txt must contain onnxruntime_distribution=onnxruntime."
           }
+          if ($buildInfo -notcontains "gui=true") {
+            throw "CPU release BUILD-INFO.txt must contain gui=true."
+          }
+          if ($buildInfo -notcontains "gui_entrypoint=AuraYihuanGui.exe") {
+            throw "CPU release BUILD-INFO.txt must contain gui_entrypoint=AuraYihuanGui.exe."
+          }
+
+          $zipPath = ".runtime-cpu\release\aura-release-cpu-onnx.zip"
+          $maxBytes = [int64](700 * 1024 * 1024)
+          $actualBytes = (Get-Item -LiteralPath $zipPath).Length
+          if ($actualBytes -gt $maxBytes) {
+            throw "CPU release zip is too large: $actualBytes bytes > $maxBytes bytes."
+          }
 
       - name: Smoke test CPU release CLI
         shell: pwsh
@@ -214,6 +231,17 @@ jobs:
           Invoke-ReleaseCli -CliArgs @("games", "--all")
           Invoke-ReleaseCli -CliArgs @("tasks", "yihuan")
           Invoke-ReleaseCli -CliArgs @("run", "yihuan", "tasks:checks:plan_loaded.yaml", "--timeout-sec", "120")
+
+      - name: Smoke test CPU GUI runtime
+        shell: pwsh
+        run: |
+          $release = Join-Path ".runtime-cpu\release" $env:CPU_RELEASE_NAME
+          $env:AURA_BASE_PATH = (Resolve-Path $release).Path
+          $env:PYTHONNOUSERSITE = "1"
+          & (Join-Path $release "runtime\AuraYihuanRuntime.exe") --self-check
+          if ($LASTEXITCODE -ne 0) {
+            throw "CPU GUI runtime self-check failed."
+          }
 
       - name: Upload CPU package artifact
         uses: actions/upload-artifact@v4
@@ -351,7 +379,7 @@ jobs:
             "models\ocr\ppocrv5_server\ocr.meta.json",
             "models\ocr\ppocrv5_server\det.onnx",
             "models\ocr\ppocrv5_server\rec.onnx",
-            "AuraYihuan.exe",
+            "AuraYihuanGui.exe",
             "runtime\aura.exe",
             "runtime\AuraYihuanRuntime.exe",
             "runtime\_internal\onnxruntime\capi\onnxruntime_providers_cuda.dll",
@@ -391,8 +419,15 @@ jobs:
           if ($buildInfo -notcontains "gui=true") {
             throw "GPU release BUILD-INFO.txt must contain gui=true."
           }
-          if ($buildInfo -notcontains "gui_entrypoint=AuraYihuan.exe") {
-            throw "GPU release BUILD-INFO.txt must contain gui_entrypoint=AuraYihuan.exe."
+          if ($buildInfo -notcontains "gui_entrypoint=AuraYihuanGui.exe") {
+            throw "GPU release BUILD-INFO.txt must contain gui_entrypoint=AuraYihuanGui.exe."
+          }
+
+          $zipPath = ".runtime-gpu\release\aura-release-gpu-onnx.zip"
+          $maxBytes = [int64](1.1 * 1024 * 1024 * 1024)
+          $actualBytes = (Get-Item -LiteralPath $zipPath).Length
+          if ($actualBytes -gt $maxBytes) {
+            throw "GPU release zip is too large: $actualBytes bytes > $maxBytes bytes."
           }
 
       - name: Smoke test GPU+CPU release CLI
@@ -482,6 +517,13 @@ jobs:
           foreach ($relativePath in $mustExist) {
             $path = Join-Path $overlay $relativePath
             if (-not (Test-Path $path)) { throw "Missing required NVIDIA overlay path: $path" }
+          }
+
+          $zipPath = ".runtime-gpu-overlay\release\aura-release-gpu-onnx-nvidia-overlay.zip"
+          $maxBytes = [int64](1.9 * 1024 * 1024 * 1024)
+          $actualBytes = (Get-Item -LiteralPath $zipPath).Length
+          if ($actualBytes -gt $maxBytes) {
+            throw "NVIDIA overlay zip is too large: $actualBytes bytes > $maxBytes bytes."
           }
 
       - name: Upload NVIDIA overlay artifact
