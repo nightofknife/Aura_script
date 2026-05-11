@@ -12,6 +12,12 @@ auto_loop:
       - name: sell_fish_every_rounds
         type: number
         default: 0
+      - name: bait_buy_repeat_count
+        type: number
+        default: 1
+      - name: sell_before_buy_bait
+        type: boolean
+        default: true
   steps:
     run:
       action: yihuan_fishing_run_session
@@ -19,4 +25,6 @@ auto_loop:
         max_rounds: "{{ inputs.max_rounds }}"
         profile_name: "{{ inputs.profile_name }}"
         sell_fish_every_rounds: "{{ inputs.sell_fish_every_rounds }}"
+        bait_buy_repeat_count: "{{ inputs.bait_buy_repeat_count }}"
+        sell_before_buy_bait: "{{ inputs.sell_before_buy_bait }}"
   returns: "{{ nodes.run.output }}"

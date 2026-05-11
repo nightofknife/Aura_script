@@ -4,6 +4,7 @@ import unittest
 
 from packages.yihuan_gui.logic import (
     CafeRunDefaults,
+    CombatRunDefaults,
     FishingRunDefaults,
     GuiPreferences,
     LiveUiState,
@@ -12,27 +13,38 @@ from packages.yihuan_gui.logic import (
     RuntimeSettings,
     TASK_AUTO_LOOP,
     TASK_CAFE_AUTO_LOOP,
+    TASK_COMBAT_AUTO_LOOP,
     TASK_LIVE_MONITOR,
     TASK_MAHJONG_AUTO_LOOP,
     TASK_ONE_CAFE_REVENUE_RESTOCK,
+    TASK_TETROMINOES_AUTO_LOOP,
+    TetrominoesRunDefaults,
     VISIBLE_HISTORY_TASK_REFS,
     TASK_PLAN_READY,
     build_auto_loop_inputs,
     build_cafe_loop_inputs,
+    build_combat_loop_inputs,
     build_mahjong_loop_inputs,
     build_one_cafe_inputs,
+    build_tetrominoes_loop_inputs,
     build_settings_sections,
     cafe_loop_business_status,
+    combat_loop_business_status,
     mahjong_loop_business_status,
     one_cafe_business_status,
+    tetrominoes_loop_business_status,
     extract_auto_loop_defaults,
     extract_cafe_loop_defaults,
+    extract_combat_loop_defaults,
     extract_mahjong_loop_defaults,
     extract_one_cafe_defaults,
+    extract_tetrominoes_loop_defaults,
     render_auto_loop_brief_text,
     render_cafe_loop_brief_text,
+    render_combat_loop_brief_text,
     render_mahjong_loop_brief_text,
     render_one_cafe_brief_text,
+    render_tetrominoes_loop_brief_text,
     reduce_live_events,
     render_task_result_html,
     task_is_enabled,
@@ -41,7 +53,13 @@ from packages.yihuan_gui.logic import (
 
 class TestYihuanGuiLogic(unittest.TestCase):
     def test_build_auto_loop_inputs_uses_page_value_and_defaults(self):
-        payload = build_auto_loop_inputs(12, 5, FishingRunDefaults(profile_name="default_1280x720_cn"))
+        payload = build_auto_loop_inputs(
+            12,
+            5,
+            2,
+            False,
+            FishingRunDefaults(profile_name="default_1280x720_cn"),
+        )
 
         self.assertEqual(
             payload,
@@ -49,6 +67,8 @@ class TestYihuanGuiLogic(unittest.TestCase):
                 "max_rounds": 12,
                 "profile_name": "default_1280x720_cn",
                 "sell_fish_every_rounds": 5,
+                "bait_buy_repeat_count": 2,
+                "sell_before_buy_bait": False,
             },
         )
 
@@ -59,12 +79,16 @@ class TestYihuanGuiLogic(unittest.TestCase):
                     {"name": "max_rounds", "type": "number", "default": 0},
                     {"name": "profile_name", "type": "string", "default": "custom_profile"},
                     {"name": "sell_fish_every_rounds", "type": "number", "default": 6},
+                    {"name": "bait_buy_repeat_count", "type": "number", "default": 3},
+                    {"name": "sell_before_buy_bait", "type": "boolean", "default": False},
                 ]
             }
         )
 
         self.assertEqual(defaults.profile_name, "custom_profile")
         self.assertEqual(defaults.sell_fish_every_rounds, 6)
+        self.assertEqual(defaults.bait_buy_repeat_count, 3)
+        self.assertFalse(defaults.sell_before_buy_bait)
 
     def test_build_cafe_loop_inputs_uses_page_values_and_defaults(self):
         payload = build_cafe_loop_inputs(
@@ -194,6 +218,107 @@ class TestYihuanGuiLogic(unittest.TestCase):
         self.assertTrue(defaults.auto_hu)
         self.assertFalse(defaults.auto_peng)
         self.assertTrue(defaults.auto_discard)
+
+    def test_build_combat_loop_inputs_uses_page_values_and_defaults(self):
+        payload = build_combat_loop_inputs(
+            300,
+            5,
+            True,
+            False,
+            "burst",
+            True,
+            True,
+            1.5,
+            80,
+            True,
+            CombatRunDefaults(profile_name="default_1280x720_cn"),
+        )
+
+        self.assertEqual(
+            payload,
+            {
+                "profile_name": "default_1280x720_cn",
+                "strategy_name": "burst",
+                "max_seconds": 300,
+                "max_encounters": 5,
+                "auto_target": True,
+                "auto_dodge": False,
+                "dry_run": False,
+                "debug_enabled": True,
+                "capture_debug_enabled": True,
+                "capture_interval_sec": 1.5,
+                "capture_max_images": 80,
+                "capture_raw_enabled": True,
+            },
+        )
+
+    def test_extract_combat_loop_defaults_uses_task_defaults(self):
+        defaults = extract_combat_loop_defaults(
+            {
+                "inputs": [
+                    {"name": "profile_name", "type": "string", "default": "custom_combat"},
+                    {"name": "strategy_name", "type": "string", "default": "burst"},
+                    {"name": "max_seconds", "type": "number", "default": 180},
+                    {"name": "max_encounters", "type": "number", "default": 3},
+                    {"name": "auto_target", "type": "boolean", "default": False},
+                    {"name": "auto_dodge", "type": "boolean", "default": True},
+                    {"name": "debug_enabled", "type": "boolean", "default": True},
+                    {"name": "capture_debug_enabled", "type": "boolean", "default": True},
+                    {"name": "capture_interval_sec", "type": "number", "default": 1.5},
+                    {"name": "capture_max_images", "type": "number", "default": 80},
+                    {"name": "capture_raw_enabled", "type": "boolean", "default": True},
+                ]
+            }
+        )
+
+        self.assertEqual(defaults.profile_name, "custom_combat")
+        self.assertEqual(defaults.strategy_name, "burst")
+        self.assertEqual(defaults.max_seconds, 180)
+        self.assertEqual(defaults.max_encounters, 3)
+        self.assertFalse(defaults.auto_target)
+        self.assertTrue(defaults.auto_dodge)
+        self.assertTrue(defaults.debug_enabled)
+        self.assertTrue(defaults.capture_debug_enabled)
+        self.assertEqual(defaults.capture_interval_sec, 1.5)
+        self.assertEqual(defaults.capture_max_images, 80)
+        self.assertTrue(defaults.capture_raw_enabled)
+
+    def test_build_tetrominoes_loop_inputs_uses_page_values_and_defaults(self):
+        payload = build_tetrominoes_loop_inputs(
+            240,
+            80,
+            False,
+            TetrominoesRunDefaults(profile_name="default_1280x720_cn"),
+        )
+
+        self.assertEqual(
+            payload,
+            {
+                "profile_name": "default_1280x720_cn",
+                "max_seconds": 240,
+                "max_pieces": 80,
+                "start_game": False,
+                "dry_run": False,
+                "debug_enabled": False,
+            },
+        )
+
+    def test_extract_tetrominoes_loop_defaults_uses_task_defaults(self):
+        defaults = extract_tetrominoes_loop_defaults(
+            {
+                "inputs": [
+                    {"name": "profile_name", "type": "string", "default": "custom_tetrominoes"},
+                    {"name": "max_seconds", "type": "number", "default": 90},
+                    {"name": "max_pieces", "type": "number", "default": 32},
+                    {"name": "start_game", "type": "boolean", "default": False},
+                ]
+            }
+        )
+
+        self.assertEqual(defaults.profile_name, "custom_tetrominoes")
+        self.assertEqual(defaults.max_seconds, 90)
+        self.assertEqual(defaults.max_pieces, 32)
+        self.assertFalse(defaults.start_game)
 
     def test_reduce_live_events_tracks_auto_loop_lifecycle(self):
         state, finished = reduce_live_events(
@@ -425,6 +550,94 @@ class TestYihuanGuiLogic(unittest.TestCase):
         self.assertIn("定缺手牌统计", html)
         self.assertIn("验证自动开关", html)
 
+    def test_task_result_renderer_handles_combat_loop(self):
+        detail = {
+            "task_name": TASK_COMBAT_AUTO_LOOP,
+            "final_result": {
+                "user_data": {
+                    "status": "success",
+                    "stopped_reason": "max_encounters",
+                    "failure_reason": None,
+                    "profile_name": "default_1280x720_cn",
+                    "strategy_name": "default",
+                    "encounters_completed": 2,
+                    "current_phase": "post_combat",
+                    "elapsed_sec": 12.5,
+                    "screenshot_dir": "D:/tmp/combat_debug/session_001",
+                    "capture_stats": {
+                        "enabled": True,
+                        "capture_interval_sec": 1.5,
+                        "capture_max_images": 80,
+                        "capture_raw_enabled": True,
+                        "capture_failed_count": 1,
+                        "skipped_max_images_count": 2,
+                    },
+                    "last_state": {
+                        "enemy_health_found": False,
+                        "enemy_health_count": 0,
+                        "target_found": False,
+                        "target_confidence": 0.0,
+                        "skill_available": False,
+                        "ultimate_available": True,
+                        "current_slot": 2,
+                    },
+                    "combat_state_trace": [
+                        {"t": 0.5, "phase": "enemy_detected", "note": "monitor", "enemy_health_found": True, "enemy_health_count": 2, "target_found": False},
+                        {"t": 1.2, "phase": "audio_dodge", "note": "audio_dodge", "enemy_health_found": True, "enemy_health_count": 2, "target_found": True},
+                    ],
+                    "action_trace": [
+                        {"t": 0.8, "action": "auto_target", "binding": "mouse_middle"},
+                        {"t": 1.2, "action": "audio_dodge", "score": 0.22},
+                        {"t": 1.8, "action": "ultimate", "binding": "q"},
+                    ],
+                }
+            },
+        }
+
+        html = render_task_result_html(TASK_COMBAT_AUTO_LOOP, detail)
+
+        self.assertEqual(combat_loop_business_status(detail), "success")
+        self.assertIn("战斗 2 场", render_combat_loop_brief_text(detail))
+        self.assertIn("最后状态", html)
+        self.assertIn("状态轨迹", html)
+        self.assertIn("动作轨迹", html)
+        self.assertIn("audio_dodge", html)
+        self.assertIn("战斗调试", html)
+        self.assertIn("截图目录", html)
+
+    def test_task_result_renderer_handles_tetrominoes_loop(self):
+        detail = {
+            "task_name": TASK_TETROMINOES_AUTO_LOOP,
+            "final_result": {
+                "user_data": {
+                    "status": "failed",
+                    "stopped_reason": "recognition_timeout",
+                    "failure_reason": "low_confidence",
+                    "failure_message": "Board confidence stayed below threshold.",
+                    "profile_name": "default_1280x720_cn",
+                    "pieces_played": 14,
+                    "elapsed_sec": 18.25,
+                    "start_game": True,
+                    "start_clicked": True,
+                    "result_screen_cleared_before_start": False,
+                    "final_metrics": {"last_confidence": 0.42, "occupied_cells": 19},
+                    "result_screen": {"found": False, "reason": "panel_missing"},
+                    "decisions_tail": [{"shape": "T", "target_col": 4}],
+                    "operation_log": [{"executed_sequence": ["tetrominoes_left", "tetrominoes_fast_drop"]}],
+                    "debug_snapshots": [],
+                }
+            },
+        }
+
+        html = render_task_result_html(TASK_TETROMINOES_AUTO_LOOP, detail)
+
+        self.assertEqual(tetrominoes_loop_business_status(detail), "failed")
+        self.assertIn("已放置 14 块", render_tetrominoes_loop_brief_text(detail))
+        self.assertIn("识别超时", html)
+        self.assertIn("识别置信度不足", html)
+        self.assertIn("最终指标", html)
+        self.assertIn("最近操作", html)
+
     def test_runtime_task_guard_disables_auto_loop_when_fishing_task_active(self):
         active_runs = {
             "cid-1": {
@@ -438,6 +651,8 @@ class TestYihuanGuiLogic(unittest.TestCase):
         self.assertFalse(task_is_enabled(TASK_CAFE_AUTO_LOOP, active_runs))
         self.assertFalse(task_is_enabled(TASK_ONE_CAFE_REVENUE_RESTOCK, active_runs))
         self.assertFalse(task_is_enabled(TASK_MAHJONG_AUTO_LOOP, active_runs))
+        self.assertFalse(task_is_enabled(TASK_COMBAT_AUTO_LOOP, active_runs))
+        self.assertFalse(task_is_enabled(TASK_TETROMINOES_AUTO_LOOP, active_runs))
         self.assertTrue(task_is_enabled(TASK_PLAN_READY, active_runs))
 
     def test_runtime_task_guard_disables_fishing_when_cafe_task_active(self):
@@ -453,6 +668,8 @@ class TestYihuanGuiLogic(unittest.TestCase):
         self.assertFalse(task_is_enabled(TASK_CAFE_AUTO_LOOP, active_runs))
         self.assertFalse(task_is_enabled(TASK_ONE_CAFE_REVENUE_RESTOCK, active_runs))
         self.assertFalse(task_is_enabled(TASK_MAHJONG_AUTO_LOOP, active_runs))
+        self.assertFalse(task_is_enabled(TASK_COMBAT_AUTO_LOOP, active_runs))
+        self.assertFalse(task_is_enabled(TASK_TETROMINOES_AUTO_LOOP, active_runs))
         self.assertTrue(task_is_enabled(TASK_PLAN_READY, active_runs))
 
     def test_runtime_task_guard_disables_other_runtime_tasks_when_one_cafe_active(self):
@@ -468,6 +685,8 @@ class TestYihuanGuiLogic(unittest.TestCase):
         self.assertFalse(task_is_enabled(TASK_CAFE_AUTO_LOOP, active_runs))
         self.assertFalse(task_is_enabled(TASK_ONE_CAFE_REVENUE_RESTOCK, active_runs))
         self.assertFalse(task_is_enabled(TASK_MAHJONG_AUTO_LOOP, active_runs))
+        self.assertFalse(task_is_enabled(TASK_COMBAT_AUTO_LOOP, active_runs))
+        self.assertFalse(task_is_enabled(TASK_TETROMINOES_AUTO_LOOP, active_runs))
         self.assertTrue(task_is_enabled(TASK_PLAN_READY, active_runs))
 
     def test_runtime_task_guard_disables_other_runtime_tasks_when_mahjong_active(self):
@@ -483,6 +702,42 @@ class TestYihuanGuiLogic(unittest.TestCase):
         self.assertFalse(task_is_enabled(TASK_CAFE_AUTO_LOOP, active_runs))
         self.assertFalse(task_is_enabled(TASK_ONE_CAFE_REVENUE_RESTOCK, active_runs))
         self.assertFalse(task_is_enabled(TASK_MAHJONG_AUTO_LOOP, active_runs))
+        self.assertFalse(task_is_enabled(TASK_COMBAT_AUTO_LOOP, active_runs))
+        self.assertFalse(task_is_enabled(TASK_TETROMINOES_AUTO_LOOP, active_runs))
+        self.assertTrue(task_is_enabled(TASK_PLAN_READY, active_runs))
+
+    def test_runtime_task_guard_disables_other_runtime_tasks_when_combat_active(self):
+        active_runs = {
+            "cid-1": {
+                "cid": "cid-1",
+                "task_name": TASK_COMBAT_AUTO_LOOP,
+                "status": "running",
+            }
+        }
+
+        self.assertFalse(task_is_enabled(TASK_AUTO_LOOP, active_runs))
+        self.assertFalse(task_is_enabled(TASK_CAFE_AUTO_LOOP, active_runs))
+        self.assertFalse(task_is_enabled(TASK_ONE_CAFE_REVENUE_RESTOCK, active_runs))
+        self.assertFalse(task_is_enabled(TASK_MAHJONG_AUTO_LOOP, active_runs))
+        self.assertFalse(task_is_enabled(TASK_COMBAT_AUTO_LOOP, active_runs))
+        self.assertFalse(task_is_enabled(TASK_TETROMINOES_AUTO_LOOP, active_runs))
+        self.assertTrue(task_is_enabled(TASK_PLAN_READY, active_runs))
+
+    def test_runtime_task_guard_disables_other_runtime_tasks_when_tetrominoes_active(self):
+        active_runs = {
+            "cid-1": {
+                "cid": "cid-1",
+                "task_name": TASK_TETROMINOES_AUTO_LOOP,
+                "status": "running",
+            }
+        }
+
+        self.assertFalse(task_is_enabled(TASK_AUTO_LOOP, active_runs))
+        self.assertFalse(task_is_enabled(TASK_CAFE_AUTO_LOOP, active_runs))
+        self.assertFalse(task_is_enabled(TASK_ONE_CAFE_REVENUE_RESTOCK, active_runs))
+        self.assertFalse(task_is_enabled(TASK_MAHJONG_AUTO_LOOP, active_runs))
+        self.assertFalse(task_is_enabled(TASK_COMBAT_AUTO_LOOP, active_runs))
+        self.assertFalse(task_is_enabled(TASK_TETROMINOES_AUTO_LOOP, active_runs))
         self.assertTrue(task_is_enabled(TASK_PLAN_READY, active_runs))
 
     def test_settings_sections_are_grouped_into_runtime_and_ui(self):
@@ -510,6 +765,8 @@ class TestYihuanGuiLogic(unittest.TestCase):
         self.assertIn(TASK_CAFE_AUTO_LOOP, VISIBLE_HISTORY_TASK_REFS)
         self.assertIn(TASK_ONE_CAFE_REVENUE_RESTOCK, VISIBLE_HISTORY_TASK_REFS)
         self.assertIn(TASK_MAHJONG_AUTO_LOOP, VISIBLE_HISTORY_TASK_REFS)
+        self.assertIn(TASK_COMBAT_AUTO_LOOP, VISIBLE_HISTORY_TASK_REFS)
+        self.assertIn(TASK_TETROMINOES_AUTO_LOOP, VISIBLE_HISTORY_TASK_REFS)
         self.assertNotIn(TASK_LIVE_MONITOR, VISIBLE_HISTORY_TASK_REFS)
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter, deque
+from itertools import combinations
 from pathlib import Path
 from typing import Any
 
@@ -114,9 +115,46 @@ class YihuanTetrominoesService:
             "start_timeout_sec": max(self._coerce_float(payload.get("start_timeout_sec"), 8.0), 0.1),
             "start_poll_ms": max(self._coerce_int(payload.get("start_poll_ms"), 120), 10),
             "start_piece_max_origin_row": max(self._coerce_int(payload.get("start_piece_max_origin_row"), 4), 0),
+            "active_search_max_row": max(self._coerce_int(payload.get("active_search_max_row"), 8), 0),
+            "ghost_projection_subtract_enabled": bool(payload.get("ghost_projection_subtract_enabled", True)),
+            "target_state_confirm_sec": max(self._coerce_float(payload.get("target_state_confirm_sec"), 0.2), 0.0),
+            "start_text_drop_threshold": max(self._coerce_int(payload.get("start_text_drop_threshold"), 20), 1),
             "recognition_retry_count": max(self._coerce_int(payload.get("recognition_retry_count"), 8), 1),
             "recognition_retry_interval_ms": max(self._coerce_int(payload.get("recognition_retry_interval_ms"), 80), 0),
             "inter_key_delay_ms": max(self._coerce_int(payload.get("inter_key_delay_ms"), 300), 0),
+            "alignment_move_delay_ms": max(
+                self._coerce_int(payload.get("alignment_move_delay_ms"), payload.get("inter_key_delay_ms", 300)),
+                0,
+            ),
+            "alignment_move_retry_delay_ms": max(
+                self._coerce_int(
+                    payload.get("alignment_move_retry_delay_ms"),
+                    payload.get("alignment_move_delay_ms", payload.get("inter_key_delay_ms", 300)),
+                ),
+                0,
+            ),
+            "alignment_action_retry_limit": max(self._coerce_int(payload.get("alignment_action_retry_limit"), 5), 1),
+            "alignment_rotate_delay_ms": max(
+                self._coerce_int(
+                    payload.get("alignment_rotate_delay_ms"),
+                    payload.get("alignment_move_delay_ms", payload.get("inter_key_delay_ms", 300)),
+                ),
+                0,
+            ),
+            "alignment_rotate_retry_delay_ms": max(
+                self._coerce_int(
+                    payload.get("alignment_rotate_retry_delay_ms"),
+                    payload.get("alignment_rotate_delay_ms", payload.get("inter_key_delay_ms", 300)),
+                ),
+                0,
+            ),
+            "alignment_missing_piece_delay_ms": max(
+                self._coerce_int(
+                    payload.get("alignment_missing_piece_delay_ms"),
+                    payload.get("alignment_move_delay_ms", payload.get("inter_key_delay_ms", 300)),
+                ),
+                0,
+            ),
             "key_press_ms": max(self._coerce_int(payload.get("key_press_ms"), 100), 0),
             "post_drop_delay_ms": max(self._coerce_int(payload.get("post_drop_delay_ms"), 250), 0),
             "debug_snapshot_dir": str(payload.get("debug_snapshot_dir") or "tmp/tetrominoes_debug"),
@@ -180,12 +218,22 @@ class YihuanTetrominoesService:
         cells, occupied = self._sample_board(source_image, profile)
         color_matrix = [[str(cell["color"]) for cell in row] for row in cells]
         occupied_matrix = occupied.astype(np.uint8).tolist()
-        active_piece, piece_debug = self._infer_active_piece(occupied, color_matrix, profile)
-
-        settled = occupied.copy()
-        if active_piece["found"]:
-            for row, col in active_piece["cells"]:
-                settled[int(row), int(col)] = False
+        tracked_settled, tracker_seeded = self._tracked_settled_state(profile)
+        active_piece, active_channel_debug = self._infer_active_piece(
+            occupied,
+            color_matrix,
+            profile,
+            tracked_settled=tracked_settled,
+            tracker_seeded=tracker_seeded,
+        )
+        settled, ghost_projection_debug = self._subtract_active_and_ghost_projection(
+            occupied,
+            active_piece=active_piece,
+            tracked_settled=tracked_settled,
+            tracker_seeded=tracker_seeded,
+            color_matrix=color_matrix,
+            profile=profile,
+        )
 
         if update_tracker and active_piece["found"]:
             self.commit_settled_matrix(settled.astype(np.uint8).tolist(), profile_name=profile["profile_name"])
@@ -197,6 +245,20 @@ class YihuanTetrominoesService:
         settled_matrix = settled.astype(np.uint8).tolist()
         occupied_rows_text = self._matrix_to_rows(occupied)
         settled_rows_text = self._matrix_to_rows(settled)
+        active_search_max_row = int(profile["active_search_max_row"])
+        upper_rows_end = min(active_search_max_row + 1, occupied.shape[0])
+        upper_zone_count = int(np.count_nonzero(occupied[:upper_rows_end, :]))
+        lower_zone_count = int(np.count_nonzero(occupied[upper_rows_end:, :])) if upper_rows_end < occupied.shape[0] else 0
+        lower_channel_debug = {
+            "active_search_max_row": active_search_max_row,
+            "occupancy_matrix": occupied_matrix,
+            "occupancy_rows_text": occupied_rows_text,
+            "occupied_count_before_subtract": occupied_count,
+            "upper_zone_occupied_count": upper_zone_count,
+            "lower_zone_occupied_count": lower_zone_count,
+            "settled_count_after_subtract": int(np.count_nonzero(settled)),
+            "settled_rows_text_after_subtract": settled_rows_text,
+        }
 
         return {
             "profile_name": profile["profile_name"],
@@ -242,7 +304,10 @@ class YihuanTetrominoesService:
                     "settled_matrix": settled_matrix,
                     "cell_samples": [[dict(cell) for cell in row] for row in cells],
                 },
-                "piece_detection": piece_debug,
+                "active_channel": active_channel_debug,
+                "lower_channel": lower_channel_debug,
+                "ghost_projection": ghost_projection_debug,
+                "piece_detection": active_channel_debug,
             },
         }
 
@@ -388,17 +453,13 @@ class YihuanTetrominoesService:
         target_col: int,
     ) -> list[str]:
         actions: list[str] = []
-        rotations = max(int(rotation_count), 1)
-        diff = (int(target_rotation) - int(current_rotation)) % rotations
-        if rotations > 1:
-            if diff == 1:
-                actions.append("tetrominoes_rotate_cw")
-            elif diff == 2:
-                actions.extend(["tetrominoes_rotate_cw", "tetrominoes_rotate_cw"])
-            elif diff == rotations - 1:
-                actions.append("tetrominoes_rotate_ccw")
-            elif diff > 0:
-                actions.extend(["tetrominoes_rotate_cw"] * diff)
+        actions.extend(
+            self.rotation_actions_to_target(
+                current_rotation=current_rotation,
+                target_rotation=target_rotation,
+                rotation_count=rotation_count,
+            )
+        )
 
         horizontal_delta = int(target_col) - int(current_col)
         if horizontal_delta < 0:
@@ -407,6 +468,49 @@ class YihuanTetrominoesService:
             actions.extend(["tetrominoes_right"] * horizontal_delta)
         actions.append("tetrominoes_fast_drop")
         return actions
+
+    @staticmethod
+    def rotation_actions_to_target(
+        *,
+        current_rotation: int,
+        target_rotation: int,
+        rotation_count: int,
+    ) -> list[str]:
+        rotations = max(int(rotation_count), 1)
+        if rotations <= 1:
+            return []
+        diff = (int(target_rotation) - int(current_rotation)) % rotations
+        if diff == 0:
+            return []
+        if diff == rotations - 1:
+            return ["tetrominoes_rotate_ccw"]
+        return ["tetrominoes_rotate_cw"] * diff
+
+    @classmethod
+    def next_alignment_action(
+        cls,
+        *,
+        shape: str,
+        current_rotation: int,
+        target_rotation: int,
+        current_col: int,
+        target_col: int,
+    ) -> str | None:
+        rotations = cls.SHAPES.get(str(shape) or "")
+        if not rotations:
+            return None
+        rotation_actions = cls.rotation_actions_to_target(
+            current_rotation=current_rotation,
+            target_rotation=target_rotation,
+            rotation_count=len(rotations),
+        )
+        if rotation_actions:
+            return rotation_actions[0]
+        if int(current_col) < int(target_col):
+            return "tetrominoes_right"
+        if int(current_col) > int(target_col):
+            return "tetrominoes_left"
+        return None
 
     def compute_metrics(self, board: np.ndarray | Matrix) -> dict[str, Any]:
         matrix = np.array(board, dtype=bool)
@@ -493,11 +597,25 @@ class YihuanTetrominoesService:
             "occupied_ratio": ratio,
         }
 
+    def _tracked_settled_state(self, profile: dict[str, Any]) -> tuple[np.ndarray, bool]:
+        rows = int(profile["board_rows"])
+        cols = int(profile["board_cols"])
+        tracker = self._tracker.get(str(profile["profile_name"]) or self._DEFAULT_PROFILE)
+        if not tracker or tracker.get("settled") is None:
+            return np.zeros((rows, cols), dtype=bool), False
+        settled = np.array(tracker["settled"], dtype=bool)
+        if settled.shape != (rows, cols):
+            return np.zeros((rows, cols), dtype=bool), False
+        return settled.copy(), True
+
     def _infer_active_piece(
         self,
         occupied: np.ndarray,
         color_matrix: list[list[str]],
         profile: dict[str, Any],
+        *,
+        tracked_settled: np.ndarray | None = None,
+        tracker_seeded: bool = False,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         debug: dict[str, Any] = {
             "tracker_available": False,
@@ -507,27 +625,45 @@ class YihuanTetrominoesService:
             "tracker_diff_rows_text": [],
             "tracker_diff_matrix": [],
             "tracker_diff_cells": [],
+            "tracker_subset_candidate": None,
             "component_count": 0,
             "component_candidates": [],
             "selected_component_index": None,
             "selected_strategy": None,
+            "active_search_max_row": int(profile["active_search_max_row"]),
+            "rejected_candidates": [],
         }
-        tracker = self._tracker.get(str(profile["profile_name"]) or self._DEFAULT_PROFILE)
-        if tracker and tracker.get("settled") is not None:
-            settled = np.array(tracker["settled"], dtype=bool)
-            if settled.shape == occupied.shape:
-                debug["tracker_available"] = True
-                debug["tracker_previous_settled_rows_text"] = self._matrix_to_rows(settled)
-                debug["tracker_previous_settled_matrix"] = settled.astype(np.uint8).tolist()
-                diff = occupied & ~settled
-                debug["tracker_diff_rows_text"] = self._matrix_to_rows(diff)
-                debug["tracker_diff_matrix"] = diff.astype(np.uint8).tolist()
-                debug["tracker_diff_cells"] = [[int(row), int(col)] for row, col in np.argwhere(diff).tolist()]
-                piece = self._piece_from_cells(np.argwhere(diff), color_matrix, source="tracker_diff")
-                debug["tracker_candidate"] = self._piece_debug_summary(piece)
-                if piece["found"]:
-                    debug["selected_strategy"] = "tracker_diff"
-                    return piece, debug
+        if tracked_settled is not None:
+            settled = tracked_settled.copy()
+        else:
+            settled, tracker_seeded = self._tracked_settled_state(profile)
+        if settled.shape == occupied.shape:
+            debug["tracker_available"] = bool(tracker_seeded)
+            debug["tracker_previous_settled_rows_text"] = self._matrix_to_rows(settled)
+            debug["tracker_previous_settled_matrix"] = settled.astype(np.uint8).tolist()
+            diff = occupied & ~settled
+            debug["tracker_diff_rows_text"] = self._matrix_to_rows(diff)
+            debug["tracker_diff_matrix"] = diff.astype(np.uint8).tolist()
+            diff_cells = [(int(row), int(col)) for row, col in np.argwhere(diff).tolist()]
+            debug["tracker_diff_cells"] = [[int(row), int(col)] for row, col in diff_cells]
+            piece = self._piece_from_cells(np.array(diff_cells), color_matrix, source="tracker_diff")
+            if not self._piece_candidate_allowed(piece, profile):
+                debug["rejected_candidates"].append(
+                    {
+                        "source": "tracker_diff",
+                        "reason": "active_search_rejected",
+                        "candidate": self._piece_debug_summary(piece),
+                    }
+                )
+            debug["tracker_candidate"] = self._piece_debug_summary(piece)
+            if self._piece_candidate_allowed(piece, profile):
+                debug["selected_strategy"] = "tracker_diff"
+                return piece, debug
+            subset_piece = self._best_piece_from_diff_subset(diff_cells, color_matrix, profile, source="tracker_diff_subset")
+            debug["tracker_subset_candidate"] = self._piece_debug_summary(subset_piece)
+            if self._piece_candidate_allowed(subset_piece, profile):
+                debug["selected_strategy"] = "tracker_diff_subset"
+                return subset_piece, debug
 
         candidates = []
         components = self._connected_components(occupied)
@@ -547,11 +683,18 @@ class YihuanTetrominoesService:
             if not piece["found"]:
                 debug["component_candidates"].append(candidate_debug)
                 continue
-            min_row = min(row for row, _ in component)
-            max_row = max(row for row, _ in component)
-            color_score = float(piece.get("color_consistency") or 0.0)
-            top_score = (int(profile["board_rows"]) - min_row) / float(profile["board_rows"])
-            score = top_score + color_score - (max_row * 0.01)
+            if not self._piece_candidate_allowed(piece, profile):
+                candidate_debug["reject_reason"] = "active_search_rejected"
+                debug["component_candidates"].append(candidate_debug)
+                debug["rejected_candidates"].append(
+                    {
+                        "source": "component",
+                        "reason": "active_search_rejected",
+                        "candidate": self._piece_debug_summary(piece),
+                    }
+                )
+                continue
+            score = self._active_piece_score(piece, profile)
             candidate_debug["score"] = float(score)
             debug["component_candidates"].append(candidate_debug)
             candidates.append((score, piece, component_index))
@@ -573,6 +716,151 @@ class YihuanTetrominoesService:
             "origin_col": None,
             "confidence": 0.0,
         }, debug
+
+    @staticmethod
+    def _piece_candidate_allowed(piece: dict[str, Any], profile: dict[str, Any]) -> bool:
+        if not bool(piece.get("found")):
+            return False
+        try:
+            origin_row = int(piece.get("origin_row"))
+        except (TypeError, ValueError):
+            return False
+        return origin_row <= int(profile["active_search_max_row"])
+
+    @staticmethod
+    def _active_piece_score(piece: dict[str, Any], profile: dict[str, Any]) -> float:
+        cells = [tuple(cell) for cell in piece.get("cells") or []]
+        if not cells:
+            return float("-inf")
+        min_row = min(int(row) for row, _ in cells)
+        max_row = max(int(row) for row, _ in cells)
+        color_score = float(piece.get("color_consistency") or 0.0)
+        top_score = (int(profile["board_rows"]) - min_row) / float(max(int(profile["board_rows"]), 1))
+        return top_score + color_score - (max_row * 0.01)
+
+    def _best_piece_from_diff_subset(
+        self,
+        diff_cells: list[Cell],
+        color_matrix: list[list[str]],
+        profile: dict[str, Any],
+        *,
+        source: str = "tracker_diff_subset",
+    ) -> dict[str, Any]:
+        if len(diff_cells) < 4 or len(diff_cells) > 12:
+            return {
+                "found": False,
+                "reason": "tracker_diff_subset_size",
+                "cells": [[int(row), int(col)] for row, col in diff_cells],
+            }
+
+        best_score: float | None = None
+        best_piece: dict[str, Any] | None = None
+        for candidate_cells in combinations(diff_cells, 4):
+            if not self._cells_connected(candidate_cells):
+                continue
+            piece = self._piece_from_cells(np.array(candidate_cells), color_matrix, source=source)
+            if not self._piece_candidate_allowed(piece, profile):
+                continue
+            score = self._active_piece_score(piece, profile)
+            if best_score is None or score > best_score:
+                best_score = score
+                best_piece = piece
+
+        if best_piece is not None:
+            return best_piece
+        return {
+            "found": False,
+            "reason": "tracker_diff_subset_not_matched",
+            "cells": [[int(row), int(col)] for row, col in diff_cells],
+        }
+
+    def _subtract_active_and_ghost_projection(
+        self,
+        occupied: np.ndarray,
+        *,
+        active_piece: dict[str, Any],
+        tracked_settled: np.ndarray,
+        tracker_seeded: bool,
+        color_matrix: list[list[str]],
+        profile: dict[str, Any],
+    ) -> tuple[np.ndarray, dict[str, Any]]:
+        settled = occupied.copy()
+        removed_active_cells: list[list[int]] = []
+        for row, col in active_piece.get("cells") or []:
+            row_index = int(row)
+            col_index = int(col)
+            if 0 <= row_index < settled.shape[0] and 0 <= col_index < settled.shape[1]:
+                settled[row_index, col_index] = False
+                removed_active_cells.append([row_index, col_index])
+
+        debug = {
+            "enabled": bool(profile["ghost_projection_subtract_enabled"]),
+            "shape": active_piece.get("shape"),
+            "rotation": active_piece.get("rotation"),
+            "origin_col": active_piece.get("origin_col"),
+            "simulation_source": "tracker" if tracker_seeded else "color_only",
+            "removed_active_cells": removed_active_cells,
+            "cells": [],
+            "subtracted_cells": [],
+            "subtracted_count": 0,
+            "reason": "disabled",
+        }
+        if not bool(profile["ghost_projection_subtract_enabled"]):
+            return settled, debug
+        if not bool(active_piece.get("found")):
+            debug["reason"] = "active_piece_missing"
+            return settled, debug
+
+        shape = str(active_piece.get("shape") or "")
+        rotations = self.SHAPES.get(shape)
+        if not rotations:
+            debug["reason"] = "unsupported_shape"
+            return settled, debug
+
+        try:
+            rotation_index = int(active_piece.get("rotation") or 0) % len(rotations)
+            origin_col = int(active_piece.get("origin_col") or 0)
+        except (TypeError, ValueError):
+            debug["reason"] = "invalid_active_piece"
+            return settled, debug
+
+        base_board = tracked_settled.copy()
+        if base_board.shape != settled.shape:
+            base_board = np.zeros_like(settled, dtype=bool)
+            debug["simulation_source"] = "empty"
+
+        ghost_row = self._drop_row(base_board, rotations[rotation_index], origin_col)
+        if ghost_row is None:
+            debug["reason"] = "drop_row_unavailable"
+            return settled, debug
+
+        ghost_cells = [
+            [int(ghost_row + cell_row), int(origin_col + cell_col)]
+            for cell_row, cell_col in rotations[rotation_index]
+        ]
+        debug["cells"] = ghost_cells
+        subtracted_cells: list[list[int]] = []
+        active_color = str(active_piece.get("color") or "")
+        for row_index, col_index in ghost_cells:
+            if not (0 <= row_index < settled.shape[0] and 0 <= col_index < settled.shape[1]):
+                continue
+            if not bool(settled[row_index, col_index]):
+                continue
+            if tracker_seeded:
+                if bool(base_board[row_index, col_index]):
+                    continue
+            else:
+                if row_index >= len(color_matrix) or col_index >= len(color_matrix[row_index]):
+                    continue
+                if str(color_matrix[row_index][col_index]) != active_color:
+                    continue
+            settled[row_index, col_index] = False
+            subtracted_cells.append([row_index, col_index])
+
+        debug["subtracted_cells"] = subtracted_cells
+        debug["subtracted_count"] = int(len(subtracted_cells))
+        debug["reason"] = "ok"
+        return settled, debug
 
     def _piece_from_cells(self, cells_array: np.ndarray, color_matrix: list[list[str]], *, source: str) -> dict[str, Any]:
         cells = [(int(row), int(col)) for row, col in cells_array.tolist()]
@@ -634,6 +922,23 @@ class YihuanTetrominoesService:
             "input_sequence": list(candidate.get("input_sequence") or []),
             "projected_metrics": dict(candidate.get("projected_metrics") or {}),
         }
+
+    @staticmethod
+    def _cells_connected(cells: list[Cell] | tuple[Cell, ...]) -> bool:
+        if not cells:
+            return False
+        remaining = {tuple(cell) for cell in cells}
+        queue: deque[Cell] = deque([next(iter(remaining))])
+        visited: set[Cell] = set()
+        while queue:
+            row, col = queue.popleft()
+            if (row, col) in visited:
+                continue
+            visited.add((row, col))
+            for next_row, next_col in ((row - 1, col), (row + 1, col), (row, col - 1), (row, col + 1)):
+                if (next_row, next_col) in remaining and (next_row, next_col) not in visited:
+                    queue.append((next_row, next_col))
+        return len(visited) == len(remaining)
 
     def _connected_components(self, occupied: np.ndarray) -> list[list[Cell]]:
         rows, cols = occupied.shape

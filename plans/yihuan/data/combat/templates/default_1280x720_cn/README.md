@@ -1,5 +1,11 @@
-# 自动战斗模板目录
+# Combat Template Directory
 
-`yihuan_combat` v1 默认优先使用 HSV/区域比例规则识别战斗状态，因此此目录当前不强制要求模板文件。
+This directory now contains the baseline `1280x720` combat templates used by
+`yihuan_combat`:
 
-后续如果需要提高目标图标、当前角色槽位或技能状态识别稳定性，可以在此目录补充中文客户端 `1280x720` 基准模板，并在 `data/combat/default_1280x720_cn.yaml` 中新增对应引用。
+- `target_lock_diamond.png`: target-lock diamond shown after pressing the middle mouse button
+- `challenge_success.png`: challenge result banner used as a strong post-combat signal
+
+The service still uses HSV and region rules for enemy health bars, team HUD, and
+ability readiness. If we need extra stability later, we can add more templates here
+and reference them from `data/combat/default_1280x720_cn.yaml`.

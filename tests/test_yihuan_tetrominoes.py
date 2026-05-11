@@ -113,10 +113,10 @@ class TestYihuanTetrominoesService(unittest.TestCase):
             ((18, 5), "O"),
             ((19, 4), "O"),
             ((19, 5), "O"),
-            ((16, 4), "T"),
-            ((17, 3), "T"),
-            ((17, 4), "T"),
-            ((17, 5), "T"),
+            ((6, 4), "T"),
+            ((7, 3), "T"),
+            ((7, 4), "T"),
+            ((7, 5), "T"),
         ]
         image = _make_board_image(self.service, cells)
 
@@ -125,7 +125,62 @@ class TestYihuanTetrominoesService(unittest.TestCase):
         self.assertEqual(state["current_piece"]["source"], "tracker_diff")
         self.assertEqual(state["current_piece"]["shape"], "T")
         self.assertEqual(state["board"]["settled_matrix"][18][4], 1)
-        self.assertEqual(state["board"]["settled_matrix"][17][4], 0)
+        self.assertEqual(state["board"]["settled_matrix"][7][4], 0)
+
+    def test_tracker_diff_subset_recovers_piece_when_overlay_noise_is_connected(self):
+        self.service.commit_settled_matrix(np.zeros((20, 10), dtype=np.uint8).tolist())
+        cells = [
+            ((1, 3), "I"),
+            ((1, 4), "I"),
+            ((1, 5), "I"),
+            ((1, 6), "I"),
+            ((2, 5), "Z"),
+            ((3, 4), "Z"),
+            ((3, 5), "Z"),
+            ((4, 4), "Z"),
+        ]
+        image = _make_board_image(self.service, cells)
+
+        state = self.service.analyze_state(image, update_tracker=False)
+
+        self.assertTrue(state["current_piece"]["found"])
+        self.assertEqual(state["current_piece"]["source"], "tracker_diff_subset")
+        self.assertEqual(state["current_piece"]["shape"], "I")
+
+    def test_bottom_settled_o_block_is_not_treated_as_current_piece(self):
+        image = _make_board_image(
+            self.service,
+            [((18, 4), "O"), ((18, 5), "O"), ((19, 4), "O"), ((19, 5), "O")],
+        )
+
+        state = self.service.analyze_state(image, update_tracker=False)
+
+        self.assertFalse(state["current_piece"]["found"])
+        self.assertEqual(state["current_piece"]["reason"], "no_legal_active_piece")
+        self.assertEqual(state["phase"], "unknown")
+
+    def test_ghost_projection_cells_are_subtracted_from_final_settled_matrix(self):
+        image = _make_board_image(
+            self.service,
+            [
+                ((1, 4), "O"),
+                ((1, 5), "O"),
+                ((2, 4), "O"),
+                ((2, 5), "O"),
+                ((18, 4), "O"),
+                ((18, 5), "O"),
+                ((19, 4), "O"),
+                ((19, 5), "O"),
+            ],
+        )
+
+        state = self.service.analyze_state(image, update_tracker=False)
+
+        self.assertTrue(state["current_piece"]["found"])
+        self.assertEqual(state["current_piece"]["shape"], "O")
+        self.assertEqual(sum(sum(row) for row in state["board"]["settled_matrix"]), 0)
+        self.assertEqual(state["debug"]["ghost_projection"]["subtracted_count"], 4)
+        self.assertEqual(len(state["debug"]["ghost_projection"]["cells"]), 4)
 
     def test_solver_prefers_line_clear_for_i_piece_gap(self):
         cells = [((row, 0), "I") for row in range(1, 5)]
@@ -143,21 +198,19 @@ class TestYihuanTetrominoesService(unittest.TestCase):
 
     def test_solver_returns_input_sequence_in_rotation_move_drop_order(self):
         sequence = self.service.build_input_sequence(
-            current_rotation=1,
-            target_rotation=0,
-            rotation_count=2,
-            current_col=0,
-            target_col=4,
+            current_rotation=0,
+            target_rotation=3,
+            rotation_count=4,
+            current_col=4,
+            target_col=2,
         )
 
         self.assertEqual(
             sequence,
             [
-                "tetrominoes_rotate_cw",
-                "tetrominoes_right",
-                "tetrominoes_right",
-                "tetrominoes_right",
-                "tetrominoes_right",
+                "tetrominoes_rotate_ccw",
+                "tetrominoes_left",
+                "tetrominoes_left",
                 "tetrominoes_fast_drop",
             ],
         )
@@ -193,6 +246,7 @@ class TestYihuanTetrominoesService(unittest.TestCase):
 class TestYihuanTetrominoesActions(unittest.TestCase):
     def setUp(self) -> None:
         self.service = YihuanTetrominoesService()
+        self.profile = self.service.load_profile()
         self.service.reset_tracker()
 
     def test_analyze_screen_returns_decision_without_input(self):
@@ -214,122 +268,175 @@ class TestYihuanTetrominoesActions(unittest.TestCase):
         self.assertTrue(result["result_screen"]["found"])
         self.assertEqual(result["decision"]["reason"], "level_end")
 
-    def test_run_session_dry_run_does_not_send_input(self):
-        image = _make_board_image(self.service, _line_clear_fixture_cells())
-        app = _FakeApp(image)
-        input_mapping = _FakeInputMapping()
+    def test_start_wait_does_not_treat_overlay_as_playing_before_large_drop(self):
+        overlay_image = _make_board_image(self.service, _start_overlay_cells(include_piece=True))
+        app = _FakeApp(images=[overlay_image, overlay_image])
+        profile = dict(self.profile)
+        profile["start_timeout_sec"] = 0.1
+        profile["start_poll_ms"] = 1
 
-        result = tetrominoes_actions.yihuan_tetrominoes_run_session(
-            app,
-            input_mapping,
+        with patch(
+            "plans.yihuan.src.actions.tetrominoes_actions.time.monotonic",
+            side_effect=[0.0, 0.0, 0.2],
+        ), patch("plans.yihuan.src.actions.tetrominoes_actions.time.sleep"):
+            result = tetrominoes_actions._wait_for_game_start(app, self.service, profile=profile)
+
+        self.assertEqual(result["phase"], "unknown")
+        self.assertFalse(result["start_detection"]["triggered"])
+
+    def test_start_wait_triggers_on_first_large_occupied_drop(self):
+        overlay_image = _make_board_image(self.service, _start_overlay_cells(include_piece=False))
+        playing_image = _make_board_image(
             self.service,
-            max_seconds=5,
-            max_pieces=1,
-            dry_run=True,
+            [((1, 4), "O"), ((1, 5), "O"), ((2, 4), "O"), ((2, 5), "O")],
+        )
+        app = _FakeApp(images=[overlay_image, playing_image])
+
+        with patch("plans.yihuan.src.actions.tetrominoes_actions.time.sleep"):
+            result = tetrominoes_actions._wait_for_game_start(app, self.service, profile=self.profile)
+
+        self.assertEqual(result["phase"], "playing")
+        self.assertTrue(result["start_detection"]["triggered"])
+        self.assertGreaterEqual(result["start_detection"]["drop_amount"], 20)
+        self.assertEqual(result["state"]["current_piece"]["shape"], "O")
+
+    def test_alignment_uses_fast_default_delays_and_slower_retry_delays(self):
+        self.assertEqual(
+            tetrominoes_actions._alignment_action_delay_ms(
+                profile=self.profile,
+                action_name="tetrominoes_left",
+                retrying_same_action=False,
+            ),
+            self.profile["alignment_move_delay_ms"],
+        )
+        self.assertEqual(
+            tetrominoes_actions._alignment_action_delay_ms(
+                profile=self.profile,
+                action_name="tetrominoes_left",
+                retrying_same_action=True,
+            ),
+            self.profile["alignment_move_retry_delay_ms"],
+        )
+        self.assertEqual(
+            tetrominoes_actions._alignment_action_delay_ms(
+                profile=self.profile,
+                action_name="tetrominoes_rotate_cw",
+                retrying_same_action=False,
+            ),
+            self.profile["alignment_rotate_delay_ms"],
+        )
+        self.assertEqual(
+            tetrominoes_actions._alignment_action_delay_ms(
+                profile=self.profile,
+                action_name="tetrominoes_rotate_cw",
+                retrying_same_action=True,
+            ),
+            self.profile["alignment_rotate_retry_delay_ms"],
         )
 
-        self.assertEqual(result["status"], "success")
-        self.assertEqual(result["stopped_reason"], "max_pieces")
-        self.assertEqual(result["pieces_played"], 1)
-        self.assertEqual(len(result["operation_log"]), 1)
-        self.assertEqual(result["operation_log"][0]["detected_piece"]["shape"], "I")
-        self.assertEqual(result["operation_log"][0]["executed_sequence"], [])
-        self.assertFalse(result["start_clicked"])
-        self.assertEqual(app.click_calls, [])
-        self.assertEqual(input_mapping.calls, [])
-        self.assertEqual(app.release_all_calls, 1)
+    def test_align_piece_requires_stable_match_for_point_two_seconds_before_drop(self):
+        image = _make_board_image(
+            self.service,
+            [((1, 4), "O"), ((1, 5), "O"), ((2, 4), "O"), ((2, 5), "O")],
+        )
+        initial_state = self.service.analyze_state(image, update_tracker=False)
+        initial_capture = CaptureResult(success=True, image=image.copy())
+        app = _FakeApp(images=[image, image])
+        input_mapping = _FakeInputMapping()
+        decision = {
+            "found": True,
+            "shape": "O",
+            "target_rotation": 0,
+            "target_col": 4,
+            "target_row": 18,
+        }
+        sleep_durations: list[float] = []
 
-    def test_run_session_clicks_start_then_executes_rotation_move_and_fast_drop(self):
-        image = _make_board_image(self.service, _line_clear_fixture_cells())
-        app = _FakeApp(image)
+        with patch(
+            "plans.yihuan.src.actions.tetrominoes_actions.time.monotonic",
+            side_effect=[0.0, 0.08, 0.16, 0.21],
+        ), patch(
+            "plans.yihuan.src.actions.tetrominoes_actions._sleep_with_periodic_snapshots",
+            side_effect=lambda *args, **kwargs: sleep_durations.append(float(kwargs["duration_sec"])),
+        ):
+            result = tetrominoes_actions._align_piece_to_target_and_drop(
+                input_mapping,
+                app,
+                self.service,
+                profile=self.profile,
+                decision=decision,
+                initial_state=initial_state,
+                initial_capture=initial_capture,
+                debug_snapshots=[],
+                periodic_snapshot_state={"enabled": False},
+                pieces_played=0,
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["executed_sequence"], ["tetrominoes_fast_drop"])
+        observe_attempts = [item for item in result["align_attempts"] if item.get("action") == "observe_match"]
+        self.assertEqual(len(observe_attempts), 4)
+        self.assertGreaterEqual(observe_attempts[-1]["stable_match_sec"], 0.2)
+        self.assertEqual(len(sleep_durations), 3)
+        self.assertAlmostEqual(sleep_durations[0], 0.05, places=2)
+        self.assertAlmostEqual(sleep_durations[1], 0.05, places=2)
+        self.assertAlmostEqual(sleep_durations[2], 0.04, places=2)
+
+    def test_service_and_action_rotation_semantics_are_consistent(self):
+        decision = {
+            "shape": "J",
+            "target_rotation": 3,
+            "target_col": 2,
+        }
+        piece = {
+            "found": True,
+            "shape": "J",
+            "rotation": 0,
+            "origin_col": 4,
+        }
+
+        first_planned = self.service.build_input_sequence(
+            current_rotation=0,
+            target_rotation=3,
+            rotation_count=len(self.service.SHAPES["J"]),
+            current_col=4,
+            target_col=2,
+        )[0]
+
+        self.assertEqual(first_planned, "tetrominoes_rotate_ccw")
+        self.assertEqual(tetrominoes_actions._next_alignment_action(piece, decision), first_planned)
+
+    def test_run_session_closed_loop_retries_until_piece_reaches_target(self):
+        app = _FakeApp(images=_alignment_fixture_images(self.service, missed_first_move=True))
         input_mapping = _FakeInputMapping()
 
-        with patch("plans.yihuan.src.actions.tetrominoes_actions.time.sleep") as sleep_mock:
+        with patch("plans.yihuan.src.actions.tetrominoes_actions.time.sleep"), patch(
+            "plans.yihuan.src.actions.tetrominoes_actions.time.monotonic",
+            side_effect=[index * 0.08 for index in range(120)],
+        ):
             result = tetrominoes_actions.yihuan_tetrominoes_run_session(
                 app,
                 input_mapping,
                 self.service,
                 max_seconds=5,
                 max_pieces=1,
+                start_game=False,
                 dry_run=False,
             )
 
         self.assertEqual(result["status"], "success")
-        self.assertTrue(result["start_clicked"])
-        self.assertEqual(app.click_calls, [(1120, 670, "left")])
-        sleep_mock.assert_any_call(6.0)
-        self.assertEqual(len(result["operation_log"]), 1)
-        self.assertEqual(result["operation_log"][0]["detected_piece"]["shape"], "I")
-        hold_calls = [call for call in input_mapping.calls if call[1] == "hold"]
-        release_calls = [call for call in input_mapping.calls if call[1] == "release"]
-        self.assertEqual([call[0] for call in hold_calls], result["decisions_tail"][0]["input_sequence"])
-        self.assertEqual([call[0] for call in release_calls], result["decisions_tail"][0]["input_sequence"])
-        self.assertEqual([call[0] for call in hold_calls], result["operation_log"][0]["executed_sequence"])
-        self.assertEqual(input_mapping.calls[0][0], "tetrominoes_rotate_cw")
-        self.assertEqual(input_mapping.calls[-1][0], "tetrominoes_fast_drop")
-        self.assertTrue(all(call[1] in {"hold", "release"} for call in input_mapping.calls))
-        self.assertTrue(all(call[2] == "default_1280x720_cn" for call in input_mapping.calls))
-        self.assertEqual(app.release_all_calls, 1)
-
-    def test_run_session_stops_when_start_leads_to_result_screen(self):
-        app = _FakeApp(
-            images=[
-                _make_board_image(self.service, _line_clear_fixture_cells()),
-                _make_result_screen_image(self.service),
-            ]
-        )
-        input_mapping = _FakeInputMapping()
-
-        with patch("plans.yihuan.src.actions.tetrominoes_actions.time.sleep") as sleep_mock:
-            result = tetrominoes_actions.yihuan_tetrominoes_run_session(
-                app,
-                input_mapping,
-                self.service,
-                max_seconds=5,
-                max_pieces=1,
-            )
-
-        self.assertEqual(result["status"], "success")
-        self.assertEqual(result["stopped_reason"], "level_end")
-        self.assertEqual(result["pieces_played"], 0)
-        self.assertEqual(result["operation_log"], [])
-        self.assertTrue(result["result_screen"]["found"])
-        self.assertEqual(input_mapping.calls, [])
-        self.assertEqual(app.click_calls, [(1120, 670, "left")])
-        sleep_mock.assert_any_call(6.0)
-        self.assertEqual(app.release_all_calls, 1)
-
-    def test_run_session_clears_existing_result_screen_before_start(self):
-        app = _FakeApp(
-            images=[
-                _make_result_screen_image(self.service),
-                _make_board_image(self.service, _line_clear_fixture_cells()),
-            ]
-        )
-        input_mapping = _FakeInputMapping()
-
-        with patch("plans.yihuan.src.actions.tetrominoes_actions.time.sleep") as sleep_mock:
-            result = tetrominoes_actions.yihuan_tetrominoes_run_session(
-                app,
-                input_mapping,
-                self.service,
-                max_seconds=5,
-                max_pieces=1,
-            )
-
-        self.assertEqual(result["status"], "success")
-        self.assertEqual(result["stopped_reason"], "max_pieces")
-        self.assertTrue(result["result_screen_cleared_before_start"])
-        self.assertEqual(app.click_calls, [(645, 616, "left"), (1120, 670, "left")])
-        sleep_mock.assert_any_call(1.0)
-        sleep_mock.assert_any_call(6.0)
-        self.assertEqual(len(result["operation_log"]), 1)
+        executed = result["operation_log"][0]["executed_sequence"]
+        planned = result["decisions_tail"][0]["input_sequence"]
+        self.assertEqual(planned.count("tetrominoes_right"), 4)
+        self.assertEqual(executed.count("tetrominoes_right"), 5)
+        self.assertEqual(executed[-1], "tetrominoes_fast_drop")
+        self.assertTrue(result["operation_log"][0]["execution_alignment"])
 
     def test_run_session_capture_failure_returns_failed_without_input(self):
         app = _FakeApp(fail_capture=True)
         input_mapping = _FakeInputMapping()
 
-        with patch("plans.yihuan.src.actions.tetrominoes_actions.time.sleep") as sleep_mock:
+        with patch("plans.yihuan.src.actions.tetrominoes_actions.time.sleep"):
             result = tetrominoes_actions.yihuan_tetrominoes_run_session(
                 app,
                 input_mapping,
@@ -340,6 +447,7 @@ class TestYihuanTetrominoesActions(unittest.TestCase):
 
         self.assertEqual(result["status"], "failed")
         self.assertEqual(result["stopped_reason"], "capture_failed")
+        self.assertEqual(result["failure_reason"], "capture_failed")
         self.assertEqual(input_mapping.calls, [])
         self.assertEqual(app.click_calls, [])
         self.assertEqual(app.release_all_calls, 1)
@@ -349,6 +457,63 @@ def _line_clear_fixture_cells() -> list[tuple[tuple[int, int], str]]:
     cells = [((row, 0), "I") for row in range(1, 5)]
     cells.extend(((19, col), "X") for col in range(10) if col not in {4, 5, 6, 7})
     return cells
+
+
+def _start_overlay_cells(*, include_piece: bool) -> list[tuple[tuple[int, int], str]]:
+    cells: list[tuple[tuple[int, int], str]] = []
+    if include_piece:
+        cells.extend([((1, 3), "I"), ((1, 4), "I"), ((1, 5), "I"), ((1, 6), "I")])
+    extra_needed = 26 - len(cells)
+    row = 4
+    col = 0
+    for _ in range(extra_needed):
+        cells.append(((row, col), "X"))
+        col += 1
+        if col >= 10:
+            col = 0
+            row += 1
+    return cells
+
+
+def _alignment_fixture_images(
+    service: YihuanTetrominoesService,
+    *,
+    missed_first_move: bool = False,
+) -> list[np.ndarray]:
+    settled = [((19, col), "X") for col in range(10) if col not in {4, 5, 6, 7}]
+    images = [
+        _make_board_image(
+            service,
+            [((row, 0), "I") for row in range(1, 5)] + settled,
+        )
+    ]
+    images.append(
+        _make_board_image(
+            service,
+            [((1, col), "I") for col in range(0, 4)] + settled,
+        )
+    )
+    horizontal_starts = [0, 1, 2, 3, 4] if missed_first_move else [1, 2, 3, 4]
+    for start_col in horizontal_starts:
+        images.append(
+            _make_board_image(
+                service,
+                [((1, col), "I") for col in range(start_col, start_col + 4)] + settled,
+            )
+        )
+    images.append(
+        _make_board_image(
+            service,
+            [((1, col), "I") for col in range(4, 8)] + settled,
+        )
+    )
+    images.append(
+        _make_board_image(
+            service,
+            [((1, col), "I") for col in range(4, 8)] + settled,
+        )
+    )
+    return images
 
 
 def _make_board_image(

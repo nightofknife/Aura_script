@@ -48,6 +48,14 @@ result_text_region:
   - 620
   - 220
   - 60
+result_prompt_region:
+  - 548
+  - 634
+  - 186
+  - 40
+result_prompt_template: result_close_prompt.png
+result_prompt_mask: result_close_prompt_mask.png
+result_prompt_match_threshold: 0.82
 ready_anchor_region:
   - 1000
   - 560
@@ -96,6 +104,7 @@ control_zone_width_min_px: 30
 control_zone_width_max_px: 120
 bait_recovery_enabled: true
 sell_before_buy_bait: true
+bait_buy_repeat_count: 1
 bait_recovery_max_attempts_per_round: 1
 bait_recovery_step_interval_ms: 500
 bait_recovery_ready_timeout_sec: 8.0
@@ -114,6 +123,7 @@ bait_shortage_dark_bar_region:
 bait_shortage_dark_pixel_threshold: 35
 bait_shortage_dark_row_ratio: 0.80
 bait_shortage_dark_min_height_px: 35
+mouse_click_hold_ms: 100
 sell_open_action: fish_sell_shop
 sell_step_interval_ms: 1000
 sell_click_hold_ms: 100
@@ -152,9 +162,18 @@ bait_shop_open_action: fish_bait_shop
 bait_step_interval_ms: 800
 bait_click_hold_ms: 100
 bait_item_kind: universal_bait
+bait_item_region:
+  - 120
+  - 70
+  - 320
+  - 210
+bait_item_template: bait_item_right_card.png
+bait_item_mask: bait_item_right_card_mask.png
+bait_item_match_threshold: 0.85
+bait_item_select_timeout_sec: 3.0
 bait_item_point:
-  - 374
-  - 165
+  - 232
+  - 156
 bait_item_after_wait_ms: 1200
 bait_max_point:
   - 1220
@@ -183,6 +202,7 @@ bait_success_close_clicks: 3
 bait_success_close_interval_ms: 1000
 bait_change_open_action: fish_bait_change
 bait_change_open_wait_sec: 2.0
+bait_change_click_hold_ms: 100
 bait_change_confirm_point:
   - 780
   - 470

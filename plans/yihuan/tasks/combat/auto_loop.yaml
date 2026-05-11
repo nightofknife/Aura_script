@@ -18,10 +18,25 @@ auto_loop:
       - name: auto_target
         type: boolean
         default: true
+      - name: auto_dodge
+        type: boolean
+        default: true
       - name: dry_run
         type: boolean
         default: false
       - name: debug_enabled
+        type: boolean
+        default: false
+      - name: capture_debug_enabled
+        type: boolean
+        default: false
+      - name: capture_interval_sec
+        type: number
+        default: 2.0
+      - name: capture_max_images
+        type: number
+        default: 120
+      - name: capture_raw_enabled
         type: boolean
         default: false
   steps:
@@ -33,6 +48,11 @@ auto_loop:
         max_seconds: "{{ inputs.max_seconds }}"
         max_encounters: "{{ inputs.max_encounters }}"
         auto_target: "{{ inputs.auto_target }}"
+        auto_dodge: "{{ inputs.auto_dodge }}"
         dry_run: "{{ inputs.dry_run }}"
         debug_enabled: "{{ inputs.debug_enabled }}"
+        capture_debug_enabled: "{{ inputs.capture_debug_enabled }}"
+        capture_interval_sec: "{{ inputs.capture_interval_sec }}"
+        capture_max_images: "{{ inputs.capture_max_images }}"
+        capture_raw_enabled: "{{ inputs.capture_raw_enabled }}"
   returns: "{{ nodes.run.output }}"

@@ -7,11 +7,13 @@ import unittest
 from packages.yihuan_gui.config_repository import YihuanConfigRepository
 from packages.yihuan_gui.logic import (
     CafeRunDefaults,
+    CombatRunDefaults,
     FishingRunDefaults,
     GuiPreferences,
     MahjongRunDefaults,
     OneCafeRunDefaults,
     RuntimeSettings,
+    TetrominoesRunDefaults,
 )
 
 
@@ -36,6 +38,8 @@ class TestYihuanConfigRepository(unittest.TestCase):
         (self.plan_root / "data" / "one_cafe" / "default_1280x720_cn").mkdir(parents=True)
         (self.plan_root / "data" / "one_cafe" / "custom_one_cafe").mkdir(parents=True)
         (self.plan_root / "data" / "mahjong").mkdir(parents=True)
+        (self.plan_root / "data" / "combat").mkdir(parents=True)
+        (self.plan_root / "data" / "tetrominoes").mkdir(parents=True)
         (self.plan_root / "data" / "input_profiles" / "default_pc.yaml").write_text("actions: {}\n", encoding="utf-8")
         (self.plan_root / "data" / "input_profiles" / "gamepad.yaml").write_text("actions: {}\n", encoding="utf-8")
         (self.plan_root / "data" / "fishing" / "default_1280x720_cn.yaml").write_text(
@@ -74,6 +78,42 @@ class TestYihuanConfigRepository(unittest.TestCase):
         )
         (self.plan_root / "data" / "mahjong" / "custom_mahjong.yaml").write_text(
             "profile_name: custom_mahjong\n",
+            encoding="utf-8",
+        )
+        (self.plan_root / "data" / "combat" / "default_1280x720_cn.yaml").write_text(
+            "\n".join(
+                [
+                    "profile_name: default_1280x720_cn",
+                    "strategies:",
+                    "  default:",
+                    "    loop: []",
+                    "  burst:",
+                    "    loop: []",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (self.plan_root / "data" / "combat" / "custom_combat.yaml").write_text(
+            "\n".join(
+                [
+                    "profile_name: custom_combat",
+                    "strategies:",
+                    "  default:",
+                    "    loop: []",
+                    "  sustain:",
+                    "    loop: []",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (self.plan_root / "data" / "tetrominoes" / "default_1280x720_cn.yaml").write_text(
+            "profile_name: default_1280x720_cn\n",
+            encoding="utf-8",
+        )
+        (self.plan_root / "data" / "tetrominoes" / "custom_tetrominoes.yaml").write_text(
+            "profile_name: custom_tetrominoes\n",
             encoding="utf-8",
         )
         (self.plan_root / "config.yaml").write_text(
@@ -246,6 +286,46 @@ class TestYihuanConfigRepository(unittest.TestCase):
     def test_mahjong_profile_list_accepts_yaml_and_directory_profiles(self):
         self.assertIn("default_1280x720_cn", self.repo.list_mahjong_profiles())
         self.assertIn("custom_mahjong", self.repo.list_mahjong_profiles())
+
+    def test_combat_defaults_round_trip_preserves_unedited_fields(self):
+        self.repo.update_combat_defaults(CombatRunDefaults(profile_name="custom_combat"))
+
+        defaults = self.repo.get_combat_defaults()
+        payload = self.repo.load_config()
+        self.assertEqual(defaults.profile_name, "custom_combat")
+        self.assertEqual(payload["combat"]["profile_name"], "custom_combat")
+        self.assertEqual(payload["extra"]["keep"], True)
+
+    def test_combat_defaults_validation_rejects_unknown_profile(self):
+        with self.assertRaisesRegex(ValueError, "自动战斗识别档案不存在"):
+            self.repo.validate_combat_defaults(CombatRunDefaults(profile_name="missing_profile"))
+
+    def test_combat_profile_list_accepts_yaml_profiles(self):
+        self.assertIn("default_1280x720_cn", self.repo.list_combat_profiles())
+        self.assertIn("custom_combat", self.repo.list_combat_profiles())
+
+    def test_combat_strategy_list_reads_profile_yaml(self):
+        self.assertEqual(
+            self.repo.list_combat_strategy_names("custom_combat"),
+            ["default", "sustain"],
+        )
+
+    def test_tetrominoes_defaults_round_trip_preserves_unedited_fields(self):
+        self.repo.update_tetrominoes_defaults(TetrominoesRunDefaults(profile_name="custom_tetrominoes"))
+
+        defaults = self.repo.get_tetrominoes_defaults()
+        payload = self.repo.load_config()
+        self.assertEqual(defaults.profile_name, "custom_tetrominoes")
+        self.assertEqual(payload["tetrominoes"]["profile_name"], "custom_tetrominoes")
+        self.assertEqual(payload["extra"]["keep"], True)
+
+    def test_tetrominoes_defaults_validation_rejects_unknown_profile(self):
+        with self.assertRaisesRegex(ValueError, "俄罗斯方块识别档案不存在"):
+            self.repo.validate_tetrominoes_defaults(TetrominoesRunDefaults(profile_name="missing_profile"))
+
+    def test_tetrominoes_profile_list_accepts_yaml_profiles(self):
+        self.assertIn("default_1280x720_cn", self.repo.list_tetrominoes_profiles())
+        self.assertIn("custom_tetrominoes", self.repo.list_tetrominoes_profiles())
 
     def test_cafe_profile_default_seconds_reads_profile_yaml(self):
         self.assertEqual(self.repo.get_cafe_profile_default_seconds("default_1280x720_cn"), 130.0)

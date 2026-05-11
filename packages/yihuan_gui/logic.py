@@ -15,6 +15,8 @@ TASK_LIVE_MONITOR = "tasks:fishing:live_monitor.yaml"
 TASK_CAFE_AUTO_LOOP = "tasks:cafe:auto_loop.yaml"
 TASK_ONE_CAFE_REVENUE_RESTOCK = "tasks:one_cafe:revenue_restock.yaml"
 TASK_MAHJONG_AUTO_LOOP = "tasks:mahjong:auto_loop.yaml"
+TASK_COMBAT_AUTO_LOOP = "tasks:combat:auto_loop.yaml"
+TASK_TETROMINOES_AUTO_LOOP = "tasks:tetrominoes:auto_loop.yaml"
 
 VISIBLE_HISTORY_TASK_REFS = (
     TASK_PLAN_READY,
@@ -24,6 +26,8 @@ VISIBLE_HISTORY_TASK_REFS = (
     TASK_CAFE_AUTO_LOOP,
     TASK_ONE_CAFE_REVENUE_RESTOCK,
     TASK_MAHJONG_AUTO_LOOP,
+    TASK_COMBAT_AUTO_LOOP,
+    TASK_TETROMINOES_AUTO_LOOP,
 )
 DEVELOPER_TASK_REFS = (TASK_PLAN_READY, TASK_PLAN_LOADED, TASK_RUNTIME_PROBE)
 TERMINAL_STATUSES = {"success", "error", "failed", "timeout", "cancelled", "partial"}
@@ -37,6 +41,8 @@ TASK_DISPLAY_NAMES = {
     TASK_CAFE_AUTO_LOOP: "沙威玛",
     TASK_ONE_CAFE_REVENUE_RESTOCK: "一咖舍",
     TASK_MAHJONG_AUTO_LOOP: "自动麻将",
+    TASK_COMBAT_AUTO_LOOP: "自动战斗",
+    TASK_TETROMINOES_AUTO_LOOP: "俄罗斯方块",
 }
 
 STATUS_LABELS = {
@@ -58,11 +64,17 @@ STOP_REASON_LABELS = {
     "duration_reached": "达到运行时长",
     "window_closed": "监视窗口已关闭",
     "max_seconds": "达到最大运行秒数",
+    "max_pieces": "达到最大方块数",
     "max_orders": "达到最大订单数",
     "level_end": "关卡结束",
     "failure": "执行失败",
     "exception": "发生异常",
     "phase_timeout": "等待阶段超时",
+    "game_start_timeout": "等待开始超时",
+    "recognition_timeout": "识别超时",
+    "top_out_risk": "堆叠过高风险停止",
+    "execution_mismatch": "执行结果与预期不一致",
+    "capture_failed": "截图失败",
     "completed": "执行完成",
     "world_return_failed": "返回世界场景失败",
     "unknown_withdraw_state": "收益领取状态未知",
@@ -80,6 +92,12 @@ FAILURE_REASON_LABELS = {
     "capture_failed": "截图失败",
     "level_start_capture_failed": "等待开局时截图失败",
     "level_start_timeout": "等待关卡开始超时",
+    "game_start_timeout": "等待开始超时",
+    "recognition_timeout": "识别超时",
+    "top_out_risk": "堆叠过高风险",
+    "execution_mismatch": "执行结果与预期不一致",
+    "low_confidence": "识别置信度不足",
+    "no_valid_placement": "没有可用落点",
     "phase_timeout": "等待阶段超时",
     "exception": "发生异常",
     "world_return_failed": "返回世界场景失败",
@@ -155,6 +173,13 @@ PHASE_LABELS = {
     "withdraw": "领取收益",
     "restock": "补货",
     "exit": "返回世界",
+    "monitor": "监控",
+    "enemy_detected": "发现敌人",
+    "acquire_target": "锁定目标",
+    "combat": "战斗中",
+    "exit_settle": "离战确认",
+    "post_combat": "战斗收尾",
+    "audio_dodge": "音频闪避",
     "unknown": "未知",
     "n/a": "-",
 }
@@ -171,6 +196,14 @@ TRACE_NOTE_LABELS = {
     "switch_verify": "验证自动开关",
     "phase_wait": "等待可识别阶段",
     "monitor": "监控结算页",
+    "enter_combat": "进入战斗",
+    "combat_loop": "执行战斗策略",
+    "combat_exit_pending": "等待确认离战",
+    "exit_combat": "确认战斗结束",
+    "post_combat": "战斗后监控",
+    "audio_dodge": "音频闪避触发",
+    "dodge_pause": "闪避后暂停",
+    "challenge_success": "检测到挑战成功",
 }
 
 CONTROL_REASON_LABELS = {
@@ -285,6 +318,8 @@ class GuiPreferences:
 class FishingRunDefaults:
     profile_name: str = "default_1280x720_cn"
     sell_fish_every_rounds: int = 0
+    bait_buy_repeat_count: int = 1
+    sell_before_buy_bait: bool = True
 
 
 @dataclass(frozen=True)
@@ -318,6 +353,29 @@ class MahjongRunDefaults:
 
 
 @dataclass(frozen=True)
+class CombatRunDefaults:
+    profile_name: str = "default_1280x720_cn"
+    strategy_name: str = "default"
+    max_seconds: int = 0
+    max_encounters: int = 0
+    auto_target: bool = True
+    auto_dodge: bool = True
+    debug_enabled: bool = False
+    capture_debug_enabled: bool = False
+    capture_interval_sec: float = 2.0
+    capture_max_images: int = 120
+    capture_raw_enabled: bool = False
+
+
+@dataclass(frozen=True)
+class TetrominoesRunDefaults:
+    profile_name: str = "default_1280x720_cn"
+    max_seconds: int = 0
+    max_pieces: int = 0
+    start_game: bool = True
+
+
+@dataclass(frozen=True)
 class SettingsField:
     key: str
     label: str
@@ -346,12 +404,16 @@ class LiveUiState:
 def build_auto_loop_inputs(
     max_rounds: Any,
     sell_fish_every_rounds: Any,
+    bait_buy_repeat_count: Any,
+    sell_before_buy_bait: Any,
     defaults: FishingRunDefaults,
 ) -> dict[str, Any]:
     return {
         "max_rounds": int(max_rounds),
         "profile_name": str(defaults.profile_name),
         "sell_fish_every_rounds": int(sell_fish_every_rounds),
+        "bait_buy_repeat_count": int(bait_buy_repeat_count),
+        "sell_before_buy_bait": bool(sell_before_buy_bait),
     }
 
 
@@ -409,10 +471,57 @@ def build_mahjong_loop_inputs(
     }
 
 
+def build_combat_loop_inputs(
+    max_seconds: Any,
+    max_encounters: Any,
+    auto_target: Any,
+    auto_dodge: Any,
+    strategy_name: Any,
+    debug_enabled: Any,
+    capture_debug_enabled: Any,
+    capture_interval_sec: Any,
+    capture_max_images: Any,
+    capture_raw_enabled: Any,
+    defaults: CombatRunDefaults,
+) -> dict[str, Any]:
+    return {
+        "profile_name": str(defaults.profile_name),
+        "strategy_name": str(strategy_name or defaults.strategy_name),
+        "max_seconds": int(max_seconds),
+        "max_encounters": int(max_encounters),
+        "auto_target": bool(auto_target),
+        "auto_dodge": bool(auto_dodge),
+        "dry_run": False,
+        "debug_enabled": bool(debug_enabled),
+        "capture_debug_enabled": bool(capture_debug_enabled),
+        "capture_interval_sec": float(capture_interval_sec),
+        "capture_max_images": int(capture_max_images),
+        "capture_raw_enabled": bool(capture_raw_enabled),
+    }
+
+
+def build_tetrominoes_loop_inputs(
+    max_seconds: Any,
+    max_pieces: Any,
+    start_game: Any,
+    defaults: TetrominoesRunDefaults,
+) -> dict[str, Any]:
+    return {
+        "profile_name": str(defaults.profile_name),
+        "max_seconds": int(max_seconds),
+        "max_pieces": int(max_pieces),
+        "start_game": bool(start_game),
+        "dry_run": False,
+        "debug_enabled": False,
+    }
+
+
 def extract_auto_loop_defaults(task_row: Mapping[str, Any] | None) -> FishingRunDefaults:
     values = {
         "profile_name": FishingRunDefaults().profile_name,
         "sell_fish_every_rounds": FishingRunDefaults().sell_fish_every_rounds,
+        "bait_buy_repeat_count": FishingRunDefaults().bait_buy_repeat_count,
+        "sell_before_buy_bait": FishingRunDefaults().sell_before_buy_bait,
     }
     for field in (task_row or {}).get("inputs") or []:
         if not isinstance(field, Mapping):
@@ -424,6 +533,8 @@ def extract_auto_loop_defaults(task_row: Mapping[str, Any] | None) -> FishingRun
     return FishingRunDefaults(
         profile_name=str(values["profile_name"] or FishingRunDefaults().profile_name),
         sell_fish_every_rounds=int(float(values["sell_fish_every_rounds"] or 0)),
+        bait_buy_repeat_count=int(float(values["bait_buy_repeat_count"] or 0)),
+        sell_before_buy_bait=_coerce_bool(values["sell_before_buy_bait"]),
     )
 
 
@@ -502,6 +613,64 @@ def extract_mahjong_loop_defaults(task_row: Mapping[str, Any] | None) -> Mahjong
         auto_hu=_coerce_bool(values["auto_hu"]),
         auto_peng=_coerce_bool(values["auto_peng"]),
         auto_discard=_coerce_bool(values["auto_discard"]),
+    )
+
+
+def extract_combat_loop_defaults(task_row: Mapping[str, Any] | None) -> CombatRunDefaults:
+    values = {
+        "profile_name": CombatRunDefaults().profile_name,
+        "strategy_name": CombatRunDefaults().strategy_name,
+        "max_seconds": CombatRunDefaults().max_seconds,
+        "max_encounters": CombatRunDefaults().max_encounters,
+        "auto_target": CombatRunDefaults().auto_target,
+        "auto_dodge": CombatRunDefaults().auto_dodge,
+        "debug_enabled": CombatRunDefaults().debug_enabled,
+        "capture_debug_enabled": CombatRunDefaults().capture_debug_enabled,
+        "capture_interval_sec": CombatRunDefaults().capture_interval_sec,
+        "capture_max_images": CombatRunDefaults().capture_max_images,
+        "capture_raw_enabled": CombatRunDefaults().capture_raw_enabled,
+    }
+    for field in (task_row or {}).get("inputs") or []:
+        if not isinstance(field, Mapping):
+            continue
+        name = str(field.get("name") or "").strip()
+        if name not in values:
+            continue
+        values[name] = field.get("default", values[name])
+    return CombatRunDefaults(
+        profile_name=str(values["profile_name"] or CombatRunDefaults().profile_name),
+        strategy_name=str(values["strategy_name"] or CombatRunDefaults().strategy_name),
+        max_seconds=int(float(values["max_seconds"] or 0)),
+        max_encounters=int(float(values["max_encounters"] or 0)),
+        auto_target=_coerce_bool(values["auto_target"]),
+        auto_dodge=_coerce_bool(values["auto_dodge"]),
+        debug_enabled=_coerce_bool(values["debug_enabled"]),
+        capture_debug_enabled=_coerce_bool(values["capture_debug_enabled"]),
+        capture_interval_sec=float(values["capture_interval_sec"] or CombatRunDefaults().capture_interval_sec),
+        capture_max_images=int(float(values["capture_max_images"] or CombatRunDefaults().capture_max_images)),
+        capture_raw_enabled=_coerce_bool(values["capture_raw_enabled"]),
+    )
+
+
+def extract_tetrominoes_loop_defaults(task_row: Mapping[str, Any] | None) -> TetrominoesRunDefaults:
+    values = {
+        "profile_name": TetrominoesRunDefaults().profile_name,
+        "max_seconds": TetrominoesRunDefaults().max_seconds,
+        "max_pieces": TetrominoesRunDefaults().max_pieces,
+        "start_game": TetrominoesRunDefaults().start_game,
+    }
+    for field in (task_row or {}).get("inputs") or []:
+        if not isinstance(field, Mapping):
+            continue
+        name = str(field.get("name") or "").strip()
+        if name not in values:
+            continue
+        values[name] = field.get("default", values[name])
+    return TetrominoesRunDefaults(
+        profile_name=str(values["profile_name"] or TetrominoesRunDefaults().profile_name),
+        max_seconds=int(float(values["max_seconds"] or 0)),
+        max_pieces=int(float(values["max_pieces"] or 0)),
+        start_game=_coerce_bool(values["start_game"]),
     )
 
 
@@ -598,7 +767,15 @@ def build_settings_sections(
 def is_runtime_interacting_task(task_ref: str | None) -> bool:
     normalized = str(task_ref or "").strip()
     return normalized == TASK_RUNTIME_PROBE or normalized.startswith(
-        ("tasks:fishing:", "tasks:cafe:", "tasks:one_cafe/", "tasks:one_cafe:", "tasks:mahjong:")
+        (
+            "tasks:fishing:",
+            "tasks:cafe:",
+            "tasks:one_cafe/",
+            "tasks:one_cafe:",
+            "tasks:mahjong:",
+            "tasks:combat:",
+            "tasks:tetrominoes:",
+        )
     )
 
 
@@ -829,6 +1006,12 @@ def render_task_result_html(task_ref: str | None, detail: Mapping[str, Any] | No
     if task_name == TASK_MAHJONG_AUTO_LOOP and isinstance(user_data, Mapping):
         return render_mahjong_loop_result_html(user_data)
 
+    if task_name == TASK_COMBAT_AUTO_LOOP and isinstance(user_data, Mapping):
+        return render_combat_loop_result_html(user_data)
+
+    if task_name == TASK_TETROMINOES_AUTO_LOOP and isinstance(user_data, Mapping):
+        return render_tetrominoes_loop_result_html(user_data)
+
     if user_data is not None:
         return f"<pre>{html.escape(render_json(user_data))}</pre>"
     return "<p>当前没有可显示的任务输出。</p>"
@@ -894,6 +1077,36 @@ def mahjong_loop_business_status(detail: Mapping[str, Any] | None) -> str | None
     return status or None
 
 
+def combat_loop_user_data(detail: Mapping[str, Any] | None) -> Mapping[str, Any] | None:
+    payload = dict(detail or {})
+    final_result = dict(payload.get("final_result") or {})
+    user_data = final_result.get("user_data")
+    return user_data if isinstance(user_data, Mapping) else None
+
+
+def combat_loop_business_status(detail: Mapping[str, Any] | None) -> str | None:
+    user_data = combat_loop_user_data(detail)
+    if not user_data:
+        return None
+    status = str(user_data.get("status") or "").strip().lower()
+    return status or None
+
+
+def tetrominoes_loop_user_data(detail: Mapping[str, Any] | None) -> Mapping[str, Any] | None:
+    payload = dict(detail or {})
+    final_result = dict(payload.get("final_result") or {})
+    user_data = final_result.get("user_data")
+    return user_data if isinstance(user_data, Mapping) else None
+
+
+def tetrominoes_loop_business_status(detail: Mapping[str, Any] | None) -> str | None:
+    user_data = tetrominoes_loop_user_data(detail)
+    if not user_data:
+        return None
+    status = str(user_data.get("status") or "").strip().lower()
+    return status or None
+
+
 def render_auto_loop_brief_text(detail: Mapping[str, Any] | None) -> str:
     user_data = auto_loop_user_data(detail)
     if not user_data:
@@ -920,6 +1133,35 @@ def render_mahjong_loop_brief_text(detail: Mapping[str, Any] | None) -> str:
         f"停止原因 {stop_reason_display_name(user_data.get('stopped_reason'))} / "
         f"耗时 {_format_seconds(user_data.get('elapsed_sec'))}"
     )
+
+
+def render_combat_loop_brief_text(detail: Mapping[str, Any] | None) -> str:
+    user_data = combat_loop_user_data(detail)
+    if not user_data:
+        return "暂无自动战斗结果。"
+    return (
+        f"{status_display_name(user_data.get('status'))} / "
+        f"战斗 {user_data.get('encounters_completed', 0)} 场 / "
+        f"阶段 {phase_display_name(user_data.get('current_phase'))} / "
+        f"停止原因 {stop_reason_display_name(user_data.get('stopped_reason'))} / "
+        f"耗时 {_format_seconds(user_data.get('elapsed_sec'))}"
+    )
+
+
+def render_tetrominoes_loop_brief_text(detail: Mapping[str, Any] | None) -> str:
+    user_data = tetrominoes_loop_user_data(detail)
+    if not user_data:
+        return "暂无俄罗斯方块结果。"
+    text = (
+        f"{status_display_name(user_data.get('status'))} / "
+        f"已放置 {user_data.get('pieces_played', 0)} 块 / "
+        f"停止原因 {stop_reason_display_name(user_data.get('stopped_reason'))} / "
+        f"耗时 {_format_seconds(user_data.get('elapsed_sec'))}"
+    )
+    failure_reason = str(user_data.get("failure_reason") or "").strip()
+    if failure_reason and failure_reason.lower() != "none":
+        text += f" / 失败原因 {failure_reason_display_name(failure_reason)}"
+    return text
 
 
 def render_auto_loop_result_html(user_data: Mapping[str, Any]) -> str:
@@ -956,6 +1198,76 @@ def render_mahjong_loop_result_html(user_data: Mapping[str, Any]) -> str:
         lines.insert(3, _kv_html("失败信息", user_data.get("failure_message")))
     if user_data.get("planned_actions"):
         lines.append(_kv_html("计划动作", user_data.get("planned_actions")))
+    return "".join(lines)
+
+
+def render_combat_loop_result_html(user_data: Mapping[str, Any]) -> str:
+    lines = [
+        _kv_html("业务结果", status_display_name(user_data.get("status"))),
+        _kv_html("停止原因", stop_reason_display_name(user_data.get("stopped_reason"))),
+        _kv_html("失败原因", failure_reason_display_name(user_data.get("failure_reason"))),
+        _kv_html("识别档案", user_data.get("profile_name")),
+        _kv_html("策略", user_data.get("strategy_name")),
+        _kv_html("完成战斗场次", user_data.get("encounters_completed")),
+        _kv_html("当前阶段", phase_display_name(user_data.get("current_phase"))),
+        _kv_html("总耗时", _format_seconds(user_data.get("elapsed_sec"))),
+        _render_combat_capture_debug_summary(user_data),
+        _render_combat_last_state(user_data.get("last_state")),
+        _render_combat_trace_tail(user_data.get("combat_state_trace") or []),
+        _render_combat_action_tail(user_data.get("action_trace") or []),
+    ]
+    return "".join(lines)
+
+
+def render_tetrominoes_loop_result_html(user_data: Mapping[str, Any]) -> str:
+    lines = [
+        _kv_html("业务结果", status_display_name(user_data.get("status"))),
+        _kv_html("停止原因", stop_reason_display_name(user_data.get("stopped_reason"))),
+        _kv_html("失败原因", failure_reason_display_name(user_data.get("failure_reason"))),
+        _kv_html("识别档案", user_data.get("profile_name")),
+        _kv_html("已放置方块数", user_data.get("pieces_played")),
+        _kv_html("总耗时", _format_seconds(user_data.get("elapsed_sec"))),
+        _kv_html("自动点击开始游戏", "是" if _coerce_bool(user_data.get("start_game")) else "否"),
+        _kv_html("实际点击开始", "是" if _coerce_bool(user_data.get("start_clicked")) else "否"),
+        _kv_html(
+            "开始前已清理结算页",
+            "是" if _coerce_bool(user_data.get("result_screen_cleared_before_start")) else "否",
+        ),
+        _kv_html("最终指标", user_data.get("final_metrics")),
+        _kv_html("结算页识别", user_data.get("result_screen")),
+        _kv_html("最近决策", list(user_data.get("decisions_tail") or [])[-5:]),
+        _kv_html("最近操作", list(user_data.get("operation_log") or [])[-5:]),
+    ]
+    if user_data.get("failure_message"):
+        lines.insert(3, _kv_html("失败信息", user_data.get("failure_message")))
+    debug_snapshots = list(user_data.get("debug_snapshots") or [])
+    if debug_snapshots:
+        lines.append(_kv_html("调试快照", debug_snapshots[-5:]))
+    return "".join(lines)
+
+
+def _render_combat_capture_debug_summary(user_data: Mapping[str, Any]) -> str:
+    screenshot_dir = user_data.get("screenshot_dir")
+    screenshots = user_data.get("screenshots") or []
+    capture_stats = dict(user_data.get("capture_stats") or {})
+    enabled = bool(screenshot_dir) or bool(screenshots) or bool(capture_stats.get("enabled"))
+    lines = [
+        _kv_html("战斗调试", "已启用" if enabled else "未启用"),
+    ]
+    if not enabled:
+        return "".join(lines)
+
+    lines.extend(
+        [
+            _kv_html("截图目录", screenshot_dir),
+            _kv_html("截图数量", len(screenshots) if isinstance(screenshots, list) else 0),
+            _kv_html("截图间隔", _format_seconds(capture_stats.get("capture_interval_sec"))),
+            _kv_html("最大截图数", capture_stats.get("capture_max_images")),
+            _kv_html("保存原始截图", "是" if _coerce_bool(capture_stats.get("capture_raw_enabled")) else "否"),
+            _kv_html("截图失败次数", capture_stats.get("capture_failed_count")),
+            _kv_html("超出上限跳过次数", capture_stats.get("skipped_max_images_count")),
+        ]
+    )
     return "".join(lines)
 
 
@@ -1138,6 +1450,71 @@ def _render_mahjong_phase_trace_tail(trace: Iterable[Mapping[str, Any]]) -> str:
     return (
         "<h3>阶段轨迹</h3>"
         "<table><tr><th>时间</th><th>阶段</th><th>备注</th><th>已开开关</th><th>定缺按钮</th></tr>"
+        + "".join(rows)
+        + "</table>"
+    )
+
+
+def _render_combat_last_state(values: Any) -> str:
+    state = dict(values or {}) if isinstance(values, Mapping) else {}
+    rows = [
+        ("当前阶段", phase_display_name(state.get("current_phase")) if state.get("current_phase") else "-"),
+        ("检测到血条", "是" if state.get("enemy_health_found") else "否"),
+        ("血条数量", state.get("enemy_health_count", "-")),
+        ("检测到锁定", "是" if state.get("target_found") else "否"),
+        ("锁定置信度", state.get("target_confidence", "-")),
+        ("技能可用", "是" if state.get("skill_available") else "否"),
+        ("大招可用", "是" if state.get("ultimate_available") else "否"),
+        ("当前槽位", state.get("current_slot", "-")),
+    ]
+    html_rows = [
+        "<tr>"
+        f"<td>{html.escape(str(label))}</td>"
+        f"<td>{html.escape(str(value))}</td>"
+        "</tr>"
+        for label, value in rows
+    ]
+    return "<h3>最后状态</h3><table><tr><th>字段</th><th>值</th></tr>" + "".join(html_rows) + "</table>"
+
+
+def _render_combat_trace_tail(trace: Iterable[Mapping[str, Any]]) -> str:
+    rows = []
+    for entry in list(trace)[-12:]:
+        rows.append(
+            "<tr>"
+            f"<td>{html.escape(_format_seconds(entry.get('t')))}</td>"
+            f"<td>{html.escape(phase_display_name(entry.get('phase')))}</td>"
+            f"<td>{html.escape(_trace_note_display_name(entry.get('note')))}</td>"
+            f"<td>{html.escape('是' if entry.get('enemy_health_found') else '否')}</td>"
+            f"<td>{html.escape(str(entry.get('enemy_health_count', '-')))}</td>"
+            f"<td>{html.escape('是' if entry.get('target_found') else '否')}</td>"
+            "</tr>"
+        )
+    if not rows:
+        return "<h3>状态轨迹</h3><p>暂无状态轨迹。</p>"
+    return (
+        "<h3>状态轨迹</h3>"
+        "<table><tr><th>时间</th><th>阶段</th><th>备注</th><th>血条</th><th>数量</th><th>锁定</th></tr>"
+        + "".join(rows)
+        + "</table>"
+    )
+
+
+def _render_combat_action_tail(trace: Iterable[Mapping[str, Any]]) -> str:
+    rows = []
+    for entry in list(trace)[-12:]:
+        rows.append(
+            "<tr>"
+            f"<td>{html.escape(_format_seconds(entry.get('t')))}</td>"
+            f"<td>{html.escape(str(entry.get('action') or '-'))}</td>"
+            f"<td><pre>{html.escape(render_json(entry))}</pre></td>"
+            "</tr>"
+        )
+    if not rows:
+        return "<h3>动作轨迹</h3><p>暂无动作轨迹。</p>"
+    return (
+        "<h3>动作轨迹</h3>"
+        "<table><tr><th>时间</th><th>动作</th><th>详情</th></tr>"
         + "".join(rows)
         + "</table>"
     )

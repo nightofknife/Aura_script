@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QDoubleSpinBox,
     QFormLayout,
     QGridLayout,
     QGroupBox,
@@ -47,6 +48,7 @@ from .bridge import RunnerBridge
 from .config_repository import QUICK_STOP_HOTKEY_OPTIONS, YihuanConfigRepository
 from .logic import (
     CafeRunDefaults,
+    CombatRunDefaults,
     FishingRunDefaults,
     GAME_NAME,
     GuiPreferences,
@@ -55,19 +57,25 @@ from .logic import (
     RuntimeSettings,
     TASK_AUTO_LOOP,
     TASK_CAFE_AUTO_LOOP,
+    TASK_COMBAT_AUTO_LOOP,
     TASK_MAHJONG_AUTO_LOOP,
     TASK_ONE_CAFE_REVENUE_RESTOCK,
     TASK_PLAN_LOADED,
     TASK_PLAN_READY,
     TASK_RUNTIME_PROBE,
+    TASK_TETROMINOES_AUTO_LOOP,
+    TetrominoesRunDefaults,
     VISIBLE_HISTORY_TASK_REFS,
     auto_loop_business_status,
     build_auto_loop_inputs,
     build_cafe_loop_inputs,
+    build_combat_loop_inputs,
     build_mahjong_loop_inputs,
     build_one_cafe_inputs,
+    build_tetrominoes_loop_inputs,
     build_settings_sections,
     cafe_loop_business_status,
+    combat_loop_business_status,
     event_display_name,
     format_event_stream,
     format_nodes_timeline,
@@ -76,16 +84,19 @@ from .logic import (
     mahjong_loop_business_status,
     render_auto_loop_brief_text,
     render_cafe_loop_brief_text,
+    render_combat_loop_brief_text,
     render_history_summary_html,
     render_mahjong_loop_brief_text,
     render_json,
     render_one_cafe_brief_text,
     render_overview_plan_info_html,
     render_runtime_probe_html,
+    render_tetrominoes_loop_brief_text,
     one_cafe_business_status,
     status_display_name,
     task_display_name,
     task_is_enabled,
+    tetrominoes_loop_business_status,
 )
 from .map_overlay.controller import MapOverlayController, MapOverlayUiState
 from .map_overlay.models import ZeroluckMapData
@@ -113,6 +124,16 @@ WORKBENCH_TASKS: dict[str, dict[str, str]] = {
         "label": "麻将",
         "task_ref": TASK_MAHJONG_AUTO_LOOP,
         "description": "使用异环内置胡、碰、出自动开关完成麻将局，并在结算排行页出现时结束任务。",
+    },
+    "combat": {
+        "label": "战斗",
+        "task_ref": TASK_COMBAT_AUTO_LOOP,
+        "description": "持续监控敌人血条并自动战斗，可选启用基于音频样本的自动闪避。",
+    },
+    "tetrominoes": {
+        "label": "俄罗斯方块",
+        "task_ref": TASK_TETROMINOES_AUTO_LOOP,
+        "description": "自动运行异环俄罗斯方块小游戏，按当前识别档案持续识别棋盘并规划落点。",
     },
 }
 WORKBENCH_TASK_REFS = tuple(item["task_ref"] for item in WORKBENCH_TASKS.values())
@@ -269,6 +290,8 @@ class YihuanMainWindow(QMainWindow):
         self._cafe_defaults = self._repo.get_cafe_defaults()
         self._one_cafe_defaults = self._repo.get_one_cafe_defaults()
         self._mahjong_defaults = self._repo.get_mahjong_defaults()
+        self._combat_defaults = self._repo.get_combat_defaults()
+        self._tetrominoes_defaults = self._repo.get_tetrominoes_defaults()
 
         self._task_rows: dict[str, dict[str, Any]] = {}
         self._history_rows: dict[str, dict[str, Any]] = {}
@@ -428,6 +451,8 @@ class YihuanMainWindow(QMainWindow):
         self._parameter_pages["cafe"] = self._build_cafe_parameters(self._parameter_stack)
         self._parameter_pages["one_cafe"] = self._build_one_cafe_parameters(self._parameter_stack)
         self._parameter_pages["mahjong"] = self._build_mahjong_parameters(self._parameter_stack)
+        self._parameter_pages["combat"] = self._build_combat_parameters(self._parameter_stack)
+        self._parameter_pages["tetrominoes"] = self._build_tetrominoes_parameters(self._parameter_stack)
         for task_id in WORKBENCH_TASKS:
             self._parameter_stack.addWidget(self._parameter_pages[task_id])
         layout.addWidget(self._parameter_stack, 1)
@@ -450,9 +475,17 @@ class YihuanMainWindow(QMainWindow):
         self._sell_fish_every_rounds_spin.setMaximum(99999)
         self._sell_fish_every_rounds_spin.setValue(0)
         self._sell_fish_every_rounds_spin.setToolTip("0 表示不自动卖鱼；大于 0 时每隔指定轮数尝试卖鱼。")
+        self._bait_buy_repeat_count_spin = QSpinBox(group)
+        self._bait_buy_repeat_count_spin.setMinimum(0)
+        self._bait_buy_repeat_count_spin.setMaximum(99999)
+        self._bait_buy_repeat_count_spin.setValue(1)
+        self._bait_buy_repeat_count_spin.setToolTip("0 表示缺饵时不自动购买；大于 0 时表示每次买鱼饵流程重复尝试的次数。")
+        self._sell_before_buy_bait_check = QCheckBox("买鱼饵前先尝试卖鱼", group)
         form.addRow("钓鱼识别档案", self._fishing_profile_label)
         form.addRow("最大轮数（0 = 不限制轮数）", self._max_rounds_spin)
         form.addRow("卖鱼间隔轮数（0 = 不自动卖鱼）", self._sell_fish_every_rounds_spin)
+        form.addRow("买鱼饵重复次数（0 = 不自动购买）", self._bait_buy_repeat_count_spin)
+        form.addRow("", self._sell_before_buy_bait_check)
         layout.addWidget(group)
 
         hint = QLabel("只在这里放本次运行最常用的快捷参数；识别档案请到设置界面调整。", page)
@@ -545,6 +578,95 @@ class YihuanMainWindow(QMainWindow):
 
         hint = QLabel(
             "任务会使用游戏内置自动开关完成麻将局；调试模式和 dry-run 不在正式任务界面暴露。",
+            page,
+        )
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        layout.addStretch(1)
+        return page
+
+    def _build_combat_parameters(self, parent: QWidget) -> QWidget:
+        page = QWidget(parent)
+        layout = QVBoxLayout(page)
+
+        group = QGroupBox("自动战斗参数", page)
+        form = QFormLayout(group)
+        self._combat_profile_label = QLabel("-", group)
+        self._combat_max_seconds_spin = QSpinBox(group)
+        self._combat_max_seconds_spin.setMinimum(0)
+        self._combat_max_seconds_spin.setMaximum(99999)
+        self._combat_max_seconds_spin.setToolTip("0 表示持续监控，不按运行时长停止。")
+        self._combat_strategy_combo = QComboBox(group)
+        self._combat_strategy_combo.setToolTip("选择当前战斗识别档案中的战斗策略。")
+        self._combat_max_encounters_spin = QSpinBox(group)
+        self._combat_max_encounters_spin.setMinimum(0)
+        self._combat_max_encounters_spin.setMaximum(99999)
+        self._combat_max_encounters_spin.setToolTip("0 表示不按战斗场次停止。")
+        self._combat_auto_target_check = QCheckBox("自动中键锁定目标", group)
+        self._combat_auto_dodge_check = QCheckBox("启用音频自动闪避", group)
+        self._combat_debug_enabled_check = QCheckBox("启用调试模式", group)
+        self._combat_capture_debug_enabled_check = QCheckBox("启用截图调试", group)
+        self._combat_capture_interval_spin = QDoubleSpinBox(group)
+        self._combat_capture_interval_spin.setMinimum(0.1)
+        self._combat_capture_interval_spin.setMaximum(60.0)
+        self._combat_capture_interval_spin.setSingleStep(0.1)
+        self._combat_capture_interval_spin.setDecimals(1)
+        self._combat_capture_interval_spin.setSuffix(" 秒")
+        self._combat_capture_interval_spin.setToolTip("战斗中按固定间隔保存调试截图。")
+        self._combat_capture_max_images_spin = QSpinBox(group)
+        self._combat_capture_max_images_spin.setMinimum(1)
+        self._combat_capture_max_images_spin.setMaximum(99999)
+        self._combat_capture_max_images_spin.setToolTip("本次战斗调试最多保存的截图数量。")
+        self._combat_capture_raw_enabled_check = QCheckBox("同时保存原始截图", group)
+        self._combat_capture_debug_enabled_check.toggled.connect(self._sync_combat_capture_widgets_enabled)
+        form.addRow("自动战斗识别档案", self._combat_profile_label)
+        form.addRow("战斗策略", self._combat_strategy_combo)
+        form.addRow("最大运行秒数（0 = 持续监控）", self._combat_max_seconds_spin)
+        form.addRow("最大战斗场次（0 = 不限制）", self._combat_max_encounters_spin)
+        form.addRow("", self._combat_auto_target_check)
+        form.addRow("", self._combat_auto_dodge_check)
+        form.addRow("", self._combat_debug_enabled_check)
+        form.addRow("", self._combat_capture_debug_enabled_check)
+        form.addRow("截图间隔", self._combat_capture_interval_spin)
+        form.addRow("最大截图数", self._combat_capture_max_images_spin)
+        form.addRow("", self._combat_capture_raw_enabled_check)
+        layout.addWidget(group)
+
+        hint = QLabel(
+            "任务会持续监控敌人血条，发现战斗后自动锁定目标并执行 Q / E / 普通攻击。"
+            "音频自动闪避依赖 SoundCard 和系统回采设备，如未安装或设备不可用，战斗任务仍可继续运行。",
+            page,
+        )
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        layout.addStretch(1)
+        return page
+
+    def _build_tetrominoes_parameters(self, parent: QWidget) -> QWidget:
+        page = QWidget(parent)
+        layout = QVBoxLayout(page)
+
+        group = QGroupBox("俄罗斯方块参数", page)
+        form = QFormLayout(group)
+        self._tetrominoes_profile_label = QLabel("-", group)
+        self._tetrominoes_max_seconds_spin = QSpinBox(group)
+        self._tetrominoes_max_seconds_spin.setMinimum(0)
+        self._tetrominoes_max_seconds_spin.setMaximum(99999)
+        self._tetrominoes_max_seconds_spin.setToolTip("0 表示不按时间停止。")
+        self._tetrominoes_max_pieces_spin = QSpinBox(group)
+        self._tetrominoes_max_pieces_spin.setMinimum(0)
+        self._tetrominoes_max_pieces_spin.setMaximum(99999)
+        self._tetrominoes_max_pieces_spin.setToolTip("0 表示不按方块数停止。")
+        self._tetrominoes_start_game_check = QCheckBox("自动点击开始游戏", group)
+        form.addRow("俄罗斯方块识别档案", self._tetrominoes_profile_label)
+        form.addRow("最大运行秒数（0 = 不按时间停止）", self._tetrominoes_max_seconds_spin)
+        form.addRow("最大方块数（0 = 不按方块数停止）", self._tetrominoes_max_pieces_spin)
+        form.addRow("", self._tetrominoes_start_game_check)
+        layout.addWidget(group)
+
+        hint = QLabel(
+            "任务页只保留高频参数；dry_run、debug_enabled 继续固定关闭。"
+            " 棋盘采样、落点求解和结果页识别参数仍在俄罗斯方块识别档案中维护。",
             page,
         )
         hint.setWordWrap(True)
@@ -843,10 +965,14 @@ class YihuanMainWindow(QMainWindow):
         self._cafe_profile_combo = QComboBox(defaults_group)
         self._one_cafe_profile_combo = QComboBox(defaults_group)
         self._mahjong_profile_combo = QComboBox(defaults_group)
+        self._combat_profile_combo = QComboBox(defaults_group)
+        self._tetrominoes_profile_combo = QComboBox(defaults_group)
         defaults_form.addRow("钓鱼识别档案", self._fishing_profile_combo)
         defaults_form.addRow("沙威玛识别档案", self._cafe_profile_combo)
         defaults_form.addRow("一咖舍识别档案", self._one_cafe_profile_combo)
         defaults_form.addRow("麻将识别档案", self._mahjong_profile_combo)
+        defaults_form.addRow("自动战斗识别档案", self._combat_profile_combo)
+        defaults_form.addRow("俄罗斯方块识别档案", self._tetrominoes_profile_combo)
         body_layout.addWidget(defaults_group)
 
         ui_group = QGroupBox("界面偏好", body)
@@ -946,6 +1072,22 @@ class YihuanMainWindow(QMainWindow):
             self._repo.list_mahjong_profiles(),
         )
         self._sync_mahjong_widgets_from_defaults()
+
+        self._combat_defaults = self._repo.get_combat_defaults(self._task_rows.get(TASK_COMBAT_AUTO_LOOP))
+        self._set_combo_items(
+            self._combat_profile_combo,
+            self._combat_defaults.profile_name,
+            self._repo.list_combat_profiles(),
+        )
+        self._sync_combat_widgets_from_defaults()
+
+        self._tetrominoes_defaults = self._repo.get_tetrominoes_defaults(self._task_rows.get(TASK_TETROMINOES_AUTO_LOOP))
+        self._set_combo_items(
+            self._tetrominoes_profile_combo,
+            self._tetrominoes_defaults.profile_name,
+            self._repo.list_tetrominoes_profiles(),
+        )
+        self._sync_tetrominoes_widgets_from_defaults()
 
         self._history_limit_spin.setValue(int(ui_map["gui.history_limit"].value))
         self._auto_probe_check.setChecked(bool(ui_map["gui.auto_runtime_probe_on_startup"].value))
@@ -1247,6 +1389,27 @@ class YihuanMainWindow(QMainWindow):
             auto_peng=self._mahjong_defaults.auto_peng,
             auto_discard=self._mahjong_defaults.auto_discard,
         )
+        combat_defaults = CombatRunDefaults(
+            profile_name=str(self._combat_profile_combo.currentData() or self._combat_profile_combo.currentText()),
+            strategy_name=self._combat_defaults.strategy_name,
+            max_seconds=self._combat_defaults.max_seconds,
+            max_encounters=self._combat_defaults.max_encounters,
+            auto_target=self._combat_defaults.auto_target,
+            auto_dodge=self._combat_defaults.auto_dodge,
+            debug_enabled=self._combat_defaults.debug_enabled,
+            capture_debug_enabled=self._combat_defaults.capture_debug_enabled,
+            capture_interval_sec=self._combat_defaults.capture_interval_sec,
+            capture_max_images=self._combat_defaults.capture_max_images,
+            capture_raw_enabled=self._combat_defaults.capture_raw_enabled,
+        )
+        tetrominoes_defaults = TetrominoesRunDefaults(
+            profile_name=str(
+                self._tetrominoes_profile_combo.currentData() or self._tetrominoes_profile_combo.currentText()
+            ),
+            max_seconds=self._tetrominoes_defaults.max_seconds,
+            max_pieces=self._tetrominoes_defaults.max_pieces,
+            start_game=self._tetrominoes_defaults.start_game,
+        )
 
         try:
             self._repo.update_runtime_settings(runtime_settings)
@@ -1254,6 +1417,8 @@ class YihuanMainWindow(QMainWindow):
             self._repo.update_cafe_defaults(cafe_defaults)
             self._repo.update_one_cafe_defaults(one_cafe_defaults)
             self._repo.update_mahjong_defaults(mahjong_defaults)
+            self._repo.update_combat_defaults(combat_defaults)
+            self._repo.update_tetrominoes_defaults(tetrominoes_defaults)
             self._repo.save_ui_preferences(ui_preferences)
         except Exception as exc:  # noqa: BLE001
             QMessageBox.warning(self, "保存设置失败", str(exc))
@@ -1267,10 +1432,14 @@ class YihuanMainWindow(QMainWindow):
             self._task_rows.get(TASK_ONE_CAFE_REVENUE_RESTOCK)
         )
         self._mahjong_defaults = self._repo.get_mahjong_defaults(self._task_rows.get(TASK_MAHJONG_AUTO_LOOP))
+        self._combat_defaults = self._repo.get_combat_defaults(self._task_rows.get(TASK_COMBAT_AUTO_LOOP))
+        self._tetrominoes_defaults = self._repo.get_tetrominoes_defaults(self._task_rows.get(TASK_TETROMINOES_AUTO_LOOP))
         self._sync_fishing_widgets_from_defaults()
         self._cafe_profile_label.setText(self._cafe_defaults.profile_name)
         self._sync_one_cafe_widgets_from_defaults()
         self._sync_mahjong_widgets_from_defaults()
+        self._sync_combat_widgets_from_defaults()
+        self._sync_tetrominoes_widgets_from_defaults()
         self._refresh_cafe_limit_hint()
         self._install_quick_stop_hotkey(ui_preferences.quick_stop_hotkey, show_warning=True)
         self.request_apply_preferences.emit(ui_preferences)
@@ -1282,6 +1451,8 @@ class YihuanMainWindow(QMainWindow):
     def _sync_fishing_widgets_from_defaults(self) -> None:
         self._fishing_profile_label.setText(self._fishing_defaults.profile_name)
         self._sell_fish_every_rounds_spin.setValue(int(self._fishing_defaults.sell_fish_every_rounds))
+        self._bait_buy_repeat_count_spin.setValue(int(self._fishing_defaults.bait_buy_repeat_count))
+        self._sell_before_buy_bait_check.setChecked(bool(self._fishing_defaults.sell_before_buy_bait))
 
     def _sync_one_cafe_widgets_from_defaults(self) -> None:
         self._one_cafe_profile_label.setText(self._one_cafe_defaults.profile_name)
@@ -1300,6 +1471,36 @@ class YihuanMainWindow(QMainWindow):
         self._mahjong_auto_hu_check.setChecked(bool(self._mahjong_defaults.auto_hu))
         self._mahjong_auto_peng_check.setChecked(bool(self._mahjong_defaults.auto_peng))
         self._mahjong_auto_discard_check.setChecked(bool(self._mahjong_defaults.auto_discard))
+
+    def _sync_combat_widgets_from_defaults(self) -> None:
+        self._combat_profile_label.setText(self._combat_defaults.profile_name)
+        self._set_combo_items(
+            self._combat_strategy_combo,
+            self._combat_defaults.strategy_name,
+            self._repo.list_combat_strategy_names(self._combat_defaults.profile_name),
+        )
+        self._combat_max_seconds_spin.setValue(int(self._combat_defaults.max_seconds))
+        self._combat_max_encounters_spin.setValue(int(self._combat_defaults.max_encounters))
+        self._combat_auto_target_check.setChecked(bool(self._combat_defaults.auto_target))
+        self._combat_auto_dodge_check.setChecked(bool(self._combat_defaults.auto_dodge))
+        self._combat_debug_enabled_check.setChecked(bool(self._combat_defaults.debug_enabled))
+        self._combat_capture_debug_enabled_check.setChecked(bool(self._combat_defaults.capture_debug_enabled))
+        self._combat_capture_interval_spin.setValue(float(self._combat_defaults.capture_interval_sec))
+        self._combat_capture_max_images_spin.setValue(int(self._combat_defaults.capture_max_images))
+        self._combat_capture_raw_enabled_check.setChecked(bool(self._combat_defaults.capture_raw_enabled))
+        self._sync_combat_capture_widgets_enabled()
+
+    def _sync_tetrominoes_widgets_from_defaults(self) -> None:
+        self._tetrominoes_profile_label.setText(self._tetrominoes_defaults.profile_name)
+        self._tetrominoes_max_seconds_spin.setValue(int(self._tetrominoes_defaults.max_seconds))
+        self._tetrominoes_max_pieces_spin.setValue(int(self._tetrominoes_defaults.max_pieces))
+        self._tetrominoes_start_game_check.setChecked(bool(self._tetrominoes_defaults.start_game))
+
+    def _sync_combat_capture_widgets_enabled(self, *_args: object) -> None:
+        enabled = bool(self._combat_capture_debug_enabled_check.isChecked())
+        self._combat_capture_interval_spin.setEnabled(enabled)
+        self._combat_capture_max_images_spin.setEnabled(enabled)
+        self._combat_capture_raw_enabled_check.setEnabled(enabled)
 
     def _refresh_cafe_limit_hint(self) -> None:
         runtime_defaults = self._repo.get_cafe_profile_runtime_defaults(self._cafe_defaults.profile_name)
@@ -1529,6 +1730,8 @@ class YihuanMainWindow(QMainWindow):
             return build_auto_loop_inputs(
                 self._max_rounds_spin.value(),
                 self._sell_fish_every_rounds_spin.value(),
+                self._bait_buy_repeat_count_spin.value(),
+                self._sell_before_buy_bait_check.isChecked(),
                 self._fishing_defaults,
             )
         if self._selected_task_id == "cafe":
@@ -1556,6 +1759,27 @@ class YihuanMainWindow(QMainWindow):
                 self._mahjong_auto_peng_check.isChecked(),
                 self._mahjong_auto_discard_check.isChecked(),
                 self._mahjong_defaults,
+            )
+        if self._selected_task_id == "combat":
+            return build_combat_loop_inputs(
+                self._combat_max_seconds_spin.value(),
+                self._combat_max_encounters_spin.value(),
+                self._combat_auto_target_check.isChecked(),
+                self._combat_auto_dodge_check.isChecked(),
+                self._combat_strategy_combo.currentData() or self._combat_strategy_combo.currentText(),
+                self._combat_debug_enabled_check.isChecked(),
+                self._combat_capture_debug_enabled_check.isChecked(),
+                self._combat_capture_interval_spin.value(),
+                self._combat_capture_max_images_spin.value(),
+                self._combat_capture_raw_enabled_check.isChecked(),
+                self._combat_defaults,
+            )
+        if self._selected_task_id == "tetrominoes":
+            return build_tetrominoes_loop_inputs(
+                self._tetrominoes_max_seconds_spin.value(),
+                self._tetrominoes_max_pieces_spin.value(),
+                self._tetrominoes_start_game_check.isChecked(),
+                self._tetrominoes_defaults,
             )
         raise ValueError(f"未知任务：{self._selected_task_id}")
 
@@ -1645,6 +1869,8 @@ class YihuanMainWindow(QMainWindow):
             self._task_rows.get(TASK_ONE_CAFE_REVENUE_RESTOCK)
         )
         self._mahjong_defaults = self._repo.get_mahjong_defaults(self._task_rows.get(TASK_MAHJONG_AUTO_LOOP))
+        self._combat_defaults = self._repo.get_combat_defaults(self._task_rows.get(TASK_COMBAT_AUTO_LOOP))
+        self._tetrominoes_defaults = self._repo.get_tetrominoes_defaults(self._task_rows.get(TASK_TETROMINOES_AUTO_LOOP))
         self._fishing_profile_label.setText(self._fishing_defaults.profile_name)
         self._cafe_profile_label.setText(self._cafe_defaults.profile_name)
         self._cafe_max_seconds_spin.setValue(int(self._cafe_defaults.max_seconds))
@@ -1655,6 +1881,8 @@ class YihuanMainWindow(QMainWindow):
         self._refresh_cafe_limit_hint()
         self._sync_one_cafe_widgets_from_defaults()
         self._sync_mahjong_widgets_from_defaults()
+        self._sync_combat_widgets_from_defaults()
+        self._sync_tetrominoes_widgets_from_defaults()
         self._append_log(f"任务列表已加载：{len(self._task_rows)} 个异环任务。")
         self._apply_task_guard()
 
@@ -1742,12 +1970,18 @@ class YihuanMainWindow(QMainWindow):
             self._append_log(f"一咖舍结果：{render_one_cafe_brief_text(payload)}")
         elif task_ref == TASK_MAHJONG_AUTO_LOOP:
             self._append_log(f"麻将结果：{render_mahjong_loop_brief_text(payload)}")
+        elif task_ref == TASK_COMBAT_AUTO_LOOP:
+            self._append_log(f"自动战斗结果：{render_combat_loop_brief_text(payload)}")
+        elif task_ref == TASK_TETROMINOES_AUTO_LOOP:
+            self._append_log(f"俄罗斯方块结果：{render_tetrominoes_loop_brief_text(payload)}")
 
         final_status = str(
             auto_loop_business_status(payload)
             or cafe_loop_business_status(payload)
             or one_cafe_business_status(payload)
             or mahjong_loop_business_status(payload)
+            or combat_loop_business_status(payload)
+            or tetrominoes_loop_business_status(payload)
             or payload.get("status")
             or ""
         ).lower()

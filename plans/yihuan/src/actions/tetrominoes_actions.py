@@ -46,24 +46,122 @@ def _capture_image(app: Any) -> Any:
     return capture
 
 
-def _click_start_game(app: Any, profile: dict[str, Any]) -> None:
+def _foreground_click_point(
+    app: Any,
+    point: tuple[int, int],
+    *,
+    note: str,
+    yihuan_tetrominoes: YihuanTetrominoesService | None = None,
+    profile: dict[str, Any] | None = None,
+    debug_snapshots: list[dict[str, Any]] | None = None,
+    periodic_snapshot_state: dict[str, Any] | None = None,
+    pieces_played: int = 0,
+) -> None:
+    x, y = int(point[0]), int(point[1])
+    logger.info("Tetrominoes[input] foreground_click note=%s point=(%s,%s)", note, x, y)
+
+    if hasattr(app, "focus_with_input"):
+        try:
+            focused = bool(app.focus_with_input(click_delay=0.05))
+            logger.info("Tetrominoes[input] focus_with_input note=%s ok=%s", note, focused)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Tetrominoes[input] focus_with_input failed note=%s: %s", note, exc)
+
+    if all(hasattr(app, name) for name in ("move_to", "mouse_down", "mouse_up")):
+        app.move_to(x, y, duration=0.18)
+        _sleep_with_periodic_snapshots(
+            app,
+            yihuan_tetrominoes,
+            duration_sec=0.10,
+            profile=profile,
+            debug_snapshots=debug_snapshots,
+            periodic_snapshot_state=periodic_snapshot_state,
+            pieces_played=pieces_played,
+        )
+        app.mouse_down(button="left")
+        _sleep_with_periodic_snapshots(
+            app,
+            yihuan_tetrominoes,
+            duration_sec=0.08,
+            profile=profile,
+            debug_snapshots=debug_snapshots,
+            periodic_snapshot_state=periodic_snapshot_state,
+            pieces_played=pieces_played,
+        )
+        app.mouse_up(button="left")
+        return
+
+    app.click(x, y, button="left", clicks=1)
+
+
+def _click_start_game(
+    app: Any,
+    profile: dict[str, Any],
+    *,
+    yihuan_tetrominoes: YihuanTetrominoesService | None = None,
+    debug_snapshots: list[dict[str, Any]] | None = None,
+    periodic_snapshot_state: dict[str, Any] | None = None,
+    pieces_played: int = 0,
+) -> None:
     x, y = profile["start_game_point"]
     logger.info("Tetrominoes[start] click_start point=(%s,%s)", x, y)
-    app.click(int(x), int(y), button="left", clicks=1)
+    _foreground_click_point(
+        app,
+        (x, y),
+        note="start_game",
+        yihuan_tetrominoes=yihuan_tetrominoes,
+        profile=profile,
+        debug_snapshots=debug_snapshots,
+        periodic_snapshot_state=periodic_snapshot_state,
+        pieces_played=pieces_played,
+    )
     delay_sec = float(profile["start_game_delay_ms"]) / 1000.0
     if delay_sec > 0:
         logger.info("Tetrominoes[start] wait_after_click sec=%.3f", delay_sec)
-        time.sleep(delay_sec)
+        _sleep_with_periodic_snapshots(
+            app,
+            yihuan_tetrominoes,
+            duration_sec=delay_sec,
+            profile=profile,
+            debug_snapshots=debug_snapshots,
+            periodic_snapshot_state=periodic_snapshot_state,
+            pieces_played=pieces_played,
+        )
 
 
-def _click_result_exit(app: Any, profile: dict[str, Any]) -> None:
+def _click_result_exit(
+    app: Any,
+    profile: dict[str, Any],
+    *,
+    yihuan_tetrominoes: YihuanTetrominoesService | None = None,
+    debug_snapshots: list[dict[str, Any]] | None = None,
+    periodic_snapshot_state: dict[str, Any] | None = None,
+    pieces_played: int = 0,
+) -> None:
     x, y = profile["result_exit_point"]
     logger.info("Tetrominoes[start] click_result_exit point=(%s,%s)", x, y)
-    app.click(int(x), int(y), button="left", clicks=1)
+    _foreground_click_point(
+        app,
+        (x, y),
+        note="result_exit",
+        yihuan_tetrominoes=yihuan_tetrominoes,
+        profile=profile,
+        debug_snapshots=debug_snapshots,
+        periodic_snapshot_state=periodic_snapshot_state,
+        pieces_played=pieces_played,
+    )
     delay_sec = float(profile["result_exit_delay_ms"]) / 1000.0
     if delay_sec > 0:
         logger.info("Tetrominoes[start] wait_after_exit sec=%.3f", delay_sec)
-        time.sleep(delay_sec)
+        _sleep_with_periodic_snapshots(
+            app,
+            yihuan_tetrominoes,
+            duration_sec=delay_sec,
+            profile=profile,
+            debug_snapshots=debug_snapshots,
+            periodic_snapshot_state=periodic_snapshot_state,
+            pieces_played=pieces_played,
+        )
 
 
 def _clear_result_screen_before_start(
@@ -71,6 +169,9 @@ def _clear_result_screen_before_start(
     yihuan_tetrominoes: YihuanTetrominoesService,
     *,
     profile: dict[str, Any],
+    debug_snapshots: list[dict[str, Any]] | None = None,
+    periodic_snapshot_state: dict[str, Any] | None = None,
+    pieces_played: int = 0,
 ) -> bool:
     capture = _capture_image(app)
     result_screen = yihuan_tetrominoes.analyze_result_screen(
@@ -84,7 +185,14 @@ def _clear_result_screen_before_start(
         float(result_screen.get("panel_purple_ratio") or 0.0),
         float(result_screen.get("exit_white_ratio") or 0.0),
     )
-    _click_result_exit(app, profile)
+    _click_result_exit(
+        app,
+        profile,
+        yihuan_tetrominoes=yihuan_tetrominoes,
+        debug_snapshots=debug_snapshots,
+        periodic_snapshot_state=periodic_snapshot_state,
+        pieces_played=pieces_played,
+    )
     return True
 
 
@@ -99,8 +207,37 @@ def _state_is_playing(state: dict[str, Any], profile: dict[str, Any]) -> bool:
         float(board.get("confidence") or 0.0) >= float(profile["board_confidence_min"])
         and int(board.get("occupied_count") or 0) >= 4
         and bool(current_piece.get("found"))
-        and origin_row <= int(profile["start_piece_max_origin_row"])
+        and origin_row <= int(profile["active_search_max_row"])
     )
+
+
+def _start_state_is_playing(state: dict[str, Any], profile: dict[str, Any]) -> bool:
+    return _state_is_playing(state, profile)
+
+
+def _inject_start_detection_debug(
+    state: dict[str, Any],
+    *,
+    peak_occupied_count: int | None,
+    current_occupied_count: int | None,
+    drop_threshold: int,
+    triggered: bool,
+    drop_amount: int | None,
+    trigger_frame_index: int | None,
+    current_frame_index: int,
+) -> dict[str, Any]:
+    debug = dict(state.get("debug") or {})
+    debug["start_detection"] = {
+        "pre_start_peak_occupied_count": peak_occupied_count,
+        "current_occupied_count": current_occupied_count,
+        "drop_threshold": int(drop_threshold),
+        "triggered": bool(triggered),
+        "drop_amount": drop_amount,
+        "trigger_frame_index": trigger_frame_index,
+        "current_frame_index": int(current_frame_index),
+    }
+    state["debug"] = debug
+    return state
 
 
 def _wait_for_game_start(
@@ -108,11 +245,21 @@ def _wait_for_game_start(
     yihuan_tetrominoes: YihuanTetrominoesService,
     *,
     profile: dict[str, Any],
+    debug_snapshots: list[dict[str, Any]] | None = None,
+    periodic_snapshot_state: dict[str, Any] | None = None,
+    pieces_played: int = 0,
 ) -> dict[str, Any]:
     deadline = time.monotonic() + float(profile["start_timeout_sec"])
     poll_sec = float(profile["start_poll_ms"]) / 1000.0
     last_result: dict[str, Any] | None = None
     last_state: dict[str, Any] | None = None
+    peak_occupied_count: int | None = None
+    triggered = False
+    trigger_frame_index: int | None = None
+    trigger_occupied_count: int | None = None
+    trigger_drop_amount: int | None = None
+    frame_index = 0
+    drop_threshold = int(profile["start_text_drop_threshold"])
     while True:
         capture = _capture_image(app)
         result_screen = yihuan_tetrominoes.analyze_result_screen(
@@ -137,38 +284,92 @@ def _wait_for_game_start(
         state = yihuan_tetrominoes.analyze_state(
             capture.image,
             profile_name=profile["profile_name"],
-            update_tracker=True,
+            update_tracker=False,
         )
+        frame_index += 1
         last_state = state
-        if _state_is_playing(state, profile):
-            piece = dict(state.get("current_piece") or {})
-            board = dict(state.get("board") or {})
+        board = dict(state.get("board") or {})
+        occupied_count = int(board.get("occupied_count") or 0)
+        peak_occupied_count = occupied_count if peak_occupied_count is None else max(peak_occupied_count, occupied_count)
+        drop_amount = int(peak_occupied_count - occupied_count)
+        if not triggered and drop_amount >= drop_threshold:
+            triggered = True
+            trigger_frame_index = frame_index
+            trigger_occupied_count = occupied_count
+            trigger_drop_amount = drop_amount
             logger.info(
-                "Tetrominoes[start] playing detected piece=%s rotation=%s origin=(%s,%s) board_confidence=%.3f occupied=%s",
+                "Tetrominoes[start] start_text_drop_detected frame=%s occupied=%s peak=%s drop=%s threshold=%s",
+                frame_index,
+                occupied_count,
+                peak_occupied_count,
+                drop_amount,
+                drop_threshold,
+            )
+        state = _inject_start_detection_debug(
+            state,
+            peak_occupied_count=peak_occupied_count,
+            current_occupied_count=occupied_count,
+            drop_threshold=drop_threshold,
+            triggered=triggered,
+            drop_amount=trigger_drop_amount if triggered else drop_amount,
+            trigger_frame_index=trigger_frame_index,
+            current_frame_index=frame_index,
+        )
+        if debug_snapshots is not None and periodic_snapshot_state is not None:
+            _maybe_append_periodic_snapshot(
+                debug_snapshots,
+                capture.image,
+                state=state,
+                decision=None,
+                profile=profile,
+                pieces_played=pieces_played,
+                periodic_snapshot_state=periodic_snapshot_state,
+                current_time_monotonic=time.monotonic(),
+            )
+        if triggered and _start_state_is_playing(state, profile):
+            piece = dict(state.get("current_piece") or {})
+            logger.info(
+                "Tetrominoes[start] playing detected piece=%s rotation=%s origin=(%s,%s) board_confidence=%.3f occupied=%s drop=%s",
                 piece.get("shape"),
                 piece.get("rotation"),
                 piece.get("origin_row"),
                 piece.get("origin_col"),
                 float(board.get("confidence") or 0.0),
                 board.get("occupied_count"),
+                trigger_drop_amount,
             )
             return {
                 "phase": "playing",
                 "capture": capture,
                 "state": state,
                 "result_screen": result_screen,
+                "start_detection": dict(dict(state.get("debug") or {}).get("start_detection") or {}),
             }
+        if triggered and not _state_is_playing(state, profile):
+            logger.info(
+                "Tetrominoes[start] waiting_valid_active_piece occupied=%s confidence=%.3f piece_found=%s reason=%s",
+                board.get("occupied_count"),
+                float(board.get("confidence") or 0.0),
+                bool(dict(state.get("current_piece") or {}).get("found")),
+                dict(state.get("current_piece") or {}).get("reason"),
+            )
 
         if time.monotonic() >= deadline:
             logger.warning(
-                "Tetrominoes[start] timeout waiting for playing/result last_result=%s",
+                "Tetrominoes[start] timeout waiting for playing/result last_result=%s peak=%s triggered=%s drop=%s",
                 (last_result or {}).get("reason"),
+                peak_occupied_count,
+                triggered,
+                trigger_drop_amount,
             )
             return {
                 "phase": "unknown",
                 "capture": capture,
                 "state": last_state,
                 "result_screen": last_result,
+                "start_detection": dict(dict(last_state.get("debug") or {}).get("start_detection") or {})
+                if isinstance(last_state, dict)
+                else {},
             }
         if poll_sec > 0:
             time.sleep(poll_sec)
@@ -207,6 +408,438 @@ def _wait_for_result_screen(
             time.sleep(poll_sec)
 
 
+def _execute_discrete_input_action(
+    input_mapping: Any,
+    app: Any,
+    *,
+    action_name: str,
+    profile_name: str | None,
+    settle_delay_ms: int,
+    yihuan_tetrominoes: YihuanTetrominoesService | None = None,
+    profile: dict[str, Any] | None = None,
+    debug_snapshots: list[dict[str, Any]] | None = None,
+    periodic_snapshot_state: dict[str, Any] | None = None,
+    pieces_played: int = 0,
+    sleep_after: bool = True,
+) -> str:
+    logger.info(
+        "Tetrominoes[input] tap action=%s profile=%s settle_ms=%s",
+        action_name,
+        profile_name,
+        settle_delay_ms,
+    )
+    input_mapping.execute_action(action_name, phase="tap", app=app, profile=profile_name)
+    if sleep_after:
+        settle_delay_sec = max(float(settle_delay_ms), 0.0) / 1000.0
+        if settle_delay_sec > 0:
+            _sleep_with_periodic_snapshots(
+                app,
+                yihuan_tetrominoes,
+                duration_sec=settle_delay_sec,
+                profile=profile,
+                debug_snapshots=debug_snapshots,
+                periodic_snapshot_state=periodic_snapshot_state,
+                pieces_played=pieces_played,
+            )
+    return str(action_name)
+
+
+def _alignment_action_delay_ms(
+    *,
+    profile: dict[str, Any],
+    action_name: str,
+    retrying_same_action: bool,
+) -> int:
+    if action_name in {"tetrominoes_left", "tetrominoes_right"}:
+        key = "alignment_move_retry_delay_ms" if retrying_same_action else "alignment_move_delay_ms"
+        fallback = "inter_key_delay_ms"
+        return max(int(profile.get(key, profile.get(fallback, 0)) or 0), 0)
+    if action_name in {"tetrominoes_rotate_cw", "tetrominoes_rotate_ccw"}:
+        key = "alignment_rotate_retry_delay_ms" if retrying_same_action else "alignment_rotate_delay_ms"
+        fallback = "alignment_move_delay_ms"
+        return max(int(profile.get(key, profile.get(fallback, profile.get("inter_key_delay_ms", 0))) or 0), 0)
+    return max(int(profile.get("inter_key_delay_ms", 0) or 0), 0)
+
+
+def _alignment_missing_piece_delay_ms(profile: dict[str, Any]) -> int:
+    return max(
+        int(
+            profile.get(
+                "alignment_missing_piece_delay_ms",
+                profile.get("alignment_move_delay_ms", profile.get("inter_key_delay_ms", 0)),
+            )
+            or 0
+        ),
+        0,
+    )
+
+
+def _piece_in_active_zone(piece: dict[str, Any], profile: dict[str, Any]) -> bool:
+    if not bool(piece.get("found")):
+        return False
+    try:
+        origin_row = int(piece.get("origin_row"))
+    except (TypeError, ValueError):
+        return False
+    return origin_row <= int(profile["active_search_max_row"])
+
+
+def _piece_matches_decision(piece: dict[str, Any], decision: dict[str, Any], *, profile: dict[str, Any] | None = None) -> bool:
+    if not bool(piece.get("found")):
+        return False
+    if profile is not None and not _piece_in_active_zone(piece, profile):
+        return False
+    try:
+        return (
+            str(piece.get("shape") or "") == str(decision.get("shape") or "")
+            and int(piece.get("rotation") or 0) == int(decision.get("target_rotation") or 0)
+            and int(piece.get("origin_col") or 0) == int(decision.get("target_col") or 0)
+        )
+    except (TypeError, ValueError):
+        return False
+
+
+def _next_alignment_action(
+    piece: dict[str, Any],
+    decision: dict[str, Any],
+) -> str | None:
+    if not bool(piece.get("found")):
+        return None
+
+    shape = str(decision.get("shape") or "")
+    if str(piece.get("shape") or "") != shape:
+        return None
+
+    rotations = YihuanTetrominoesService.SHAPES.get(shape)
+    if not rotations:
+        return None
+    return YihuanTetrominoesService.next_alignment_action(
+        shape=shape,
+        current_rotation=int(piece.get("rotation") or 0),
+        target_rotation=int(decision.get("target_rotation") or 0),
+        current_col=int(piece.get("origin_col") or 0),
+        target_col=int(decision.get("target_col") or 0),
+    )
+
+
+def _action_progressed_toward_target(
+    action_name: str,
+    before_piece: dict[str, Any],
+    after_piece: dict[str, Any],
+    decision: dict[str, Any],
+    *,
+    profile: dict[str, Any],
+) -> bool:
+    if not bool(after_piece.get("found")) or not _piece_in_active_zone(after_piece, profile):
+        return False
+    if str(after_piece.get("shape") or "") != str(decision.get("shape") or ""):
+        return False
+
+    before_rotation = int(before_piece.get("rotation") or 0)
+    before_col = int(before_piece.get("origin_col") or 0)
+    after_rotation = int(after_piece.get("rotation") or 0)
+    after_col = int(after_piece.get("origin_col") or 0)
+    target_rotation = int(decision.get("target_rotation") or 0)
+    target_col = int(decision.get("target_col") or 0)
+
+    if action_name == "tetrominoes_rotate_cw":
+        return after_rotation != before_rotation and (
+            after_rotation == target_rotation or abs(target_col - after_col) <= abs(target_col - before_col)
+        )
+    if action_name == "tetrominoes_rotate_ccw":
+        return after_rotation != before_rotation and (
+            after_rotation == target_rotation or abs(target_col - after_col) <= abs(target_col - before_col)
+        )
+    if action_name == "tetrominoes_left":
+        return after_col < before_col or abs(target_col - after_col) < abs(target_col - before_col)
+    if action_name == "tetrominoes_right":
+        return after_col > before_col or abs(target_col - after_col) < abs(target_col - before_col)
+    return False
+
+
+def _capture_alignment_state(
+    app: Any,
+    yihuan_tetrominoes: YihuanTetrominoesService,
+    *,
+    profile: dict[str, Any],
+) -> tuple[dict[str, Any], Any]:
+    capture = _capture_image(app)
+    state = yihuan_tetrominoes.analyze_state(
+        capture.image,
+        profile_name=profile["profile_name"],
+        update_tracker=False,
+    )
+    return state, capture
+
+
+def _alignment_failure_result(
+    *,
+    reason: str,
+    executed_sequence: list[str],
+    state: dict[str, Any],
+    capture: Any,
+    align_attempts: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "reason": str(reason),
+        "executed_sequence": executed_sequence,
+        "state": state,
+        "capture": capture,
+        "align_attempts": align_attempts,
+    }
+
+
+def _align_piece_to_target_and_drop(
+    input_mapping: Any,
+    app: Any,
+    yihuan_tetrominoes: YihuanTetrominoesService,
+    *,
+    profile: dict[str, Any],
+    decision: dict[str, Any],
+    initial_state: dict[str, Any],
+    initial_capture: Any,
+    debug_snapshots: list[dict[str, Any]] | None,
+    periodic_snapshot_state: dict[str, Any] | None,
+    pieces_played: int,
+) -> dict[str, Any]:
+    state = initial_state
+    capture = initial_capture
+    executed: list[str] = []
+    align_attempts: list[dict[str, Any]] = []
+    retry_limit = max(int(profile.get("alignment_action_retry_limit", 5) or 5), 1)
+    confirm_sec = max(float(profile.get("target_state_confirm_sec") or 0.2), 0.0)
+    confirm_poll_sec = min(max(confirm_sec / 4.0, 0.04), 0.08) if confirm_sec > 0 else 0.0
+    max_steps = max(int(profile["board_cols"]) * 6, 24)
+    missing_piece_retries = 0
+    same_action_retry_count = 0
+    last_retry_signature: tuple[str, int, int] | None = None
+    target_match_started_at: float | None = None
+
+    for step_index in range(max_steps):
+        result_screen = dict(state.get("result_screen") or {})
+        if result_screen.get("found"):
+            return _alignment_failure_result(
+                reason="level_end",
+                executed_sequence=executed,
+                state=state,
+                capture=capture,
+                align_attempts=align_attempts,
+            )
+
+        piece = dict(state.get("current_piece") or {})
+        now = time.monotonic()
+        stable_match_sec = 0.0 if target_match_started_at is None else max(now - target_match_started_at, 0.0)
+        attempt: dict[str, Any] = {
+            "step": int(step_index),
+            "before_found": bool(piece.get("found")),
+            "before_shape": piece.get("shape"),
+            "before_rotation": piece.get("rotation"),
+            "before_origin_row": piece.get("origin_row"),
+            "before_origin_col": piece.get("origin_col"),
+            "target_rotation": decision.get("target_rotation"),
+            "target_col": decision.get("target_col"),
+            "target_match_started_at": target_match_started_at,
+            "stable_match_sec": round(stable_match_sec, 3),
+        }
+
+        if not bool(piece.get("found")):
+            missing_piece_retries += 1
+            attempt["action"] = "observe_missing_piece"
+            attempt["missing_piece_retries"] = int(missing_piece_retries)
+            align_attempts.append(attempt)
+            if missing_piece_retries > 3:
+                return _alignment_failure_result(
+                    reason="current_piece_lost",
+                    executed_sequence=executed,
+                    state=state,
+                capture=capture,
+                align_attempts=align_attempts,
+            )
+            target_match_started_at = None
+            observe_delay_ms = _alignment_missing_piece_delay_ms(profile)
+            attempt["observe_delay_ms"] = int(observe_delay_ms)
+            if observe_delay_ms > 0:
+                _sleep_with_periodic_snapshots(
+                    app,
+                    yihuan_tetrominoes,
+                    duration_sec=max(float(observe_delay_ms), 0.0) / 1000.0,
+                    profile=profile,
+                    debug_snapshots=debug_snapshots,
+                    periodic_snapshot_state=periodic_snapshot_state,
+                    pieces_played=pieces_played,
+                )
+            state, capture = _capture_alignment_state(
+                app,
+                yihuan_tetrominoes,
+                profile=profile,
+            )
+            continue
+
+        if not _piece_in_active_zone(piece, profile):
+            attempt["action"] = "reject_piece_out_of_active_zone"
+            align_attempts.append(attempt)
+            return _alignment_failure_result(
+                reason="execution_mismatch_piece_left_active_zone",
+                executed_sequence=executed,
+                state=state,
+                capture=capture,
+                align_attempts=align_attempts,
+            )
+        if str(piece.get("shape") or "") != str(decision.get("shape") or ""):
+            attempt["action"] = "reject_piece_shape_changed"
+            align_attempts.append(attempt)
+            return _alignment_failure_result(
+                reason="execution_mismatch_shape_changed",
+                executed_sequence=executed,
+                state=state,
+                capture=capture,
+                align_attempts=align_attempts,
+            )
+
+        missing_piece_retries = 0
+        if _piece_matches_decision(piece, decision, profile=profile):
+            if target_match_started_at is None:
+                target_match_started_at = now
+            stable_match_sec = max(now - target_match_started_at, 0.0)
+            attempt["action"] = "observe_match"
+            attempt["target_match_started_at"] = target_match_started_at
+            attempt["stable_match_sec"] = round(stable_match_sec, 3)
+            if stable_match_sec + 1e-9 >= confirm_sec:
+                attempt["drop_allowed"] = True
+                align_attempts.append(attempt)
+                executed.append(
+                    _execute_discrete_input_action(
+                        input_mapping,
+                        app,
+                        action_name="tetrominoes_fast_drop",
+                        profile_name=profile["profile_name"],
+                        settle_delay_ms=0,
+                        yihuan_tetrominoes=yihuan_tetrominoes,
+                        profile=profile,
+                        debug_snapshots=debug_snapshots,
+                        periodic_snapshot_state=periodic_snapshot_state,
+                        pieces_played=pieces_played,
+                        sleep_after=False,
+                    )
+                )
+                return {
+                    "ok": True,
+                    "reason": "ok",
+                    "executed_sequence": executed,
+                    "state": state,
+                    "capture": capture,
+                    "align_attempts": align_attempts,
+                }
+            attempt["drop_allowed"] = False
+            align_attempts.append(attempt)
+            remaining_confirm_sec = max(confirm_sec - stable_match_sec, 0.0)
+            confirm_wait_sec = min(remaining_confirm_sec, confirm_poll_sec) if confirm_poll_sec > 0 else remaining_confirm_sec
+            attempt["confirm_wait_sec"] = round(confirm_wait_sec, 3)
+            if confirm_wait_sec > 0:
+                _sleep_with_periodic_snapshots(
+                    app,
+                    yihuan_tetrominoes,
+                    duration_sec=confirm_wait_sec,
+                    profile=profile,
+                    debug_snapshots=debug_snapshots,
+                    periodic_snapshot_state=periodic_snapshot_state,
+                    pieces_played=pieces_played,
+                )
+            state, capture = _capture_alignment_state(
+                app,
+                yihuan_tetrominoes,
+                profile=profile,
+            )
+            continue
+
+        target_match_started_at = None
+        action_name = _next_alignment_action(piece, decision)
+        if action_name is None:
+            attempt["action"] = "reject_alignment_action_missing"
+            align_attempts.append(attempt)
+            return _alignment_failure_result(
+                reason="execution_mismatch",
+                executed_sequence=executed,
+                state=state,
+                capture=capture,
+                align_attempts=align_attempts,
+            )
+
+        attempt["action"] = action_name
+        retry_signature_before = (
+            str(action_name),
+            int(piece.get("rotation") or 0),
+            int(piece.get("origin_col") or 0),
+        )
+        retrying_same_action = bool(same_action_retry_count > 0 and retry_signature_before == last_retry_signature)
+        settle_delay_ms = _alignment_action_delay_ms(
+            profile=profile,
+            action_name=action_name,
+            retrying_same_action=retrying_same_action,
+        )
+        attempt["settle_delay_ms"] = int(settle_delay_ms)
+        attempt["retrying_same_action"] = bool(retrying_same_action)
+        executed.append(
+            _execute_discrete_input_action(
+                input_mapping,
+                app,
+                action_name=action_name,
+                profile_name=profile["profile_name"],
+                settle_delay_ms=settle_delay_ms,
+                yihuan_tetrominoes=yihuan_tetrominoes,
+                profile=profile,
+                debug_snapshots=debug_snapshots,
+                periodic_snapshot_state=periodic_snapshot_state,
+                pieces_played=pieces_played,
+            )
+        )
+        state, capture = _capture_alignment_state(
+            app,
+            yihuan_tetrominoes,
+            profile=profile,
+        )
+        after_piece = dict(state.get("current_piece") or {})
+        progressed = _action_progressed_toward_target(
+            action_name,
+            piece,
+            after_piece,
+            decision,
+            profile=profile,
+        )
+        attempt["after_found"] = bool(after_piece.get("found"))
+        attempt["after_shape"] = after_piece.get("shape")
+        attempt["after_rotation"] = after_piece.get("rotation")
+        attempt["after_origin_row"] = after_piece.get("origin_row")
+        attempt["after_origin_col"] = after_piece.get("origin_col")
+        attempt["progressed"] = bool(progressed)
+        retry_signature = retry_signature_before
+        if retry_signature == last_retry_signature and not progressed:
+            same_action_retry_count += 1
+        else:
+            same_action_retry_count = 1 if not progressed else 0
+        last_retry_signature = retry_signature
+        attempt["same_action_retry_count"] = int(same_action_retry_count)
+        attempt["retry_limit"] = int(retry_limit)
+        align_attempts.append(attempt)
+        if not progressed and same_action_retry_count > retry_limit:
+            return _alignment_failure_result(
+                reason="execution_mismatch",
+                executed_sequence=executed,
+                state=state,
+                capture=capture,
+                align_attempts=align_attempts,
+            )
+
+    return _alignment_failure_result(
+        reason="alignment_timeout",
+        executed_sequence=executed,
+        state=state,
+        capture=capture,
+        align_attempts=align_attempts,
+    )
+
+
 def _execute_input_sequence(
     input_mapping: Any,
     app: Any,
@@ -215,6 +848,11 @@ def _execute_input_sequence(
     profile_name: str | None,
     inter_key_delay_ms: int,
     key_press_ms: int,
+    yihuan_tetrominoes: YihuanTetrominoesService | None = None,
+    profile: dict[str, Any] | None = None,
+    debug_snapshots: list[dict[str, Any]] | None = None,
+    periodic_snapshot_state: dict[str, Any] | None = None,
+    pieces_played: int = 0,
 ) -> list[str]:
     executed: list[str] = []
     hold_sec = max(float(key_press_ms), 0.0) / 1000.0
@@ -229,7 +867,15 @@ def _execute_input_sequence(
                 inter_key_delay_ms,
             )
             input_mapping.execute_action(action_name, phase="hold", app=app, profile=profile_name)
-            time.sleep(hold_sec)
+            _sleep_with_periodic_snapshots(
+                app,
+                yihuan_tetrominoes,
+                duration_sec=hold_sec,
+                profile=profile,
+                debug_snapshots=debug_snapshots,
+                periodic_snapshot_state=periodic_snapshot_state,
+                pieces_played=pieces_played,
+            )
             logger.info("Tetrominoes[input] release action=%s profile=%s", action_name, profile_name)
             input_mapping.execute_action(action_name, phase="release", app=app, profile=profile_name)
         else:
@@ -242,7 +888,15 @@ def _execute_input_sequence(
             input_mapping.execute_action(action_name, phase="tap", app=app, profile=profile_name)
         executed.append(action_name)
         if gap_sec > 0 and index < len(sequence) - 1:
-            time.sleep(gap_sec)
+            _sleep_with_periodic_snapshots(
+                app,
+                yihuan_tetrominoes,
+                duration_sec=gap_sec,
+                profile=profile,
+                debug_snapshots=debug_snapshots,
+                periodic_snapshot_state=periodic_snapshot_state,
+                pieces_played=pieces_played,
+            )
     return executed
 
 
@@ -359,8 +1013,11 @@ def _build_debug_text_lines(
     piece = dict(state.get("current_piece") or {})
     metrics = dict(state.get("metrics") or {})
     debug = dict(state.get("debug") or {})
-    piece_detection = dict(debug.get("piece_detection") or {})
-    tracker_candidate = dict(piece_detection.get("tracker_candidate") or {})
+    active_channel = dict(debug.get("active_channel") or debug.get("piece_detection") or {})
+    lower_channel = dict(debug.get("lower_channel") or {})
+    ghost_projection = dict(debug.get("ghost_projection") or {})
+    start_detection = dict(debug.get("start_detection") or {})
+    tracker_candidate = dict(active_channel.get("tracker_candidate") or {})
     top_candidates = list((decision or {}).get("top_candidates") or [])
     next_queue = list(state.get("next_queue") or [])
     lines = [
@@ -377,20 +1034,42 @@ def _build_debug_text_lines(
             f"agg={metrics.get('aggregate_height')} max={metrics.get('max_height')} holes={metrics.get('holes')}"
         ),
         (
-            "tracker: "
-            f"available={piece_detection.get('tracker_available')} "
-            f"diff_cells={len(piece_detection.get('tracker_diff_cells') or [])} "
-            f"selected={piece_detection.get('selected_strategy')}"
+            "active: "
+            f"tracker={active_channel.get('tracker_available')} "
+            f"diff_cells={len(active_channel.get('tracker_diff_cells') or [])} "
+            f"selected={active_channel.get('selected_strategy')} "
+            f"max_row={active_channel.get('active_search_max_row')}"
+        ),
+        (
+            "lower: "
+            f"upper_zone={lower_channel.get('upper_zone_occupied_count')} "
+            f"lower_zone={lower_channel.get('lower_zone_occupied_count')} "
+            f"settled={lower_channel.get('settled_count_after_subtract')}"
         ),
     ]
+    if start_detection:
+        lines.append(
+            "start: "
+            f"peak={start_detection.get('pre_start_peak_occupied_count')} "
+            f"current={start_detection.get('current_occupied_count')} "
+            f"drop={start_detection.get('drop_amount')} "
+            f"triggered={start_detection.get('triggered')}"
+        )
+    if ghost_projection:
+        lines.append(
+            "ghost: "
+            f"cells={len(ghost_projection.get('cells') or [])} "
+            f"subtracted={ghost_projection.get('subtracted_count')} "
+            f"reason={ghost_projection.get('reason')}"
+        )
     if tracker_candidate:
         lines.append(
             "tracker_candidate: "
             f"found={tracker_candidate.get('found')} shape={tracker_candidate.get('shape')} "
             f"rot={tracker_candidate.get('rotation')} reason={tracker_candidate.get('reason')}"
         )
-    component_candidates = list(piece_detection.get("component_candidates") or [])
-    lines.append(f"components: total={piece_detection.get('component_count')} candidates={len(component_candidates)}")
+    component_candidates = list(active_channel.get("component_candidates") or [])
+    lines.append(f"components: total={active_channel.get('component_count')} candidates={len(component_candidates)}")
     for component in component_candidates[:5]:
         candidate = dict(component.get("candidate") or {})
         score = component.get("score")
@@ -690,6 +1369,149 @@ def _append_debug_snapshot(
     )
 
 
+def _build_periodic_snapshot_state(
+    capture_image: Any,
+    yihuan_tetrominoes: YihuanTetrominoesService,
+    *,
+    profile: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    result_screen = yihuan_tetrominoes.analyze_result_screen(
+        capture_image,
+        profile_name=profile["profile_name"],
+    )
+    if result_screen["found"]:
+        return (
+            {
+                "profile_name": profile["profile_name"],
+                "capture_size": [int(capture_image.shape[1]), int(capture_image.shape[0])],
+                "phase": "result",
+                "result_screen": result_screen,
+                "board": {},
+                "current_piece": {},
+                "metrics": {},
+                "debug": {},
+            },
+            None,
+        )
+
+    state = yihuan_tetrominoes.analyze_state(
+        capture_image,
+        profile_name=profile["profile_name"],
+        update_tracker=False,
+    )
+    state["phase"] = "playing" if _state_is_playing(state, profile) else str(state.get("phase") or "unknown")
+    decision = None
+    if state["phase"] == "playing":
+        candidate = yihuan_tetrominoes.choose_best_move(state)
+        if candidate.get("found"):
+            decision = candidate
+    return state, decision
+
+
+def _maybe_append_periodic_snapshot(
+    debug_snapshots: list[dict[str, Any]],
+    capture_image: Any,
+    *,
+    state: dict[str, Any],
+    decision: dict[str, Any] | None,
+    profile: dict[str, Any],
+    pieces_played: int,
+    periodic_snapshot_state: dict[str, Any],
+    current_time_monotonic: float | None = None,
+) -> None:
+    if not bool(periodic_snapshot_state.get("enabled")):
+        return
+    now = float(current_time_monotonic if current_time_monotonic is not None else time.monotonic())
+    next_due_at = float(periodic_snapshot_state.get("next_due_at_monotonic", now) or now)
+    if now + 1e-9 < next_due_at:
+        return
+
+    interval_sec = max(float(periodic_snapshot_state.get("interval_sec", 1.0) or 1.0), 0.1)
+    periodic_index = int(periodic_snapshot_state.get("count", 0) or 0) + 1
+    periodic_snapshot_state["count"] = periodic_index
+    periodic_snapshot_state["next_due_at_monotonic"] = now + interval_sec
+    started_at = float(periodic_snapshot_state.get("started_at_monotonic", now) or now)
+    elapsed_sec = max(now - started_at, 0.0)
+
+    phase = str(state.get("phase") or "unknown").strip().lower() or "unknown"
+    snapshot_label = f"periodic_{periodic_index:04d}_{phase}_t{int(float(elapsed_sec)):04d}s"
+    _append_debug_snapshot(
+        debug_snapshots,
+        capture_image,
+        state=state,
+        decision=decision,
+        profile=profile,
+        pieces_played=pieces_played,
+        snapshot_label=snapshot_label,
+    )
+
+
+def _sleep_with_periodic_snapshots(
+    app: Any,
+    yihuan_tetrominoes: YihuanTetrominoesService | None,
+    *,
+    duration_sec: float,
+    profile: dict[str, Any] | None,
+    debug_snapshots: list[dict[str, Any]] | None,
+    periodic_snapshot_state: dict[str, Any] | None,
+    pieces_played: int,
+) -> None:
+    remaining_sec = max(float(duration_sec), 0.0)
+    if remaining_sec <= 0:
+        return
+    if (
+        yihuan_tetrominoes is None
+        or profile is None
+        or debug_snapshots is None
+        or periodic_snapshot_state is None
+        or not bool(periodic_snapshot_state.get("enabled"))
+    ):
+        time.sleep(remaining_sec)
+        return
+
+    deadline = time.monotonic() + remaining_sec
+    while True:
+        now = time.monotonic()
+        if now >= deadline:
+            return
+
+        next_due_at = float(periodic_snapshot_state.get("next_due_at_monotonic", deadline) or deadline)
+        sleep_until = min(deadline, next_due_at)
+        sleep_sec = max(sleep_until - now, 0.0)
+        if sleep_sec > 0:
+            time.sleep(sleep_sec)
+
+        after_sleep = time.monotonic()
+        if after_sleep + 1e-9 < next_due_at or after_sleep >= deadline:
+            continue
+
+        try:
+            capture = _capture_image(app)
+            state, decision = _build_periodic_snapshot_state(
+                capture.image,
+                yihuan_tetrominoes,
+                profile=profile,
+            )
+        except RuntimeError as exc:
+            logger.warning("Tetrominoes[debug] periodic snapshot capture failed: %s", exc)
+            periodic_snapshot_state["next_due_at_monotonic"] = after_sleep + max(
+                float(periodic_snapshot_state.get("interval_sec", 1.0) or 1.0),
+                0.1,
+            )
+            continue
+
+        _maybe_append_periodic_snapshot(
+            debug_snapshots,
+            capture.image,
+            state=state,
+            decision=decision,
+            profile=profile,
+            pieces_played=pieces_played,
+            periodic_snapshot_state=periodic_snapshot_state,
+            current_time_monotonic=after_sleep,
+        )
+
+
 def _json_safe_state(state: dict[str, Any]) -> dict[str, Any]:
     payload = dict(state)
     return payload
@@ -772,6 +1594,7 @@ def _operation_record(
     decision: dict[str, Any],
     executed: list[str],
     dry_run: bool,
+    execution_alignment: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     board = dict(state.get("board") or {})
     piece = dict(state.get("current_piece") or {})
@@ -786,6 +1609,7 @@ def _operation_record(
         },
         "decision": _decision_summary(decision),
         "executed_sequence": list(executed),
+        "execution_alignment": list(execution_alignment or []),
         "dry_run": bool(dry_run),
     }
 
@@ -867,6 +1691,13 @@ def yihuan_tetrominoes_run_session(
     decisions_tail: list[dict[str, Any]] = []
     operation_log: list[dict[str, Any]] = []
     debug_snapshots: list[dict[str, Any]] = []
+    periodic_snapshot_state = {
+        "enabled": debug_enabled,
+        "interval_sec": 1.0,
+        "started_at_monotonic": start,
+        "next_due_at_monotonic": start + 1.0,
+        "count": 0,
+    }
     final_state: dict[str, Any] | None = None
     final_result_screen: dict[str, Any] | None = None
     pending_state: dict[str, Any] | None = None
@@ -875,6 +1706,7 @@ def yihuan_tetrominoes_run_session(
     result_screen_cleared_before_start = False
     stopped_reason = "max_seconds"
     status = "success"
+    failure_reason: str | None = None
     failure_message = ""
     logger.info(
         "Tetrominoes[session] start profile=%s max_seconds=%.3f max_pieces=%s start_game=%s dry_run=%s debug=%s",
@@ -894,19 +1726,38 @@ def yihuan_tetrominoes_run_session(
                         app,
                         yihuan_tetrominoes,
                         profile=profile,
+                        debug_snapshots=debug_snapshots,
+                        periodic_snapshot_state=periodic_snapshot_state,
+                        pieces_played=pieces_played,
                     )
                 except RuntimeError as exc:
                     status = "failed"
                     stopped_reason = "capture_failed"
+                    failure_reason = "capture_failed"
                     failure_message = str(exc)
                     raise _TetrominoesSessionStop() from exc
-                _click_start_game(app, profile)
+                _click_start_game(
+                    app,
+                    profile,
+                    yihuan_tetrominoes=yihuan_tetrominoes,
+                    debug_snapshots=debug_snapshots,
+                    periodic_snapshot_state=periodic_snapshot_state,
+                    pieces_played=pieces_played,
+                )
                 start_clicked = True
             try:
-                start_phase = _wait_for_game_start(app, yihuan_tetrominoes, profile=profile)
+                start_phase = _wait_for_game_start(
+                    app,
+                    yihuan_tetrominoes,
+                    profile=profile,
+                    debug_snapshots=debug_snapshots,
+                    periodic_snapshot_state=periodic_snapshot_state,
+                    pieces_played=pieces_played,
+                )
             except RuntimeError as exc:
                 status = "failed"
                 stopped_reason = "capture_failed"
+                failure_reason = "capture_failed"
                 failure_message = str(exc)
                 raise _TetrominoesSessionStop() from exc
             final_result_screen = start_phase.get("result_screen")
@@ -960,12 +1811,23 @@ def yihuan_tetrominoes_run_session(
             if start_phase["phase"] != "playing":
                 status = "failed"
                 stopped_reason = "game_start_timeout"
+                failure_reason = "game_start_timeout"
                 failure_message = "Timed out waiting for Tetrominoes pieces after clicking start."
                 final_state = start_phase.get("state")
                 raise _TetrominoesSessionStop()
             pending_state = start_phase.get("state")
             pending_capture = start_phase.get("capture")
             if debug_enabled and pending_state is not None and pending_capture is not None:
+                _maybe_append_periodic_snapshot(
+                    debug_snapshots,
+                    pending_capture.image,
+                    state=pending_state,
+                    decision=None,
+                    profile=profile,
+                    pieces_played=pieces_played,
+                    periodic_snapshot_state=periodic_snapshot_state,
+                    current_time_monotonic=time.monotonic(),
+                )
                 _append_debug_snapshot(
                     debug_snapshots,
                     pending_capture.image,
@@ -996,6 +1858,7 @@ def yihuan_tetrominoes_run_session(
                 except RuntimeError as exc:
                     status = "partial" if pieces_played else "failed"
                     stopped_reason = "capture_failed"
+                    failure_reason = "capture_failed"
                     failure_message = str(exc)
                     break
                 result_screen = yihuan_tetrominoes.analyze_result_screen(
@@ -1038,6 +1901,17 @@ def yihuan_tetrominoes_run_session(
                 )
 
             final_state = state
+            if debug_enabled:
+                _maybe_append_periodic_snapshot(
+                    debug_snapshots,
+                    capture.image,
+                    state=state,
+                    decision=None,
+                    profile=profile,
+                    pieces_played=pieces_played,
+                    periodic_snapshot_state=periodic_snapshot_state,
+                    current_time_monotonic=time.monotonic(),
+                )
             board_confidence = float(dict(state.get("board") or {}).get("confidence") or 0.0)
             current_piece = dict(state.get("current_piece") or {})
             if board_confidence < float(profile["board_confidence_min"]) or not current_piece.get("found"):
@@ -1081,6 +1955,7 @@ def yihuan_tetrominoes_run_session(
                             break
                     status = "partial" if pieces_played else "failed"
                     stopped_reason = "recognition_timeout"
+                    failure_reason = str(current_piece.get("reason") or "low_confidence")
                     failure_message = str(current_piece.get("reason") or "low_confidence")
                     break
                 if debug_enabled:
@@ -1116,6 +1991,7 @@ def yihuan_tetrominoes_run_session(
             if int(metrics.get("max_height") or 0) >= int(profile["board_rows"]):
                 status = "partial" if pieces_played else "failed"
                 stopped_reason = "top_out_risk"
+                failure_reason = "top_out_risk"
                 failure_message = "settled board reached the top row"
                 break
 
@@ -1129,6 +2005,7 @@ def yihuan_tetrominoes_run_session(
                 )
                 status = "partial" if pieces_played else "failed"
                 stopped_reason = "top_out_risk" if decision.get("reason") == "no_valid_placement" else "recognition_timeout"
+                failure_reason = str(decision.get("reason") or "no_decision")
                 failure_message = str(decision.get("reason") or "no_decision")
                 break
             logger.info(
@@ -1144,6 +2021,16 @@ def yihuan_tetrominoes_run_session(
             )
 
             if debug_enabled:
+                _maybe_append_periodic_snapshot(
+                    debug_snapshots,
+                    capture.image,
+                    state=state,
+                    decision=decision,
+                    profile=profile,
+                    pieces_played=pieces_played,
+                    periodic_snapshot_state=periodic_snapshot_state,
+                    current_time_monotonic=time.monotonic(),
+                )
                 _append_debug_snapshot(
                     debug_snapshots,
                     capture.image,
@@ -1154,17 +2041,36 @@ def yihuan_tetrominoes_run_session(
                     snapshot_label=f"piece_{piece_index:04d}_decision",
                 )
 
-            sequence = [str(item) for item in decision.get("input_sequence") or []]
             executed: list[str] = []
             if not dry_run_enabled:
-                executed = _execute_input_sequence(
+                alignment_result = _align_piece_to_target_and_drop(
                     input_mapping,
                     app,
-                    sequence=sequence,
-                    profile_name=profile["profile_name"],
-                    inter_key_delay_ms=int(profile["inter_key_delay_ms"]),
-                    key_press_ms=int(profile["key_press_ms"]),
+                    yihuan_tetrominoes,
+                    profile=profile,
+                    decision=decision,
+                    initial_state=state,
+                    initial_capture=capture,
+                    debug_snapshots=debug_snapshots,
+                    periodic_snapshot_state=periodic_snapshot_state,
+                    pieces_played=pieces_played,
                 )
+                executed = list(alignment_result.get("executed_sequence") or [])
+                if not bool(alignment_result.get("ok")):
+                    alignment_failure_reason = str(alignment_result.get("reason") or "execution_alignment_failed")
+                    if alignment_failure_reason == "level_end":
+                        final_state = dict(alignment_result.get("state") or state)
+                        final_result_screen = dict((final_state.get("result_screen") or {}) if isinstance(final_state, dict) else {})
+                        stopped_reason = "level_end"
+                        status = "success"
+                        failure_reason = None
+                        failure_message = ""
+                    else:
+                        status = "partial" if pieces_played else "failed"
+                        stopped_reason = "execution_mismatch"
+                        failure_reason = alignment_failure_reason
+                        failure_message = alignment_failure_reason
+                    break
                 yihuan_tetrominoes.commit_settled_matrix(
                     decision.get("projected_board") or [],
                     profile_name=profile["profile_name"],
@@ -1173,6 +2079,9 @@ def yihuan_tetrominoes_run_session(
             summary = _decision_summary(decision)
             summary["executed_sequence"] = executed
             summary["dry_run"] = dry_run_enabled
+            if not dry_run_enabled:
+                summary["execution_mode"] = "closed_loop"
+                summary["execution_alignment"] = list(alignment_result.get("align_attempts") or [])
             decisions_tail.append(summary)
             decisions_tail = decisions_tail[-12:]
             operation_log.append(
@@ -1183,6 +2092,7 @@ def yihuan_tetrominoes_run_session(
                     decision=decision,
                     executed=executed,
                     dry_run=dry_run_enabled,
+                    execution_alignment=list((alignment_result.get("align_attempts") or []) if not dry_run_enabled else []),
                 )
             )
             logger.info(
@@ -1195,7 +2105,15 @@ def yihuan_tetrominoes_run_session(
 
             post_drop_sec = float(profile["post_drop_delay_ms"]) / 1000.0
             if post_drop_sec > 0 and not dry_run_enabled:
-                time.sleep(post_drop_sec)
+                _sleep_with_periodic_snapshots(
+                    app,
+                    yihuan_tetrominoes,
+                    duration_sec=post_drop_sec,
+                    profile=profile,
+                    debug_snapshots=debug_snapshots,
+                    periodic_snapshot_state=periodic_snapshot_state,
+                    pieces_played=pieces_played,
+                )
             if debug_enabled and not dry_run_enabled:
                 try:
                     post_capture = _capture_image(app)
@@ -1220,6 +2138,7 @@ def yihuan_tetrominoes_run_session(
     except Exception as exc:  # noqa: BLE001
         status = "partial" if pieces_played else "failed"
         stopped_reason = "exception"
+        failure_reason = "exception"
         failure_message = str(exc)
         logger.exception("Tetrominoes auto session failed.")
     finally:
@@ -1239,7 +2158,7 @@ def yihuan_tetrominoes_run_session(
     return {
         "status": status,
         "stopped_reason": stopped_reason,
-        "failure_reason": stopped_reason if status != "success" else None,
+        "failure_reason": failure_reason,
         "failure_message": failure_message,
         "pieces_played": pieces_played,
         "elapsed_sec": elapsed_sec,

@@ -126,6 +126,10 @@ exports:
       type: Any
       required: false
       default: true
+    - name: auto_dodge
+      type: Any
+      required: false
+      default: true
     - name: dry_run
       type: Any
       required: false
@@ -204,6 +208,14 @@ exports:
       type: Any
       required: false
       default: 0
+    - name: bait_buy_repeat_count
+      type: Any
+      required: false
+      default: 1
+    - name: sell_before_buy_bait
+      type: Any
+      required: false
+      default: true
   - name: yihuan_mahjong_run_session
     module: plans.yihuan.src.actions.mahjong_actions
     function: yihuan_mahjong_run_session

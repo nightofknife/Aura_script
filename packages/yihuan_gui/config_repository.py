@@ -9,15 +9,19 @@ from plans.aura_base.src.platform.runtime_config import WINDOWS_CAPTURE_BACKENDS
 
 from .logic import (
     CafeRunDefaults,
+    CombatRunDefaults,
     FishingRunDefaults,
     GuiPreferences,
     MahjongRunDefaults,
     OneCafeRunDefaults,
     RuntimeSettings,
+    TetrominoesRunDefaults,
     extract_auto_loop_defaults,
     extract_cafe_loop_defaults,
+    extract_combat_loop_defaults,
     extract_mahjong_loop_defaults,
     extract_one_cafe_defaults,
+    extract_tetrominoes_loop_defaults,
 )
 
 
@@ -40,6 +44,8 @@ class YihuanConfigRepository:
         self.cafe_profiles_dir = self.plan_root / "data" / "cafe"
         self.one_cafe_profiles_dir = self.plan_root / "data" / "one_cafe"
         self.mahjong_profiles_dir = self.plan_root / "data" / "mahjong"
+        self.combat_profiles_dir = self.plan_root / "data" / "combat"
+        self.tetrominoes_profiles_dir = self.plan_root / "data" / "tetrominoes"
         self._settings_store = settings_store
 
     def load_config(self) -> dict[str, Any]:
@@ -86,6 +92,34 @@ class YihuanConfigRepository:
         names = sorted(path.name for path in self.mahjong_profiles_dir.iterdir() if path.is_dir())
         names.extend(path.stem for path in self.mahjong_profiles_dir.glob("*.yaml"))
         return sorted(set(names))
+
+    def list_combat_profiles(self) -> list[str]:
+        if not self.combat_profiles_dir.exists():
+            return []
+        return sorted(path.stem for path in self.combat_profiles_dir.glob("*.yaml"))
+
+    def list_tetrominoes_profiles(self) -> list[str]:
+        if not self.tetrominoes_profiles_dir.exists():
+            return []
+        return sorted(path.stem for path in self.tetrominoes_profiles_dir.glob("*.yaml"))
+
+    def list_combat_strategy_names(self, profile_name: str) -> list[str]:
+        profile_name = str(profile_name or "").strip()
+        if not profile_name:
+            return []
+
+        profile_path = self.combat_profiles_dir / f"{profile_name}.yaml"
+        if not profile_path.is_file():
+            return []
+
+        payload = yaml.safe_load(profile_path.read_text(encoding="utf-8")) or {}
+        if not isinstance(payload, Mapping):
+            return []
+
+        strategies = payload.get("strategies") or {}
+        if not isinstance(strategies, Mapping):
+            return []
+        return [str(name).strip() for name in strategies.keys() if str(name).strip()]
 
     def get_runtime_settings(self) -> RuntimeSettings:
         payload = self.load_config()
@@ -236,6 +270,50 @@ class YihuanConfigRepository:
         payload["mahjong"] = mahjong
         self.save_config(payload)
 
+    def get_combat_defaults(self, combat_task: Mapping[str, Any] | None = None) -> CombatRunDefaults:
+        defaults = extract_combat_loop_defaults(combat_task)
+        return CombatRunDefaults(
+            profile_name=self._resolve_combat_profile_name(defaults.profile_name),
+            strategy_name=defaults.strategy_name,
+            max_seconds=defaults.max_seconds,
+            max_encounters=defaults.max_encounters,
+            auto_target=defaults.auto_target,
+            auto_dodge=defaults.auto_dodge,
+            debug_enabled=defaults.debug_enabled,
+            capture_debug_enabled=defaults.capture_debug_enabled,
+            capture_interval_sec=defaults.capture_interval_sec,
+            capture_max_images=defaults.capture_max_images,
+            capture_raw_enabled=defaults.capture_raw_enabled,
+        )
+
+    def update_combat_defaults(self, defaults: CombatRunDefaults) -> None:
+        self.validate_combat_defaults(defaults)
+        payload = self.load_config()
+        combat = dict(payload.get("combat") or {})
+        combat["profile_name"] = defaults.profile_name
+        payload["combat"] = combat
+        self.save_config(payload)
+
+    def get_tetrominoes_defaults(
+        self,
+        tetrominoes_task: Mapping[str, Any] | None = None,
+    ) -> TetrominoesRunDefaults:
+        defaults = extract_tetrominoes_loop_defaults(tetrominoes_task)
+        return TetrominoesRunDefaults(
+            profile_name=self._resolve_tetrominoes_profile_name(defaults.profile_name),
+            max_seconds=defaults.max_seconds,
+            max_pieces=defaults.max_pieces,
+            start_game=defaults.start_game,
+        )
+
+    def update_tetrominoes_defaults(self, defaults: TetrominoesRunDefaults) -> None:
+        self.validate_tetrominoes_defaults(defaults)
+        payload = self.load_config()
+        tetrominoes = dict(payload.get("tetrominoes") or {})
+        tetrominoes["profile_name"] = defaults.profile_name
+        payload["tetrominoes"] = tetrominoes
+        self.save_config(payload)
+
     def get_cafe_profile_runtime_defaults(self, profile_name: str) -> dict[str, Any]:
         profile_name = str(profile_name or "").strip()
         if not profile_name:
@@ -344,6 +422,22 @@ class YihuanConfigRepository:
         if available_profiles and profile_name not in available_profiles:
             raise ValueError(f"麻将识别档案不存在：{profile_name}")
 
+    def validate_combat_defaults(self, defaults: CombatRunDefaults) -> None:
+        profile_name = str(defaults.profile_name).strip()
+        if not profile_name:
+            raise ValueError("自动战斗识别档案不能为空。")
+        available_profiles = self.list_combat_profiles()
+        if available_profiles and profile_name not in available_profiles:
+            raise ValueError(f"自动战斗识别档案不存在：{profile_name}")
+
+    def validate_tetrominoes_defaults(self, defaults: TetrominoesRunDefaults) -> None:
+        profile_name = str(defaults.profile_name).strip()
+        if not profile_name:
+            raise ValueError("俄罗斯方块识别档案不能为空。")
+        available_profiles = self.list_tetrominoes_profiles()
+        if available_profiles and profile_name not in available_profiles:
+            raise ValueError(f"俄罗斯方块识别档案不存在：{profile_name}")
+
     @staticmethod
     def exclude_titles_to_text(exclude_titles: Iterable[Any]) -> str:
         return "\n".join(str(item).strip() for item in exclude_titles if str(item).strip())
@@ -387,6 +481,18 @@ class YihuanConfigRepository:
         mahjong = dict(payload.get("mahjong") or {})
         configured_profile = str(mahjong.get("profile_name") or mahjong.get("profile") or "").strip()
         return configured_profile or str(fallback_profile or MahjongRunDefaults().profile_name)
+
+    def _resolve_combat_profile_name(self, fallback_profile: str) -> str:
+        payload = self.load_config()
+        combat = dict(payload.get("combat") or {})
+        configured_profile = str(combat.get("profile_name") or combat.get("profile") or "").strip()
+        return configured_profile or str(fallback_profile or CombatRunDefaults().profile_name)
+
+    def _resolve_tetrominoes_profile_name(self, fallback_profile: str) -> str:
+        payload = self.load_config()
+        tetrominoes = dict(payload.get("tetrominoes") or {})
+        configured_profile = str(tetrominoes.get("profile_name") or tetrominoes.get("profile") or "").strip()
+        return configured_profile or str(fallback_profile or TetrominoesRunDefaults().profile_name)
 
     def _settings_value(self, key: str, default_value: Any) -> Any:
         if self._settings_store is None:

@@ -25,11 +25,21 @@ start_game_delay_ms: 6000
 start_timeout_sec: 8
 start_poll_ms: 120
 start_piece_max_origin_row: 4
+active_search_max_row: 8
+ghost_projection_subtract_enabled: true
+target_state_confirm_sec: 0.2
+start_text_drop_threshold: 20
 recognition_retry_count: 8
 recognition_retry_interval_ms: 80
-inter_key_delay_ms: 300
+inter_key_delay_ms: 120
+alignment_move_delay_ms: 150
+alignment_move_retry_delay_ms: 190
+alignment_action_retry_limit: 5
+alignment_rotate_delay_ms: 125
+alignment_rotate_retry_delay_ms: 210
+alignment_missing_piece_delay_ms: 95
 key_press_ms: 100
-post_drop_delay_ms: 250
+post_drop_delay_ms: 100
 debug_snapshot_dir: tmp/tetrominoes_debug
 result_panel_region:
   - 420

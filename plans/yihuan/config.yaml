@@ -16,6 +16,12 @@ runtime:
     mouse_move_duration_ms: 220
     key_interval_ms: 120
     click_post_delay_ms: 120
+  rebind:
+    enabled: true
+    max_attempts: 2
+    retry_delay_ms: 200
+    error_codes:
+      - window_target_lost
   window_spec:
     mode: off
 input:
@@ -26,4 +32,6 @@ fishing:
 cafe:
   profile_name: default_1280x720_cn
 mahjong:
+  profile_name: default_1280x720_cn
+tetrominoes:
   profile_name: default_1280x720_cn

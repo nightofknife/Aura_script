@@ -53,6 +53,7 @@ class YihuanFishingService:
         duel_meter_region = self._coerce_region(payload.get("duel_meter_region"))
         zone_meter_region = self._coerce_region(payload.get("zone_meter_region") or duel_meter_region)
         indicator_meter_region = self._coerce_region(payload.get("indicator_meter_region") or duel_meter_region)
+        mouse_click_hold_ms = max(self._profile_int(payload, "mouse_click_hold_ms", 100), 0)
         normalized = {
             "profile_name": str(payload.get("profile_name") or resolved_name),
             "client_size": client_size,
@@ -82,6 +83,18 @@ class YihuanFishingService:
             ),
             "indicator_memory_ms": max(int(payload.get("indicator_memory_ms", 150) or 150), 0),
             "result_text_region": self._coerce_region(payload.get("result_text_region")),
+            "result_prompt_region": self._coerce_region(payload.get("result_prompt_region") or (548, 634, 186, 40)),
+            "result_prompt_template": self._profile_str(
+                payload,
+                "result_prompt_template",
+                "result_close_prompt.png",
+            ),
+            "result_prompt_mask": self._profile_optional_str(payload, "result_prompt_mask"),
+            "result_prompt_match_threshold": self._profile_threshold(
+                payload,
+                "result_prompt_match_threshold",
+                0.82,
+            ),
             "ready_anchor_region": self._coerce_region(payload.get("ready_anchor_region")),
             "result_close_point": self._coerce_point(payload.get("result_close_point")),
             "result_close_action": self._profile_str(payload, "result_close_action", "menu_back"),
@@ -140,6 +153,7 @@ class YihuanFishingService:
             "control_zone_width_max_px": max(self._profile_int(payload, "control_zone_width_max_px", 120), 1),
             "bait_recovery_enabled": self._profile_bool(payload, "bait_recovery_enabled", True),
             "sell_before_buy_bait": self._profile_bool(payload, "sell_before_buy_bait", True),
+            "bait_buy_repeat_count": max(self._profile_int(payload, "bait_buy_repeat_count", 1), 0),
             "bait_recovery_max_attempts_per_round": max(
                 self._profile_int(payload, "bait_recovery_max_attempts_per_round", 1),
                 0,
@@ -182,9 +196,10 @@ class YihuanFishingService:
                 self._profile_int(payload, "bait_shortage_dark_min_height_px", 35),
                 1,
             ),
+            "mouse_click_hold_ms": mouse_click_hold_ms,
             "sell_open_action": self._profile_str(payload, "sell_open_action", "fish_sell_shop"),
             "sell_step_interval_ms": max(self._profile_int(payload, "sell_step_interval_ms", 1000), 0),
-            "sell_click_hold_ms": max(self._profile_int(payload, "sell_click_hold_ms", 100), 0),
+            "sell_click_hold_ms": max(self._profile_int(payload, "sell_click_hold_ms", mouse_click_hold_ms), 0),
             "sell_tab_point": self._coerce_point(payload.get("sell_tab_point") or (110, 280)),
             "sell_one_click_point": self._coerce_point(payload.get("sell_one_click_point") or (710, 640)),
             "sell_confirm_point": self._coerce_point(payload.get("sell_confirm_point") or (780, 470)),
@@ -225,8 +240,16 @@ class YihuanFishingService:
             ),
             "bait_shop_open_action": self._profile_str(payload, "bait_shop_open_action", "fish_bait_shop"),
             "bait_step_interval_ms": max(self._profile_int(payload, "bait_step_interval_ms", 800), 0),
-            "bait_click_hold_ms": max(self._profile_int(payload, "bait_click_hold_ms", 100), 0),
+            "bait_click_hold_ms": max(self._profile_int(payload, "bait_click_hold_ms", mouse_click_hold_ms), 0),
             "bait_item_kind": self._profile_str(payload, "bait_item_kind", "universal_bait"),
+            "bait_item_region": self._coerce_region(payload.get("bait_item_region") or (200, 70, 340, 210)),
+            "bait_item_template": self._profile_str(payload, "bait_item_template", "bait_item_right_card.png"),
+            "bait_item_mask": self._profile_optional_str(payload, "bait_item_mask"),
+            "bait_item_match_threshold": self._profile_threshold(payload, "bait_item_match_threshold", 0.85),
+            "bait_item_select_timeout_sec": max(
+                self._profile_float(payload, "bait_item_select_timeout_sec", 3.0),
+                0.1,
+            ),
             "bait_item_point": self._coerce_point(payload.get("bait_item_point") or (374, 165)),
             "bait_item_after_wait_ms": max(self._profile_int(payload, "bait_item_after_wait_ms", 500), 0),
             "bait_max_point": self._coerce_point(payload.get("bait_max_point") or (1220, 636)),
@@ -264,6 +287,10 @@ class YihuanFishingService:
             "bait_change_open_wait_sec": max(
                 self._profile_float(payload, "bait_change_open_wait_sec", 2.0),
                 0.0,
+            ),
+            "bait_change_click_hold_ms": max(
+                self._profile_int(payload, "bait_change_click_hold_ms", mouse_click_hold_ms),
+                0,
             ),
             "bait_change_confirm_point": self._coerce_point(
                 payload.get("bait_change_confirm_point") or (780, 470)
@@ -581,6 +608,33 @@ class YihuanFishingService:
             }
         )
         return response
+
+    def analyze_result_prompt(
+        self,
+        source_image: np.ndarray,
+        vision: Any,
+        *,
+        profile_name: str | None = None,
+    ) -> dict[str, Any]:
+        profile = self.load_profile(profile_name)
+        template_match = self.match_template_with_vision(
+            source_image,
+            vision,
+            template_name=str(profile["result_prompt_template"]),
+            region=profile["result_prompt_region"],
+            threshold=float(profile["result_prompt_match_threshold"]),
+            mask_name=profile.get("result_prompt_mask"),
+            profile_name=profile["profile_name"],
+        )
+        found = bool(template_match.get("found"))
+        return {
+            "found": found,
+            "reason": "ok" if found else "template_missing",
+            "template_match": template_match,
+            "confidence": float(template_match.get("confidence") or 0.0),
+            "match_rect": template_match.get("match_rect"),
+            "region": list(profile["result_prompt_region"]),
+        }
 
     def analyze_bait_shortage(
         self,

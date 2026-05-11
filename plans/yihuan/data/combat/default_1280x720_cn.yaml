@@ -4,14 +4,18 @@ client_size:
   - 720
 
 runtime:
-  poll_ms: 100
-  combat_enter_stable_frames: 3
-  combat_exit_stable_frames: 8
+  poll_ms: 80
+  monitor_scan_interval_sec: 2.0
+  combat_scan_interval_sec: 3.0
+  action_loop_sleep_ms: 80
+  combat_enter_stable_frames: 2
+  combat_exit_stable_frames: 10
   unsupported_scene_stable_frames: 3
   input_cooldown_ms: 120
-  target_retry_interval_ms: 1000
-  post_switch_delay_ms: 350
-  idle_timeout_sec: 10.0
+  target_retry_interval_ms: 500
+  skill_lockout_ms: 420
+  ultimate_lockout_ms: 720
+  post_combat_cooldown_ms: 700
   dry_run_max_seconds: 2.0
   trace_limit: 240
 
@@ -19,7 +23,6 @@ keys:
   normal_attack: mouse_left
   skill: e
   ultimate: q
-  arc: r
   target: mouse_middle
   switch_1: "1"
   switch_2: "2"
@@ -31,109 +34,248 @@ release_keys:
   - a
   - s
   - d
+  - shift
   - e
   - q
-  - r
   - "1"
   - "2"
   - "3"
   - "4"
 
+switch_policy:
+  mode: fixed_rotation
+  switch_interval_sec: 10.0
+  empty_skill_loops_before_switch: 2
+  confirm_timeout_ms: 480
+  confirm_required_matches: 2
+  post_switch_delay_ms: 0
+  failed_switch_cooldown_ms: 350
+
+combat_exit:
+  confirm_required_scans: 2
+  confirm_interval_sec: 1.0
+  post_exit_cooldown_ms: 700
+  challenge_success_immediate: true
+  reset_on_reacquire: true
+
+ability_schedule:
+  skill_interval_sec: 3.0
+  ultimate_interval_sec: 5.0
+  immediate_on_combat_enter: true
+  immediate_after_switch: true
+
+input_timing:
+  skill_press_ms: 45
+  ultimate_press_ms: 55
+  switch_press_ms: 35
+
 regions:
-  target_icon:
-    - 560
-    - 40
-    - 160
-    - 80
-  enemy_level_text:
-    - 520
-    - 20
-    - 240
-    - 80
-  enemy_health_bar:
-    - 430
-    - 65
-    - 420
-    - 45
-  boss_health_bar:
-    - 260
-    - 620
-    - 760
-    - 65
-  team_panel:
-    - 1020
+  target_search_region:
+    - 200
     - 120
+    - 880
+    - 320
+  enemy_health_search_region:
+    - 160
+    - 105
+    - 960
+    - 380
+  enemy_direction_left:
+    - 48
+    - 310
+    - 210
     - 240
-    - 330
+  enemy_direction_right:
+    - 1030
+    - 280
+    - 210
+    - 280
+  enemy_direction_bottom:
+    - 500
+    - 610
+    - 300
+    - 90
+  boss_health_bar:
+    - 250
+    - 612
+    - 780
+    - 72
+  team_panel:
+    - 1110
+    - 110
+    - 170
+    - 420
   skill:
-    - 1015
-    - 585
-    - 58
-    - 58
+    - 1068
+    - 586
+    - 106
+    - 106
   ultimate:
-    - 1090
-    - 575
-    - 70
-    - 70
-  arc:
-    - 935
-    - 585
-    - 58
-    - 58
+    - 1160
+    - 582
+    - 112
+    - 112
+  challenge_success_region:
+    - 450
+    - 130
+    - 380
+    - 150
+
+ability_regions:
+  skill:
+    - 1068
+    - 586
+    - 106
+    - 106
+  ultimate:
+    - 1160
+    - 582
+    - 112
+    - 112
 
 current_slot_regions:
-  - [1150, 135, 88, 58]
-  - [1150, 205, 88, 58]
-  - [1150, 275, 88, 58]
-  - [1150, 345, 88, 58]
+  - [1138, 150, 110, 84]
+  - [1138, 238, 110, 84]
+  - [1138, 326, 110, 84]
+  - [1138, 414, 110, 84]
 
 hsv_rules:
-  target_present:
-    lower: [0, 0, 185]
-    upper: [179, 95, 255]
-    min_ratio: 0.035
-  level_text:
-    lower: [0, 0, 180]
-    upper: [179, 80, 255]
-    min_ratio: 0.025
   enemy_health_red:
-    lower: [0, 75, 80]
-    upper: [12, 255, 255]
-    min_ratio: 0.020
-    lower_2: [165, 75, 80]
-    upper_2: [179, 255, 255]
+    lower: [0, 212, 232]
+    upper: [2, 232, 252]
+    min_ratio: 0.02
+    lower_2: [178, 212, 232]
+    upper_2: [179, 232, 252]
   boss_health_red:
-    lower: [0, 75, 80]
-    upper: [12, 255, 255]
-    min_ratio: 0.020
-    lower_2: [165, 75, 80]
-    upper_2: [179, 255, 255]
+    lower: [0, 212, 232]
+    upper: [2, 232, 252]
+    min_ratio: 0.02
+    lower_2: [178, 212, 232]
+    upper_2: [179, 232, 252]
   team_hud:
-    lower: [0, 0, 150]
-    upper: [179, 90, 255]
-    min_ratio: 0.025
+    lower: [0, 0, 140]
+    upper: [179, 100, 255]
+    min_ratio: 0.02
   slot_active:
-    lower: [78, 35, 95]
-    upper: [105, 255, 255]
-    min_ratio: 0.018
+    lower: [60, 25, 90]
+    upper: [110, 255, 255]
+    min_ratio: 0.016
   ability_ready:
-    lower: [15, 45, 95]
-    upper: [45, 255, 255]
-    min_ratio: 0.030
+    lower: [12, 35, 120]
+    upper: [55, 255, 255]
+    min_ratio: 0.028
+  enemy_direction_pink:
+    lower: [170, 50, 150]
+    upper: [179, 150, 255]
+    min_ratio: 0.003
+    lower_2: [0, 50, 150]
+    upper_2: [4, 150, 255]
+
+ability_thresholds:
+  ready:
+    highlight_min_ratio: 0.028
+    ring_highlight_min_ratio: 0.040
+    secondary_highlight_min_ratio: 0.018
+    bright_min_ratio: 0.12
+    max_dark_ratio: 0.72
+  cooldown:
+    white_min_ratio: 0.010
+    dark_min_ratio: 0.24
+    bright_min_ratio: 0.08
+  disabled:
+    dark_min_ratio: 0.48
+    bright_max_ratio: 0.16
+    white_max_ratio: 0.012
+  shared:
+    white_sat_max: 45
+    white_value_min: 170
+    bright_value_min: 140
+    dark_value_max: 95
+
+enemy_health_rect:
+  min_width: 24
+  short_min_width: 12
+  max_width: 220
+  min_height: 2
+  max_height: 8
+  min_aspect_ratio: 4.0
+  max_aspect_ratio: 90.0
+  min_fill_ratio: 0.42
+  short_max_y_ratio: 0.58
+
+boss_health_rect:
+  min_width: 220
+  max_width: 900
+  min_height: 4
+  max_height: 24
+  min_aspect_ratio: 8.0
+  max_aspect_ratio: 120.0
+  min_fill_ratio: 0.18
+
+enemy_direction_rect:
+  min_width: 10
+  max_width: 40
+  min_height: 10
+  max_height: 40
+  min_area: 80
+  max_area: 420
+  min_aspect_ratio: 0.55
+  max_aspect_ratio: 1.6
+  min_fill_ratio: 0.16
+  max_fill_ratio: 0.88
+
+enemy_direction_reacquire:
+  turn_interval_sec: 0.9
+  turn_pixels_side: 220
+  turn_pixels_bottom: 340
+  vertical_delta: 0
+  post_turn_delay_ms: 80
+  auto_target_after_turn: true
 
 thresholds:
   supported_scene_min_features: 1
-  combat_min_features: 2
-  confidence_feature_count: 5
+
+templates:
+  target_lock:
+    path: default_1280x720_cn/target_lock_diamond.png
+    search_region: [200, 120, 880, 320]
+    match_threshold: 0.68
+    scales: [0.75, 0.9, 1.0, 1.15, 1.3]
+  challenge_success:
+    path: default_1280x720_cn/challenge_success.png
+    search_region: [450, 130, 380, 150]
+    match_threshold: 0.74
+    scales: [1.0]
+
+audio_dodge:
+  enabled: true
+  sample_path: audio/dodge_sample.wav
+  sample_rate: 32000
+  channels: 2
+  chunk_size: 768
+  threshold: 0.13
+  ratio: 1.0
+  allow_repeat: false
+  cooldown_sec: 0.42
+  window_sec: 0.22
+  trigger_max_age_sec: 0.22
+  reconnect_delay_sec: 2.0
+  pre_emphasis: 0.97
+  dodge_pause_ms: 120
+  right_hold_ms: 18
+  post_right_delay_ms: 10
+  shift_hold_ms: 24
+  dodge_key: shift
+  dodge_mouse_button: right
 
 strategies:
   default:
     loop:
-      - if_available: arc
       - if_available: ultimate
       - if_available: skill
       - normal:
-          duration_ms: 900
-      - switch: next
+          mode: tap_spam
+          duration_ms: 560
+          interval_ms: 70
 
 debug_snapshot_dir: tmp/combat_debug

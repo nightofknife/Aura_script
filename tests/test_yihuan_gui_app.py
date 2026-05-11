@@ -12,8 +12,10 @@ try:
         GuiPreferences,
         TASK_AUTO_LOOP,
         TASK_CAFE_AUTO_LOOP,
+        TASK_COMBAT_AUTO_LOOP,
         TASK_MAHJONG_AUTO_LOOP,
         TASK_ONE_CAFE_REVENUE_RESTOCK,
+        TASK_TETROMINOES_AUTO_LOOP,
     )
 except ModuleNotFoundError as exc:
     if str(getattr(exc, "name", "")).startswith("PySide6"):
@@ -25,8 +27,10 @@ except ModuleNotFoundError as exc:
         GuiPreferences = None
         TASK_AUTO_LOOP = ""
         TASK_CAFE_AUTO_LOOP = ""
+        TASK_COMBAT_AUTO_LOOP = ""
         TASK_MAHJONG_AUTO_LOOP = ""
         TASK_ONE_CAFE_REVENUE_RESTOCK = ""
+        TASK_TETROMINOES_AUTO_LOOP = ""
     else:
         raise
 
@@ -63,7 +67,10 @@ class TestYihuanMainWindowWorkbench(unittest.TestCase):
         ]
 
         self.assertEqual(task_ids, list(WORKBENCH_TASKS.keys()))
-        self.assertEqual([WORKBENCH_TASKS[task_id]["label"] for task_id in task_ids], ["钓鱼", "沙威玛", "一咖舍", "麻将"])
+        self.assertEqual(
+            [WORKBENCH_TASKS[task_id]["label"] for task_id in task_ids],
+            ["钓鱼", "沙威玛", "一咖舍", "麻将", "战斗", "俄罗斯方块"],
+        )
 
     def test_top_menu_contains_task_auxiliary_and_settings_pages(self):
         window = self._make_window()
@@ -172,12 +179,14 @@ class TestYihuanMainWindowWorkbench(unittest.TestCase):
 
         self.assertEqual(cancelled, ["cid-1"])
 
-    def test_fishing_inputs_include_sell_fish_interval(self):
+    def test_fishing_inputs_include_latest_bait_controls(self):
         window = self._make_window()
         window._select_task_id("fishing")
         window._fishing_defaults = window._fishing_defaults.__class__(profile_name="custom_fishing")
         window._max_rounds_spin.setValue(12)
         window._sell_fish_every_rounds_spin.setValue(4)
+        window._bait_buy_repeat_count_spin.setValue(2)
+        window._sell_before_buy_bait_check.setChecked(False)
 
         payload = window._collect_selected_task_inputs()
 
@@ -187,6 +196,8 @@ class TestYihuanMainWindowWorkbench(unittest.TestCase):
                 "max_rounds": 12,
                 "profile_name": "custom_fishing",
                 "sell_fish_every_rounds": 4,
+                "bait_buy_repeat_count": 2,
+                "sell_before_buy_bait": False,
             },
         )
 
@@ -239,6 +250,109 @@ class TestYihuanMainWindowWorkbench(unittest.TestCase):
             },
         )
         self.assertEqual(WORKBENCH_TASKS["mahjong"]["task_ref"], TASK_MAHJONG_AUTO_LOOP)
+
+    def test_combat_inputs_are_collected_from_page_and_settings_defaults(self):
+        window = self._make_window()
+        window._select_task_id("combat")
+        window._combat_defaults = window._combat_defaults.__class__(profile_name="custom_combat", strategy_name="default")
+        window._combat_max_seconds_spin.setValue(240)
+        window._combat_max_encounters_spin.setValue(6)
+        window._combat_auto_target_check.setChecked(True)
+        window._combat_auto_dodge_check.setChecked(False)
+        window._combat_debug_enabled_check.setChecked(True)
+        window._combat_capture_debug_enabled_check.setChecked(True)
+        window._combat_capture_interval_spin.setValue(1.5)
+        window._combat_capture_max_images_spin.setValue(80)
+        window._combat_capture_raw_enabled_check.setChecked(True)
+        window._combat_strategy_combo.addItem("burst", "burst")
+        window._combat_strategy_combo.setCurrentIndex(window._combat_strategy_combo.findData("burst"))
+
+        payload = window._collect_selected_task_inputs()
+
+        self.assertEqual(
+            payload,
+            {
+                "profile_name": "custom_combat",
+                "strategy_name": "burst",
+                "max_seconds": 240,
+                "max_encounters": 6,
+                "auto_target": True,
+                "auto_dodge": False,
+                "dry_run": False,
+                "debug_enabled": True,
+                "capture_debug_enabled": True,
+                "capture_interval_sec": 1.5,
+                "capture_max_images": 80,
+                "capture_raw_enabled": True,
+            },
+        )
+        self.assertEqual(WORKBENCH_TASKS["combat"]["task_ref"], TASK_COMBAT_AUTO_LOOP)
+
+    def test_tetrominoes_inputs_are_collected_from_page_and_settings_defaults(self):
+        window = self._make_window()
+        window._select_task_id("tetrominoes")
+        window._tetrominoes_defaults = window._tetrominoes_defaults.__class__(profile_name="custom_tetrominoes")
+        window._tetrominoes_max_seconds_spin.setValue(240)
+        window._tetrominoes_max_pieces_spin.setValue(80)
+        window._tetrominoes_start_game_check.setChecked(False)
+
+        payload = window._collect_selected_task_inputs()
+
+        self.assertEqual(
+            payload,
+            {
+                "profile_name": "custom_tetrominoes",
+                "max_seconds": 240,
+                "max_pieces": 80,
+                "start_game": False,
+                "dry_run": False,
+                "debug_enabled": False,
+            },
+        )
+        self.assertEqual(WORKBENCH_TASKS["tetrominoes"]["task_ref"], TASK_TETROMINOES_AUTO_LOOP)
+
+    def test_save_settings_persists_combat_profile_defaults(self):
+        window = self._make_window()
+        saved: dict[str, object] = {}
+        window._combat_profile_combo.addItem("custom_combat", "custom_combat")
+        window._combat_profile_combo.setCurrentIndex(window._combat_profile_combo.findData("custom_combat"))
+        window._tetrominoes_profile_combo.addItem("custom_tetrominoes", "custom_tetrominoes")
+        window._tetrominoes_profile_combo.setCurrentIndex(
+            window._tetrominoes_profile_combo.findData("custom_tetrominoes")
+        )
+
+        def _capture_combat_defaults(defaults):
+            saved["combat_defaults"] = defaults
+
+        def _capture_tetrominoes_defaults(defaults):
+            saved["tetrominoes_defaults"] = defaults
+
+        with (
+            patch.object(window._repo, "update_runtime_settings", lambda *_args, **_kwargs: None),
+            patch.object(window._repo, "update_fishing_defaults", lambda *_args, **_kwargs: None),
+            patch.object(window._repo, "update_cafe_defaults", lambda *_args, **_kwargs: None),
+            patch.object(window._repo, "update_one_cafe_defaults", lambda *_args, **_kwargs: None),
+            patch.object(window._repo, "update_mahjong_defaults", lambda *_args, **_kwargs: None),
+            patch.object(window._repo, "update_combat_defaults", _capture_combat_defaults),
+            patch.object(window._repo, "update_tetrominoes_defaults", _capture_tetrominoes_defaults),
+            patch.object(window._repo, "save_ui_preferences", lambda *_args, **_kwargs: None),
+            patch.object(
+                window._repo,
+                "get_combat_defaults",
+                lambda _task=None: saved.get("combat_defaults", window._combat_defaults),
+            ),
+            patch.object(
+                window._repo,
+                "get_tetrominoes_defaults",
+                lambda _task=None: saved.get("tetrominoes_defaults", window._tetrominoes_defaults),
+            ),
+        ):
+            window._save_settings()
+
+        self.assertIn("combat_defaults", saved)
+        self.assertEqual(saved["combat_defaults"].profile_name, "custom_combat")
+        self.assertIn("tetrominoes_defaults", saved)
+        self.assertEqual(saved["tetrominoes_defaults"].profile_name, "custom_tetrominoes")
 
 
 if __name__ == "__main__":
