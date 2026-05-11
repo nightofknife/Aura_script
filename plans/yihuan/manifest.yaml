@@ -42,6 +42,14 @@ exports:
     singleton: true
     replace: null
     description: Recognize and plan basic actions for the Yihuan Mahjong mini-game.
+  - name: yihuan_piano
+    module: plans.yihuan.src.services.piano_service
+    class: YihuanPianoService
+    public: true
+    singleton: true
+    replace: null
+    description: Parse MIDI files and build playable keyboard plans for Yihuan's piano
+      mini-game.
   - name: yihuan_tetrominoes
     module: plans.yihuan.src.services.tetrominoes_service
     class: YihuanTetrominoesService
@@ -284,6 +292,50 @@ exports:
     timeout: null
     description: 基于当前方案上下文探测异环运行时目标。
     parameters: []
+  - name: yihuan_piano_play_midi
+    module: plans.yihuan.src.actions.piano_actions
+    function: yihuan_piano_play_midi
+    public: false
+    read_only: false
+    timeout: null
+    description: Parse a MIDI file and perform it on Yihuan's in-game piano keyboard.
+    parameters:
+    - name: file_path
+      type: Any
+      required: true
+      default: null
+    - name: conflict_policy
+      type: Any
+      required: false
+      default: strict
+    - name: transpose_semitones
+      type: Any
+      required: false
+      default: 0
+    - name: tempo_scale
+      type: Any
+      required: false
+      default: 1.0
+    - name: start_delay_ms
+      type: Any
+      required: false
+      default: 250
+    - name: roll_note_ms
+      type: Any
+      required: false
+      default: 35
+    - name: velocity_threshold
+      type: Any
+      required: false
+      default: 1
+    - name: focus_window
+      type: Any
+      required: false
+      default: true
+    - name: dry_run
+      type: Any
+      required: false
+      default: false
   - name: yihuan_tetrominoes_analyze_screen
     module: plans.yihuan.src.actions.tetrominoes_actions
     function: yihuan_tetrominoes_analyze_screen
@@ -401,6 +453,14 @@ exports:
     title: 一咖舍收益和补货
     source: tasks/one_cafe/revenue_restock.yaml
     description: 复用 Aura task 编排与基础视觉/输入动作，领取一咖舍收益并按配置执行补货，结束后返回世界场景。
+  - id: piano/play_midi/play_midi
+    title: 自动弹钢琴
+    source: tasks/piano/play_midi.yaml
+    description: 解析 MIDI 文件并在异环钢琴小游戏中自动演奏。
+  - id: piano/play_midi
+    title: 自动弹钢琴
+    source: tasks/piano/play_midi.yaml
+    description: 解析 MIDI 文件并在异环钢琴小游戏中自动演奏。
   - id: tetrominoes/analyze_screen/analyze_screen
     title: Tetrominoes screen analysis
     source: tasks/tetrominoes/analyze_screen.yaml
@@ -419,4 +479,4 @@ exports:
     description: Run the Yihuan Tetrominoes mini-game with survival-first planning.
 metadata:
   generated_by: ManifestGenerator
-  generated_at: '2026-05-01T02:47:19Z'
+  generated_at: '2026-05-03T18:20:35Z'

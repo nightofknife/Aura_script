@@ -6,5 +6,6 @@ __all__ = [
     "fishing_actions",
     "mahjong_actions",
     "package_actions",
+    "piano_actions",
     "tetrominoes_actions",
 ]

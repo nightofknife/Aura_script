@@ -1,0 +1,46 @@
+play_midi:
+  meta:
+    title: 自动弹钢琴
+    description: 解析 MIDI 文件并在异环钢琴小游戏中自动演奏。
+    inputs:
+      - name: file_path
+        type: string
+        required: true
+      - name: conflict_policy
+        type: string
+        default: strict
+      - name: transpose_semitones
+        type: number
+        default: 0
+      - name: tempo_scale
+        type: number
+        default: 1
+      - name: start_delay_ms
+        type: number
+        default: 250
+      - name: roll_note_ms
+        type: number
+        default: 35
+      - name: velocity_threshold
+        type: number
+        default: 1
+      - name: focus_window
+        type: boolean
+        default: true
+      - name: dry_run
+        type: boolean
+        default: false
+  steps:
+    run:
+      action: yihuan_piano_play_midi
+      params:
+        file_path: "{{ inputs.file_path }}"
+        conflict_policy: "{{ inputs.conflict_policy }}"
+        transpose_semitones: "{{ inputs.transpose_semitones }}"
+        tempo_scale: "{{ inputs.tempo_scale }}"
+        start_delay_ms: "{{ inputs.start_delay_ms }}"
+        roll_note_ms: "{{ inputs.roll_note_ms }}"
+        velocity_threshold: "{{ inputs.velocity_threshold }}"
+        focus_window: "{{ inputs.focus_window }}"
+        dry_run: "{{ inputs.dry_run }}"
+  returns: "{{ nodes.run.output }}"
