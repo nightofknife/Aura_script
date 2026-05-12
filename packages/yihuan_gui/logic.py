@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import html
 import json
+from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 
@@ -17,6 +18,7 @@ TASK_ONE_CAFE_REVENUE_RESTOCK = "tasks:one_cafe:revenue_restock.yaml"
 TASK_MAHJONG_AUTO_LOOP = "tasks:mahjong:auto_loop.yaml"
 TASK_COMBAT_AUTO_LOOP = "tasks:combat:auto_loop.yaml"
 TASK_TETROMINOES_AUTO_LOOP = "tasks:tetrominoes:auto_loop.yaml"
+TASK_PIANO_PLAY_MIDI = "tasks:piano:play_midi.yaml"
 
 VISIBLE_HISTORY_TASK_REFS = (
     TASK_PLAN_READY,
@@ -28,6 +30,7 @@ VISIBLE_HISTORY_TASK_REFS = (
     TASK_MAHJONG_AUTO_LOOP,
     TASK_COMBAT_AUTO_LOOP,
     TASK_TETROMINOES_AUTO_LOOP,
+    TASK_PIANO_PLAY_MIDI,
 )
 DEVELOPER_TASK_REFS = (TASK_PLAN_READY, TASK_PLAN_LOADED, TASK_RUNTIME_PROBE)
 TERMINAL_STATUSES = {"success", "error", "failed", "timeout", "cancelled", "partial"}
@@ -43,6 +46,7 @@ TASK_DISPLAY_NAMES = {
     TASK_MAHJONG_AUTO_LOOP: "自动麻将",
     TASK_COMBAT_AUTO_LOOP: "自动战斗",
     TASK_TETROMINOES_AUTO_LOOP: "俄罗斯方块",
+    TASK_PIANO_PLAY_MIDI: "自动弹钢琴",
 }
 
 STATUS_LABELS = {
@@ -75,6 +79,14 @@ STOP_REASON_LABELS = {
     "top_out_risk": "堆叠过高风险停止",
     "execution_mismatch": "执行结果与预期不一致",
     "capture_failed": "截图失败",
+    "invalid_argument": "参数无效",
+    "file_not_found": "文件不存在",
+    "parse_failed": "解析失败",
+    "unsupported_note": "存在不支持的音符",
+    "plan_failed": "演奏计划生成失败",
+    "unplayable_score": "乐谱无法演奏",
+    "focus_failed": "聚焦窗口失败",
+    "playback_failed": "演奏执行失败",
     "completed": "执行完成",
     "world_return_failed": "返回世界场景失败",
     "unknown_withdraw_state": "收益领取状态未知",
@@ -98,6 +110,11 @@ FAILURE_REASON_LABELS = {
     "execution_mismatch": "执行结果与预期不一致",
     "low_confidence": "识别置信度不足",
     "no_valid_placement": "没有可用落点",
+    "invalid_conflict_policy": "无效的冲突策略",
+    "file_not_found": "文件不存在",
+    "unsupported_note": "存在不支持的音符",
+    "physical_key_conflict": "存在物理按键冲突",
+    "focus_failed": "聚焦窗口失败",
     "phase_timeout": "等待阶段超时",
     "exception": "发生异常",
     "world_return_failed": "返回世界场景失败",
@@ -105,6 +122,11 @@ FAILURE_REASON_LABELS = {
     "unknown_restock_state": "补货状态未知",
     "cancelled": "用户停止",
     "none": "无",
+}
+
+PIANO_CONFLICT_POLICY_LABELS = {
+    "strict": "严格",
+    "roll": "滚奏拆分",
 }
 
 RECIPE_LABELS = {
@@ -376,6 +398,21 @@ class TetrominoesRunDefaults:
 
 
 @dataclass(frozen=True)
+class PianoRunDefaults:
+    file_path: str = ""
+    recent_files: tuple[str, ...] = ()
+    last_directory: str = ""
+    conflict_policy: str = "strict"
+    transpose_semitones: int = 0
+    tempo_scale: float = 1.0
+    start_delay_ms: int = 250
+    roll_note_ms: int = 35
+    velocity_threshold: int = 1
+    focus_window: bool = True
+    dry_run: bool = False
+
+
+@dataclass(frozen=True)
 class SettingsField:
     key: str
     label: str
@@ -513,6 +550,30 @@ def build_tetrominoes_loop_inputs(
         "start_game": bool(start_game),
         "dry_run": False,
         "debug_enabled": False,
+    }
+
+
+def build_piano_play_midi_inputs(
+    file_path: Any,
+    conflict_policy: Any,
+    transpose_semitones: Any,
+    tempo_scale: Any,
+    start_delay_ms: Any,
+    roll_note_ms: Any,
+    velocity_threshold: Any,
+    focus_window: Any,
+    dry_run: Any,
+) -> dict[str, Any]:
+    return {
+        "file_path": str(file_path or "").strip(),
+        "conflict_policy": str(conflict_policy or "strict").strip().lower() or "strict",
+        "transpose_semitones": int(transpose_semitones),
+        "tempo_scale": float(tempo_scale),
+        "start_delay_ms": int(start_delay_ms),
+        "roll_note_ms": int(roll_note_ms),
+        "velocity_threshold": int(velocity_threshold),
+        "focus_window": bool(focus_window),
+        "dry_run": bool(dry_run),
     }
 
 
@@ -674,6 +735,37 @@ def extract_tetrominoes_loop_defaults(task_row: Mapping[str, Any] | None) -> Tet
     )
 
 
+def extract_piano_play_midi_defaults(task_row: Mapping[str, Any] | None) -> PianoRunDefaults:
+    values = {
+        "conflict_policy": PianoRunDefaults().conflict_policy,
+        "transpose_semitones": PianoRunDefaults().transpose_semitones,
+        "tempo_scale": PianoRunDefaults().tempo_scale,
+        "start_delay_ms": PianoRunDefaults().start_delay_ms,
+        "roll_note_ms": PianoRunDefaults().roll_note_ms,
+        "velocity_threshold": PianoRunDefaults().velocity_threshold,
+        "focus_window": PianoRunDefaults().focus_window,
+        "dry_run": PianoRunDefaults().dry_run,
+    }
+    for field in (task_row or {}).get("inputs") or []:
+        if not isinstance(field, Mapping):
+            continue
+        name = str(field.get("name") or "").strip()
+        if name not in values:
+            continue
+        values[name] = field.get("default", values[name])
+    return PianoRunDefaults(
+        conflict_policy=str(values["conflict_policy"] or PianoRunDefaults().conflict_policy).strip().lower()
+        or PianoRunDefaults().conflict_policy,
+        transpose_semitones=int(float(values["transpose_semitones"] or 0)),
+        tempo_scale=float(values["tempo_scale"] or PianoRunDefaults().tempo_scale),
+        start_delay_ms=int(float(values["start_delay_ms"] or 0)),
+        roll_note_ms=int(float(values["roll_note_ms"] or 0)),
+        velocity_threshold=int(float(values["velocity_threshold"] or 0)),
+        focus_window=_coerce_bool(values["focus_window"]),
+        dry_run=_coerce_bool(values["dry_run"]),
+    )
+
+
 def build_settings_sections(
     runtime_settings: RuntimeSettings,
     ui_preferences: GuiPreferences,
@@ -775,6 +867,7 @@ def is_runtime_interacting_task(task_ref: str | None) -> bool:
             "tasks:mahjong:",
             "tasks:combat:",
             "tasks:tetrominoes:",
+            "tasks:piano:",
         )
     )
 
@@ -848,6 +941,13 @@ def runtime_value_display_name(value: Any) -> str:
     if not normalized:
         return "-"
     return RUNTIME_VALUE_LABELS.get(normalized, value)
+
+
+def piano_conflict_policy_display_name(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    if not normalized:
+        return "-"
+    return PIANO_CONFLICT_POLICY_LABELS.get(normalized, normalized)
 
 
 def reduce_live_events(state: LiveUiState, events: Iterable[Mapping[str, Any]]) -> tuple[LiveUiState, list[str]]:
@@ -1012,6 +1112,9 @@ def render_task_result_html(task_ref: str | None, detail: Mapping[str, Any] | No
     if task_name == TASK_TETROMINOES_AUTO_LOOP and isinstance(user_data, Mapping):
         return render_tetrominoes_loop_result_html(user_data)
 
+    if task_name == TASK_PIANO_PLAY_MIDI and isinstance(user_data, Mapping):
+        return render_piano_play_midi_result_html(user_data)
+
     if user_data is not None:
         return f"<pre>{html.escape(render_json(user_data))}</pre>"
     return "<p>当前没有可显示的任务输出。</p>"
@@ -1107,6 +1210,21 @@ def tetrominoes_loop_business_status(detail: Mapping[str, Any] | None) -> str | 
     return status or None
 
 
+def piano_play_midi_user_data(detail: Mapping[str, Any] | None) -> Mapping[str, Any] | None:
+    payload = dict(detail or {})
+    final_result = dict(payload.get("final_result") or {})
+    user_data = final_result.get("user_data")
+    return user_data if isinstance(user_data, Mapping) else None
+
+
+def piano_play_midi_business_status(detail: Mapping[str, Any] | None) -> str | None:
+    user_data = piano_play_midi_user_data(detail)
+    if not user_data:
+        return None
+    status = str(user_data.get("status") or "").strip().lower()
+    return status or None
+
+
 def render_auto_loop_brief_text(detail: Mapping[str, Any] | None) -> str:
     user_data = auto_loop_user_data(detail)
     if not user_data:
@@ -1161,6 +1279,26 @@ def render_tetrominoes_loop_brief_text(detail: Mapping[str, Any] | None) -> str:
     failure_reason = str(user_data.get("failure_reason") or "").strip()
     if failure_reason and failure_reason.lower() != "none":
         text += f" / 失败原因 {failure_reason_display_name(failure_reason)}"
+    return text
+
+
+def render_piano_play_midi_brief_text(detail: Mapping[str, Any] | None) -> str:
+    user_data = piano_play_midi_user_data(detail)
+    if not user_data:
+        return "暂无自动弹钢琴结果。"
+    parsed_summary = dict(user_data.get("parsed_summary") or {})
+    file_name = Path(str(user_data.get("file_path") or "")).name or "-"
+    text = (
+        f"{status_display_name(user_data.get('status'))} / "
+        f"{file_name} / "
+        f"{piano_conflict_policy_display_name(user_data.get('conflict_policy'))} / "
+        f"音符 {parsed_summary.get('note_count', 0)} / "
+        f"动作 {len(user_data.get('action_plan') or [])}"
+    )
+    performed_count = len(user_data.get("performed_actions") or [])
+    if performed_count:
+        text += f" / 已执行 {performed_count}"
+    text += f" / 耗时 {_format_seconds(user_data.get('elapsed_sec'))}"
     return text
 
 
@@ -1243,6 +1381,41 @@ def render_tetrominoes_loop_result_html(user_data: Mapping[str, Any]) -> str:
     debug_snapshots = list(user_data.get("debug_snapshots") or [])
     if debug_snapshots:
         lines.append(_kv_html("调试快照", debug_snapshots[-5:]))
+    return "".join(lines)
+
+
+def render_piano_play_midi_result_html(user_data: Mapping[str, Any]) -> str:
+    parsed_summary = dict(user_data.get("parsed_summary") or {})
+    scheduled_notes = list(user_data.get("scheduled_notes") or [])
+    action_plan = list(user_data.get("action_plan") or [])
+    performed_actions = list(user_data.get("performed_actions") or [])
+    conflicts = list(user_data.get("conflicts") or [])
+    unsupported_notes = list(user_data.get("unsupported_notes") or [])
+    lines = [
+        _kv_html("业务结果", status_display_name(user_data.get("status"))),
+        _kv_html("停止原因", stop_reason_display_name(user_data.get("stopped_reason"))),
+        _kv_html("失败原因", failure_reason_display_name(user_data.get("failure_reason"))),
+        _kv_html("MIDI 文件", user_data.get("file_path")),
+        _kv_html("冲突策略", piano_conflict_policy_display_name(user_data.get("conflict_policy"))),
+        _kv_html("仅预演", "是" if _coerce_bool(user_data.get("dry_run")) else "否"),
+        _kv_html("总耗时", _format_seconds(user_data.get("elapsed_sec"))),
+        _kv_html("解析摘要", parsed_summary),
+        _kv_html("计划音符数", user_data.get("scheduled_note_count", len(scheduled_notes))),
+        _kv_html("计划动作数", len(action_plan)),
+        _kv_html("已执行动作数", len(performed_actions)),
+    ]
+    if user_data.get("message"):
+        lines.insert(3, _kv_html("说明", user_data.get("message")))
+    if conflicts:
+        lines.append(_kv_html("冲突明细", conflicts[:8]))
+    if unsupported_notes:
+        lines.append(_kv_html("不支持的音符", unsupported_notes[:12]))
+    if scheduled_notes:
+        lines.append(_kv_html("计划音符预览", scheduled_notes[:12]))
+    if action_plan:
+        lines.append(_kv_html("动作计划预览", action_plan[:20]))
+    if performed_actions:
+        lines.append(_kv_html("已执行动作预览", performed_actions[:20]))
     return "".join(lines)
 
 

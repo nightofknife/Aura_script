@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 import unittest
 from unittest.mock import patch
 
@@ -15,6 +16,7 @@ try:
         TASK_COMBAT_AUTO_LOOP,
         TASK_MAHJONG_AUTO_LOOP,
         TASK_ONE_CAFE_REVENUE_RESTOCK,
+        TASK_PIANO_PLAY_MIDI,
         TASK_TETROMINOES_AUTO_LOOP,
     )
 except ModuleNotFoundError as exc:
@@ -30,6 +32,7 @@ except ModuleNotFoundError as exc:
         TASK_COMBAT_AUTO_LOOP = ""
         TASK_MAHJONG_AUTO_LOOP = ""
         TASK_ONE_CAFE_REVENUE_RESTOCK = ""
+        TASK_PIANO_PLAY_MIDI = ""
         TASK_TETROMINOES_AUTO_LOOP = ""
     else:
         raise
@@ -69,7 +72,7 @@ class TestYihuanMainWindowWorkbench(unittest.TestCase):
         self.assertEqual(task_ids, list(WORKBENCH_TASKS.keys()))
         self.assertEqual(
             [WORKBENCH_TASKS[task_id]["label"] for task_id in task_ids],
-            ["钓鱼", "沙威玛", "一咖舍", "麻将", "战斗", "俄罗斯方块"],
+            ["钓鱼", "沙威玛", "一咖舍", "麻将", "战斗", "俄罗斯方块", "自动弹钢琴"],
         )
 
     def test_top_menu_contains_task_auxiliary_and_settings_pages(self):
@@ -310,6 +313,40 @@ class TestYihuanMainWindowWorkbench(unittest.TestCase):
             },
         )
         self.assertEqual(WORKBENCH_TASKS["tetrominoes"]["task_ref"], TASK_TETROMINOES_AUTO_LOOP)
+
+    def test_piano_inputs_are_collected_from_page_and_settings_defaults(self):
+        window = self._make_window()
+        window._select_task_id("piano")
+        fixture_path = (
+            Path(__file__).resolve().parent / "fixtures" / "yihuan" / "piano" / "no_roll_needed.mid"
+        ).resolve()
+        window._piano_file_edit.setText(str(fixture_path))
+        window._piano_conflict_policy_combo.setCurrentIndex(window._piano_conflict_policy_combo.findData("roll"))
+        window._piano_tempo_scale_spin.setValue(1.2)
+        window._piano_start_delay_spin.setValue(400)
+        window._piano_transpose_spin.setValue(-1)
+        window._piano_roll_note_spin.setValue(45)
+        window._piano_velocity_threshold_spin.setValue(3)
+        window._piano_focus_window_check.setChecked(False)
+        window._piano_dry_run_check.setChecked(True)
+
+        payload = window._collect_selected_task_inputs()
+
+        self.assertEqual(
+            payload,
+            {
+                "file_path": str(fixture_path),
+                "conflict_policy": "roll",
+                "transpose_semitones": -1,
+                "tempo_scale": 1.2,
+                "start_delay_ms": 400,
+                "roll_note_ms": 45,
+                "velocity_threshold": 3,
+                "focus_window": False,
+                "dry_run": True,
+            },
+        )
+        self.assertEqual(WORKBENCH_TASKS["piano"]["task_ref"], TASK_PIANO_PLAY_MIDI)
 
     def test_save_settings_persists_combat_profile_defaults(self):
         window = self._make_window()

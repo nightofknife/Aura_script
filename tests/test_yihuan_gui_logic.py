@@ -17,7 +17,9 @@ from packages.yihuan_gui.logic import (
     TASK_LIVE_MONITOR,
     TASK_MAHJONG_AUTO_LOOP,
     TASK_ONE_CAFE_REVENUE_RESTOCK,
+    TASK_PIANO_PLAY_MIDI,
     TASK_TETROMINOES_AUTO_LOOP,
+    PianoRunDefaults,
     TetrominoesRunDefaults,
     VISIBLE_HISTORY_TASK_REFS,
     TASK_PLAN_READY,
@@ -26,24 +28,28 @@ from packages.yihuan_gui.logic import (
     build_combat_loop_inputs,
     build_mahjong_loop_inputs,
     build_one_cafe_inputs,
+    build_piano_play_midi_inputs,
     build_tetrominoes_loop_inputs,
     build_settings_sections,
     cafe_loop_business_status,
     combat_loop_business_status,
     mahjong_loop_business_status,
     one_cafe_business_status,
+    piano_play_midi_business_status,
     tetrominoes_loop_business_status,
     extract_auto_loop_defaults,
     extract_cafe_loop_defaults,
     extract_combat_loop_defaults,
     extract_mahjong_loop_defaults,
     extract_one_cafe_defaults,
+    extract_piano_play_midi_defaults,
     extract_tetrominoes_loop_defaults,
     render_auto_loop_brief_text,
     render_cafe_loop_brief_text,
     render_combat_loop_brief_text,
     render_mahjong_loop_brief_text,
     render_one_cafe_brief_text,
+    render_piano_play_midi_brief_text,
     render_tetrominoes_loop_brief_text,
     reduce_live_events,
     render_task_result_html,
@@ -319,6 +325,59 @@ class TestYihuanGuiLogic(unittest.TestCase):
         self.assertEqual(defaults.max_seconds, 90)
         self.assertEqual(defaults.max_pieces, 32)
         self.assertFalse(defaults.start_game)
+
+    def test_build_piano_play_midi_inputs_uses_page_values(self):
+        payload = build_piano_play_midi_inputs(
+            "D:/music/test.mid",
+            "roll",
+            2,
+            1.25,
+            500,
+            40,
+            5,
+            False,
+            True,
+        )
+
+        self.assertEqual(
+            payload,
+            {
+                "file_path": "D:/music/test.mid",
+                "conflict_policy": "roll",
+                "transpose_semitones": 2,
+                "tempo_scale": 1.25,
+                "start_delay_ms": 500,
+                "roll_note_ms": 40,
+                "velocity_threshold": 5,
+                "focus_window": False,
+                "dry_run": True,
+            },
+        )
+
+    def test_extract_piano_play_midi_defaults_uses_task_defaults(self):
+        defaults = extract_piano_play_midi_defaults(
+            {
+                "inputs": [
+                    {"name": "conflict_policy", "type": "string", "default": "roll"},
+                    {"name": "transpose_semitones", "type": "number", "default": -2},
+                    {"name": "tempo_scale", "type": "number", "default": 0.8},
+                    {"name": "start_delay_ms", "type": "number", "default": 800},
+                    {"name": "roll_note_ms", "type": "number", "default": 55},
+                    {"name": "velocity_threshold", "type": "number", "default": 4},
+                    {"name": "focus_window", "type": "boolean", "default": False},
+                    {"name": "dry_run", "type": "boolean", "default": True},
+                ]
+            }
+        )
+
+        self.assertEqual(defaults.conflict_policy, "roll")
+        self.assertEqual(defaults.transpose_semitones, -2)
+        self.assertEqual(defaults.tempo_scale, 0.8)
+        self.assertEqual(defaults.start_delay_ms, 800)
+        self.assertEqual(defaults.roll_note_ms, 55)
+        self.assertEqual(defaults.velocity_threshold, 4)
+        self.assertFalse(defaults.focus_window)
+        self.assertTrue(defaults.dry_run)
 
     def test_reduce_live_events_tracks_auto_loop_lifecycle(self):
         state, finished = reduce_live_events(
@@ -638,6 +697,43 @@ class TestYihuanGuiLogic(unittest.TestCase):
         self.assertIn("最终指标", html)
         self.assertIn("最近操作", html)
 
+    def test_task_result_renderer_handles_piano_play_midi(self):
+        detail = {
+            "task_name": TASK_PIANO_PLAY_MIDI,
+            "final_result": {
+                "user_data": {
+                    "status": "failed",
+                    "stopped_reason": "unplayable_score",
+                    "failure_reason": "physical_key_conflict",
+                    "file_path": "D:/music/test.mid",
+                    "conflict_policy": "strict",
+                    "dry_run": False,
+                    "parsed_summary": {
+                        "format_type": 0,
+                        "track_count": 1,
+                        "division": 480,
+                        "note_count": 12,
+                        "unsupported_note_count": 0,
+                    },
+                    "scheduled_note_count": 12,
+                    "scheduled_notes": [{"degree": "1", "start_ms": 0}],
+                    "action_plan": [{"kind": "key_down", "key": "a", "t_ms": 0}],
+                    "performed_actions": [],
+                    "conflicts": [{"reason": "physical_key_conflict", "at_ms": 0}],
+                    "elapsed_sec": 0.42,
+                }
+            },
+        }
+
+        html = render_task_result_html(TASK_PIANO_PLAY_MIDI, detail)
+
+        self.assertEqual(piano_play_midi_business_status(detail), "failed")
+        self.assertIn("strict", build_piano_play_midi_inputs("a.mid", "strict", 0, 1.0, 0, 35, 1, True, False)["conflict_policy"])
+        self.assertIn("test.mid", render_piano_play_midi_brief_text(detail))
+        self.assertIn("严格", html)
+        self.assertIn("存在物理按键冲突", html)
+        self.assertIn("动作计划预览", html)
+
     def test_runtime_task_guard_disables_auto_loop_when_fishing_task_active(self):
         active_runs = {
             "cid-1": {
@@ -653,6 +749,7 @@ class TestYihuanGuiLogic(unittest.TestCase):
         self.assertFalse(task_is_enabled(TASK_MAHJONG_AUTO_LOOP, active_runs))
         self.assertFalse(task_is_enabled(TASK_COMBAT_AUTO_LOOP, active_runs))
         self.assertFalse(task_is_enabled(TASK_TETROMINOES_AUTO_LOOP, active_runs))
+        self.assertFalse(task_is_enabled(TASK_PIANO_PLAY_MIDI, active_runs))
         self.assertTrue(task_is_enabled(TASK_PLAN_READY, active_runs))
 
     def test_runtime_task_guard_disables_fishing_when_cafe_task_active(self):
@@ -670,6 +767,7 @@ class TestYihuanGuiLogic(unittest.TestCase):
         self.assertFalse(task_is_enabled(TASK_MAHJONG_AUTO_LOOP, active_runs))
         self.assertFalse(task_is_enabled(TASK_COMBAT_AUTO_LOOP, active_runs))
         self.assertFalse(task_is_enabled(TASK_TETROMINOES_AUTO_LOOP, active_runs))
+        self.assertFalse(task_is_enabled(TASK_PIANO_PLAY_MIDI, active_runs))
         self.assertTrue(task_is_enabled(TASK_PLAN_READY, active_runs))
 
     def test_runtime_task_guard_disables_other_runtime_tasks_when_one_cafe_active(self):
@@ -687,6 +785,7 @@ class TestYihuanGuiLogic(unittest.TestCase):
         self.assertFalse(task_is_enabled(TASK_MAHJONG_AUTO_LOOP, active_runs))
         self.assertFalse(task_is_enabled(TASK_COMBAT_AUTO_LOOP, active_runs))
         self.assertFalse(task_is_enabled(TASK_TETROMINOES_AUTO_LOOP, active_runs))
+        self.assertFalse(task_is_enabled(TASK_PIANO_PLAY_MIDI, active_runs))
         self.assertTrue(task_is_enabled(TASK_PLAN_READY, active_runs))
 
     def test_runtime_task_guard_disables_other_runtime_tasks_when_mahjong_active(self):
@@ -704,6 +803,7 @@ class TestYihuanGuiLogic(unittest.TestCase):
         self.assertFalse(task_is_enabled(TASK_MAHJONG_AUTO_LOOP, active_runs))
         self.assertFalse(task_is_enabled(TASK_COMBAT_AUTO_LOOP, active_runs))
         self.assertFalse(task_is_enabled(TASK_TETROMINOES_AUTO_LOOP, active_runs))
+        self.assertFalse(task_is_enabled(TASK_PIANO_PLAY_MIDI, active_runs))
         self.assertTrue(task_is_enabled(TASK_PLAN_READY, active_runs))
 
     def test_runtime_task_guard_disables_other_runtime_tasks_when_combat_active(self):
@@ -721,6 +821,7 @@ class TestYihuanGuiLogic(unittest.TestCase):
         self.assertFalse(task_is_enabled(TASK_MAHJONG_AUTO_LOOP, active_runs))
         self.assertFalse(task_is_enabled(TASK_COMBAT_AUTO_LOOP, active_runs))
         self.assertFalse(task_is_enabled(TASK_TETROMINOES_AUTO_LOOP, active_runs))
+        self.assertFalse(task_is_enabled(TASK_PIANO_PLAY_MIDI, active_runs))
         self.assertTrue(task_is_enabled(TASK_PLAN_READY, active_runs))
 
     def test_runtime_task_guard_disables_other_runtime_tasks_when_tetrominoes_active(self):
@@ -738,6 +839,25 @@ class TestYihuanGuiLogic(unittest.TestCase):
         self.assertFalse(task_is_enabled(TASK_MAHJONG_AUTO_LOOP, active_runs))
         self.assertFalse(task_is_enabled(TASK_COMBAT_AUTO_LOOP, active_runs))
         self.assertFalse(task_is_enabled(TASK_TETROMINOES_AUTO_LOOP, active_runs))
+        self.assertFalse(task_is_enabled(TASK_PIANO_PLAY_MIDI, active_runs))
+        self.assertTrue(task_is_enabled(TASK_PLAN_READY, active_runs))
+
+    def test_runtime_task_guard_disables_other_runtime_tasks_when_piano_active(self):
+        active_runs = {
+            "cid-1": {
+                "cid": "cid-1",
+                "task_name": TASK_PIANO_PLAY_MIDI,
+                "status": "running",
+            }
+        }
+
+        self.assertFalse(task_is_enabled(TASK_AUTO_LOOP, active_runs))
+        self.assertFalse(task_is_enabled(TASK_CAFE_AUTO_LOOP, active_runs))
+        self.assertFalse(task_is_enabled(TASK_ONE_CAFE_REVENUE_RESTOCK, active_runs))
+        self.assertFalse(task_is_enabled(TASK_MAHJONG_AUTO_LOOP, active_runs))
+        self.assertFalse(task_is_enabled(TASK_COMBAT_AUTO_LOOP, active_runs))
+        self.assertFalse(task_is_enabled(TASK_TETROMINOES_AUTO_LOOP, active_runs))
+        self.assertFalse(task_is_enabled(TASK_PIANO_PLAY_MIDI, active_runs))
         self.assertTrue(task_is_enabled(TASK_PLAN_READY, active_runs))
 
     def test_settings_sections_are_grouped_into_runtime_and_ui(self):
@@ -767,6 +887,7 @@ class TestYihuanGuiLogic(unittest.TestCase):
         self.assertIn(TASK_MAHJONG_AUTO_LOOP, VISIBLE_HISTORY_TASK_REFS)
         self.assertIn(TASK_COMBAT_AUTO_LOOP, VISIBLE_HISTORY_TASK_REFS)
         self.assertIn(TASK_TETROMINOES_AUTO_LOOP, VISIBLE_HISTORY_TASK_REFS)
+        self.assertIn(TASK_PIANO_PLAY_MIDI, VISIBLE_HISTORY_TASK_REFS)
         self.assertNotIn(TASK_LIVE_MONITOR, VISIBLE_HISTORY_TASK_REFS)
 
 

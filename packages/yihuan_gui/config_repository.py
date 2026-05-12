@@ -14,6 +14,7 @@ from .logic import (
     GuiPreferences,
     MahjongRunDefaults,
     OneCafeRunDefaults,
+    PianoRunDefaults,
     RuntimeSettings,
     TetrominoesRunDefaults,
     extract_auto_loop_defaults,
@@ -21,6 +22,7 @@ from .logic import (
     extract_combat_loop_defaults,
     extract_mahjong_loop_defaults,
     extract_one_cafe_defaults,
+    extract_piano_play_midi_defaults,
     extract_tetrominoes_loop_defaults,
 )
 
@@ -30,6 +32,7 @@ DEFAULT_AUTO_RUNTIME_PROBE = True
 DEFAULT_EXPAND_DEVELOPER_TOOLS = False
 DEFAULT_TASK_START_DELAY_SEC = 5
 DEFAULT_QUICK_STOP_HOTKEY = "F8"
+DEFAULT_PIANO_RECENT_FILE_LIMIT = 10
 QUICK_STOP_HOTKEY_OPTIONS = ("F6", "F7", "F8", "F9", "F10", "F11", "F12")
 
 
@@ -314,6 +317,49 @@ class YihuanConfigRepository:
         payload["tetrominoes"] = tetrominoes
         self.save_config(payload)
 
+    def get_piano_defaults(self, piano_task: Mapping[str, Any] | None = None) -> PianoRunDefaults:
+        defaults = extract_piano_play_midi_defaults(piano_task)
+        recent_files = self._coerce_string_list(self._settings_value("piano/recent_files", list(defaults.recent_files)))
+        return PianoRunDefaults(
+            file_path=str(self._settings_value("piano/file_path", defaults.file_path) or defaults.file_path).strip(),
+            recent_files=self._normalize_recent_files(recent_files),
+            last_directory=str(
+                self._settings_value("piano/last_directory", defaults.last_directory) or defaults.last_directory
+            ).strip(),
+            conflict_policy=str(
+                self._settings_value("piano/conflict_policy", defaults.conflict_policy) or defaults.conflict_policy
+            )
+            .strip()
+            .lower()
+            or defaults.conflict_policy,
+            transpose_semitones=self._coerce_int(
+                self._settings_value("piano/transpose_semitones", defaults.transpose_semitones)
+            ),
+            tempo_scale=self._coerce_float(self._settings_value("piano/tempo_scale", defaults.tempo_scale)),
+            start_delay_ms=self._coerce_int(self._settings_value("piano/start_delay_ms", defaults.start_delay_ms)),
+            roll_note_ms=self._coerce_int(self._settings_value("piano/roll_note_ms", defaults.roll_note_ms)),
+            velocity_threshold=self._coerce_int(
+                self._settings_value("piano/velocity_threshold", defaults.velocity_threshold)
+            ),
+            focus_window=self._coerce_bool(self._settings_value("piano/focus_window", defaults.focus_window)),
+            dry_run=self._coerce_bool(self._settings_value("piano/dry_run", defaults.dry_run)),
+        )
+
+    def save_piano_defaults(self, defaults: PianoRunDefaults) -> None:
+        self.validate_piano_defaults(defaults)
+        normalized_recent_files = self._normalize_recent_files(defaults.recent_files)
+        self._settings_set_value("piano/file_path", str(defaults.file_path).strip())
+        self._settings_set_value("piano/recent_files", list(normalized_recent_files))
+        self._settings_set_value("piano/last_directory", str(defaults.last_directory).strip())
+        self._settings_set_value("piano/conflict_policy", str(defaults.conflict_policy).strip().lower())
+        self._settings_set_value("piano/transpose_semitones", int(defaults.transpose_semitones))
+        self._settings_set_value("piano/tempo_scale", float(defaults.tempo_scale))
+        self._settings_set_value("piano/start_delay_ms", int(defaults.start_delay_ms))
+        self._settings_set_value("piano/roll_note_ms", int(defaults.roll_note_ms))
+        self._settings_set_value("piano/velocity_threshold", int(defaults.velocity_threshold))
+        self._settings_set_value("piano/focus_window", bool(defaults.focus_window))
+        self._settings_set_value("piano/dry_run", bool(defaults.dry_run))
+
     def get_cafe_profile_runtime_defaults(self, profile_name: str) -> dict[str, Any]:
         profile_name = str(profile_name or "").strip()
         if not profile_name:
@@ -438,6 +484,19 @@ class YihuanConfigRepository:
         if available_profiles and profile_name not in available_profiles:
             raise ValueError(f"俄罗斯方块识别档案不存在：{profile_name}")
 
+    def validate_piano_defaults(self, defaults: PianoRunDefaults) -> None:
+        conflict_policy = str(defaults.conflict_policy or "").strip().lower()
+        if conflict_policy not in {"strict", "roll"}:
+            raise ValueError("钢琴冲突策略必须是 strict 或 roll。")
+        if float(defaults.tempo_scale) <= 0:
+            raise ValueError("钢琴速度倍率必须大于 0。")
+        if int(defaults.start_delay_ms) < 0:
+            raise ValueError("钢琴起始延迟不能小于 0。")
+        if int(defaults.roll_note_ms) <= 0:
+            raise ValueError("钢琴滚奏音符间隔必须大于 0。")
+        if int(defaults.velocity_threshold) < 0:
+            raise ValueError("钢琴力度阈值不能小于 0。")
+
     @staticmethod
     def exclude_titles_to_text(exclude_titles: Iterable[Any]) -> str:
         return "\n".join(str(item).strip() for item in exclude_titles if str(item).strip())
@@ -506,6 +565,30 @@ class YihuanConfigRepository:
         self._settings_store.setValue(key, value)
 
     @staticmethod
+    def _normalize_recent_files(recent_files: Iterable[Any]) -> tuple[str, ...]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for item in recent_files:
+            value = str(item or "").strip()
+            if not value or value in seen:
+                continue
+            normalized.append(value)
+            seen.add(value)
+            if len(normalized) >= DEFAULT_PIANO_RECENT_FILE_LIMIT:
+                break
+        return tuple(normalized)
+
+    @staticmethod
+    def _coerce_string_list(value: Any) -> list[str]:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            return [value]
+        if isinstance(value, Iterable):
+            return [str(item).strip() for item in value if str(item).strip()]
+        return [str(value).strip()] if str(value).strip() else []
+
+    @staticmethod
     def _coerce_bool(value: Any) -> bool:
         if isinstance(value, bool):
             return value
@@ -519,3 +602,7 @@ class YihuanConfigRepository:
     @staticmethod
     def _coerce_int(value: Any) -> int:
         return int(value)
+
+    @staticmethod
+    def _coerce_float(value: Any) -> float:
+        return float(value)

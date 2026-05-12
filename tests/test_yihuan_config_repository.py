@@ -12,6 +12,7 @@ from packages.yihuan_gui.logic import (
     GuiPreferences,
     MahjongRunDefaults,
     OneCafeRunDefaults,
+    PianoRunDefaults,
     RuntimeSettings,
     TetrominoesRunDefaults,
 )
@@ -326,6 +327,42 @@ class TestYihuanConfigRepository(unittest.TestCase):
     def test_tetrominoes_profile_list_accepts_yaml_profiles(self):
         self.assertIn("default_1280x720_cn", self.repo.list_tetrominoes_profiles())
         self.assertIn("custom_tetrominoes", self.repo.list_tetrominoes_profiles())
+
+    def test_piano_defaults_round_trip_uses_qsettings_store(self):
+        defaults = PianoRunDefaults(
+            file_path="D:/music/test.mid",
+            recent_files=("D:/music/test.mid", "D:/music/other.mid"),
+            last_directory="D:/music",
+            conflict_policy="roll",
+            transpose_semitones=-2,
+            tempo_scale=1.15,
+            start_delay_ms=450,
+            roll_note_ms=40,
+            velocity_threshold=2,
+            focus_window=False,
+            dry_run=True,
+        )
+        self.repo.save_piano_defaults(defaults)
+
+        loaded = self.repo.get_piano_defaults()
+        self.assertEqual(loaded.file_path, "D:/music/test.mid")
+        self.assertEqual(loaded.recent_files, ("D:/music/test.mid", "D:/music/other.mid"))
+        self.assertEqual(loaded.last_directory, "D:/music")
+        self.assertEqual(loaded.conflict_policy, "roll")
+        self.assertEqual(loaded.transpose_semitones, -2)
+        self.assertEqual(loaded.tempo_scale, 1.15)
+        self.assertEqual(loaded.start_delay_ms, 450)
+        self.assertEqual(loaded.roll_note_ms, 40)
+        self.assertEqual(loaded.velocity_threshold, 2)
+        self.assertFalse(loaded.focus_window)
+        self.assertTrue(loaded.dry_run)
+
+    def test_piano_defaults_validation_rejects_invalid_values(self):
+        with self.assertRaisesRegex(ValueError, "钢琴冲突策略必须是 strict 或 roll"):
+            self.repo.validate_piano_defaults(PianoRunDefaults(conflict_policy="invalid"))
+
+        with self.assertRaisesRegex(ValueError, "钢琴速度倍率必须大于 0"):
+            self.repo.validate_piano_defaults(PianoRunDefaults(tempo_scale=0))
 
     def test_cafe_profile_default_seconds_reads_profile_yaml(self):
         self.assertEqual(self.repo.get_cafe_profile_default_seconds("default_1280x720_cn"), 130.0)

@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
+    QFileDialog,
     QFormLayout,
     QGridLayout,
     QGroupBox,
@@ -54,12 +55,14 @@ from .logic import (
     GuiPreferences,
     MahjongRunDefaults,
     OneCafeRunDefaults,
+    PianoRunDefaults,
     RuntimeSettings,
     TASK_AUTO_LOOP,
     TASK_CAFE_AUTO_LOOP,
     TASK_COMBAT_AUTO_LOOP,
     TASK_MAHJONG_AUTO_LOOP,
     TASK_ONE_CAFE_REVENUE_RESTOCK,
+    TASK_PIANO_PLAY_MIDI,
     TASK_PLAN_LOADED,
     TASK_PLAN_READY,
     TASK_RUNTIME_PROBE,
@@ -72,6 +75,7 @@ from .logic import (
     build_combat_loop_inputs,
     build_mahjong_loop_inputs,
     build_one_cafe_inputs,
+    build_piano_play_midi_inputs,
     build_tetrominoes_loop_inputs,
     build_settings_sections,
     cafe_loop_business_status,
@@ -89,10 +93,12 @@ from .logic import (
     render_mahjong_loop_brief_text,
     render_json,
     render_one_cafe_brief_text,
+    render_piano_play_midi_brief_text,
     render_overview_plan_info_html,
     render_runtime_probe_html,
     render_tetrominoes_loop_brief_text,
     one_cafe_business_status,
+    piano_play_midi_business_status,
     status_display_name,
     task_display_name,
     task_is_enabled,
@@ -134,6 +140,11 @@ WORKBENCH_TASKS: dict[str, dict[str, str]] = {
         "label": "俄罗斯方块",
         "task_ref": TASK_TETROMINOES_AUTO_LOOP,
         "description": "自动运行异环俄罗斯方块小游戏，按当前识别档案持续识别棋盘并规划落点。",
+    },
+    "piano": {
+        "label": "自动弹钢琴",
+        "task_ref": TASK_PIANO_PLAY_MIDI,
+        "description": "解析 MIDI 文件并在异环钢琴小游戏中自动演奏，支持严格模式和滚奏拆分。",
     },
 }
 WORKBENCH_TASK_REFS = tuple(item["task_ref"] for item in WORKBENCH_TASKS.values())
@@ -292,6 +303,7 @@ class YihuanMainWindow(QMainWindow):
         self._mahjong_defaults = self._repo.get_mahjong_defaults()
         self._combat_defaults = self._repo.get_combat_defaults()
         self._tetrominoes_defaults = self._repo.get_tetrominoes_defaults()
+        self._piano_defaults = self._repo.get_piano_defaults()
 
         self._task_rows: dict[str, dict[str, Any]] = {}
         self._history_rows: dict[str, dict[str, Any]] = {}
@@ -453,6 +465,7 @@ class YihuanMainWindow(QMainWindow):
         self._parameter_pages["mahjong"] = self._build_mahjong_parameters(self._parameter_stack)
         self._parameter_pages["combat"] = self._build_combat_parameters(self._parameter_stack)
         self._parameter_pages["tetrominoes"] = self._build_tetrominoes_parameters(self._parameter_stack)
+        self._parameter_pages["piano"] = self._build_piano_parameters(self._parameter_stack)
         for task_id in WORKBENCH_TASKS:
             self._parameter_stack.addWidget(self._parameter_pages[task_id])
         layout.addWidget(self._parameter_stack, 1)
@@ -667,6 +680,85 @@ class YihuanMainWindow(QMainWindow):
         hint = QLabel(
             "任务页只保留高频参数；dry_run、debug_enabled 继续固定关闭。"
             " 棋盘采样、落点求解和结果页识别参数仍在俄罗斯方块识别档案中维护。",
+            page,
+        )
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        layout.addStretch(1)
+        return page
+
+    def _build_piano_parameters(self, parent: QWidget) -> QWidget:
+        page = QWidget(parent)
+        layout = QVBoxLayout(page)
+
+        file_group = QGroupBox("乐谱文件", page)
+        file_layout = QVBoxLayout(file_group)
+        file_row = QHBoxLayout()
+        self._piano_file_edit = QLineEdit(file_group)
+        self._piano_file_edit.setPlaceholderText("选择 .mid 或 .midi 文件")
+        self._piano_file_edit.editingFinished.connect(self._on_piano_file_editing_finished)
+        self._piano_browse_button = QPushButton("浏览...", file_group)
+        self._piano_browse_button.clicked.connect(self._browse_piano_midi_file)
+        file_row.addWidget(self._piano_file_edit, 1)
+        file_row.addWidget(self._piano_browse_button)
+        file_layout.addLayout(file_row)
+        self._piano_recent_combo = QComboBox(file_group)
+        self._piano_recent_combo.currentIndexChanged.connect(self._on_piano_recent_file_selected)
+        file_layout.addWidget(self._piano_recent_combo)
+        self._piano_file_status_label = QLabel("尚未选择 MIDI 文件。", file_group)
+        self._piano_file_status_label.setWordWrap(True)
+        file_layout.addWidget(self._piano_file_status_label)
+        layout.addWidget(file_group)
+
+        group = QGroupBox("演奏参数", page)
+        form = QFormLayout(group)
+        self._piano_conflict_policy_combo = QComboBox(group)
+        self._piano_conflict_policy_combo.addItem("严格", "strict")
+        self._piano_conflict_policy_combo.addItem("滚奏拆分", "roll")
+        self._piano_conflict_policy_combo.currentIndexChanged.connect(self._on_piano_defaults_widget_changed)
+        self._piano_tempo_scale_spin = QDoubleSpinBox(group)
+        self._piano_tempo_scale_spin.setRange(0.05, 10.0)
+        self._piano_tempo_scale_spin.setSingleStep(0.05)
+        self._piano_tempo_scale_spin.setDecimals(2)
+        self._piano_tempo_scale_spin.setValue(1.0)
+        self._piano_tempo_scale_spin.setSuffix(" x")
+        self._piano_tempo_scale_spin.valueChanged.connect(self._on_piano_defaults_widget_changed)
+        self._piano_start_delay_spin = QSpinBox(group)
+        self._piano_start_delay_spin.setRange(0, 60000)
+        self._piano_start_delay_spin.setSuffix(" ms")
+        self._piano_start_delay_spin.valueChanged.connect(self._on_piano_defaults_widget_changed)
+        self._piano_dry_run_check = QCheckBox("仅预演，不发送按键", group)
+        self._piano_dry_run_check.toggled.connect(self._on_piano_defaults_widget_changed)
+        form.addRow("冲突策略", self._piano_conflict_policy_combo)
+        form.addRow("速度倍率", self._piano_tempo_scale_spin)
+        form.addRow("起始延迟", self._piano_start_delay_spin)
+        form.addRow("", self._piano_dry_run_check)
+        layout.addWidget(group)
+
+        advanced_group = QGroupBox("高级参数", page)
+        advanced_form = QFormLayout(advanced_group)
+        self._piano_transpose_spin = QSpinBox(advanced_group)
+        self._piano_transpose_spin.setRange(-36, 36)
+        self._piano_transpose_spin.setSuffix(" 半音")
+        self._piano_transpose_spin.valueChanged.connect(self._on_piano_defaults_widget_changed)
+        self._piano_roll_note_spin = QSpinBox(advanced_group)
+        self._piano_roll_note_spin.setRange(1, 5000)
+        self._piano_roll_note_spin.setSuffix(" ms")
+        self._piano_roll_note_spin.valueChanged.connect(self._on_piano_defaults_widget_changed)
+        self._piano_velocity_threshold_spin = QSpinBox(advanced_group)
+        self._piano_velocity_threshold_spin.setRange(0, 127)
+        self._piano_velocity_threshold_spin.valueChanged.connect(self._on_piano_defaults_widget_changed)
+        self._piano_focus_window_check = QCheckBox("执行前尝试聚焦游戏窗口", advanced_group)
+        self._piano_focus_window_check.toggled.connect(self._on_piano_defaults_widget_changed)
+        advanced_form.addRow("移调", self._piano_transpose_spin)
+        advanced_form.addRow("滚奏音符间隔", self._piano_roll_note_spin)
+        advanced_form.addRow("力度阈值", self._piano_velocity_threshold_spin)
+        advanced_form.addRow("", self._piano_focus_window_check)
+        layout.addWidget(advanced_group)
+
+        hint = QLabel(
+            "自动弹钢琴会先解析 MIDI 再执行。严格模式下遇到物理按键冲突会直接失败；"
+            "滚奏拆分会把冲突和弦按很短的时间差顺序弹出。当前参数会自动记住。",
             page,
         )
         hint.setWordWrap(True)
@@ -1002,7 +1094,11 @@ class YihuanMainWindow(QMainWindow):
         action_row.addStretch(1)
         body_layout.addLayout(action_row)
 
-        hint = QLabel("设置页只负责运行环境、任务默认档案和界面偏好；玩法识别阈值、区域坐标与时序参数仍在各识别档案中维护。", body)
+        hint = QLabel(
+            "设置页只负责运行环境、任务默认档案和界面偏好；玩法识别阈值、区域坐标与时序参数仍在各识别档案中维护。"
+            " 自动弹钢琴的文件与演奏参数会在任务页自动记忆。",
+            body,
+        )
         hint.setWordWrap(True)
         body_layout.addWidget(hint)
         body_layout.addStretch(1)
@@ -1088,6 +1184,9 @@ class YihuanMainWindow(QMainWindow):
             self._repo.list_tetrominoes_profiles(),
         )
         self._sync_tetrominoes_widgets_from_defaults()
+
+        self._piano_defaults = self._repo.get_piano_defaults(self._task_rows.get(TASK_PIANO_PLAY_MIDI))
+        self._sync_piano_widgets_from_defaults()
 
         self._history_limit_spin.setValue(int(ui_map["gui.history_limit"].value))
         self._auto_probe_check.setChecked(bool(ui_map["gui.auto_runtime_probe_on_startup"].value))
@@ -1496,6 +1595,157 @@ class YihuanMainWindow(QMainWindow):
         self._tetrominoes_max_pieces_spin.setValue(int(self._tetrominoes_defaults.max_pieces))
         self._tetrominoes_start_game_check.setChecked(bool(self._tetrominoes_defaults.start_game))
 
+    def _sync_piano_widgets_from_defaults(self) -> None:
+        widgets = (
+            self._piano_file_edit,
+            self._piano_recent_combo,
+            self._piano_conflict_policy_combo,
+            self._piano_tempo_scale_spin,
+            self._piano_start_delay_spin,
+            self._piano_transpose_spin,
+            self._piano_roll_note_spin,
+            self._piano_velocity_threshold_spin,
+            self._piano_focus_window_check,
+            self._piano_dry_run_check,
+        )
+        for widget in widgets:
+            widget.blockSignals(True)
+        try:
+            self._piano_file_edit.setText(self._piano_defaults.file_path)
+            self._set_piano_recent_files(self._piano_defaults.recent_files, self._piano_defaults.file_path)
+            index = self._piano_conflict_policy_combo.findData(self._piano_defaults.conflict_policy)
+            if index < 0:
+                index = 0
+            self._piano_conflict_policy_combo.setCurrentIndex(index)
+            self._piano_tempo_scale_spin.setValue(float(self._piano_defaults.tempo_scale))
+            self._piano_start_delay_spin.setValue(int(self._piano_defaults.start_delay_ms))
+            self._piano_transpose_spin.setValue(int(self._piano_defaults.transpose_semitones))
+            self._piano_roll_note_spin.setValue(int(self._piano_defaults.roll_note_ms))
+            self._piano_velocity_threshold_spin.setValue(int(self._piano_defaults.velocity_threshold))
+            self._piano_focus_window_check.setChecked(bool(self._piano_defaults.focus_window))
+            self._piano_dry_run_check.setChecked(bool(self._piano_defaults.dry_run))
+        finally:
+            for widget in widgets:
+                widget.blockSignals(False)
+        self._refresh_piano_file_status_label()
+        self._sync_piano_roll_note_widget_enabled()
+
+    def _set_piano_recent_files(self, recent_files: tuple[str, ...], current_file: str = "") -> None:
+        self._piano_recent_combo.blockSignals(True)
+        try:
+            self._piano_recent_combo.clear()
+            self._piano_recent_combo.addItem("最近使用的 MIDI 文件", "")
+            seen: set[str] = set()
+            for path in [str(current_file).strip(), *recent_files]:
+                normalized = str(path or "").strip()
+                if not normalized or normalized in seen:
+                    continue
+                self._piano_recent_combo.addItem(normalized, normalized)
+                seen.add(normalized)
+            self._piano_recent_combo.setCurrentIndex(0)
+        finally:
+            self._piano_recent_combo.blockSignals(False)
+
+    def _refresh_piano_file_status_label(self) -> None:
+        raw_path = self._piano_file_edit.text().strip()
+        if not raw_path:
+            self._piano_file_status_label.setText("尚未选择 MIDI 文件。")
+            return
+        try:
+            resolved = self._resolve_piano_file_path(raw_path, require_exists=True)
+        except ValueError as exc:
+            self._piano_file_status_label.setText(str(exc))
+            return
+        self._piano_file_status_label.setText(f"已选择：{resolved.name}")
+
+    @staticmethod
+    def _resolve_piano_file_path(file_path: str, *, require_exists: bool) -> Path:
+        normalized = str(file_path or "").strip()
+        if not normalized:
+            raise ValueError("请选择 MIDI 文件。")
+        candidate = Path(normalized).expanduser()
+        if not candidate.is_absolute():
+            candidate = Path.cwd() / candidate
+        candidate = candidate.resolve()
+        if candidate.suffix.lower() not in {".mid", ".midi"}:
+            raise ValueError("请选择 .mid 或 .midi 文件。")
+        if require_exists and not candidate.is_file():
+            raise ValueError(f"MIDI 文件不存在：{candidate}")
+        return candidate
+
+    def _current_piano_defaults_from_widgets(self, *, resolved_file_path: str | None = None) -> PianoRunDefaults:
+        file_path = str(resolved_file_path or self._piano_file_edit.text().strip())
+        recent_files: list[str] = []
+        if resolved_file_path:
+            recent_files.append(str(resolved_file_path))
+        recent_files.extend(self._piano_defaults.recent_files)
+
+        last_directory = str(self._piano_defaults.last_directory or "")
+        if resolved_file_path:
+            last_directory = str(Path(resolved_file_path).parent)
+        elif file_path:
+            try:
+                last_directory = str(self._resolve_piano_file_path(file_path, require_exists=False).parent)
+            except ValueError:
+                pass
+
+        return PianoRunDefaults(
+            file_path=file_path,
+            recent_files=tuple(recent_files),
+            last_directory=last_directory,
+            conflict_policy=str(
+                self._piano_conflict_policy_combo.currentData() or self._piano_conflict_policy_combo.currentText()
+            ).strip().lower(),
+            transpose_semitones=int(self._piano_transpose_spin.value()),
+            tempo_scale=float(self._piano_tempo_scale_spin.value()),
+            start_delay_ms=int(self._piano_start_delay_spin.value()),
+            roll_note_ms=int(self._piano_roll_note_spin.value()),
+            velocity_threshold=int(self._piano_velocity_threshold_spin.value()),
+            focus_window=self._piano_focus_window_check.isChecked(),
+            dry_run=self._piano_dry_run_check.isChecked(),
+        )
+
+    def _persist_piano_defaults_from_widgets(self, *, resolved_file_path: str | None = None) -> None:
+        defaults = self._current_piano_defaults_from_widgets(resolved_file_path=resolved_file_path)
+        self._repo.save_piano_defaults(defaults)
+        self._piano_defaults = self._repo.get_piano_defaults(self._task_rows.get(TASK_PIANO_PLAY_MIDI))
+        self._set_piano_recent_files(self._piano_defaults.recent_files, self._piano_file_edit.text().strip())
+        self._refresh_piano_file_status_label()
+        self._sync_piano_roll_note_widget_enabled()
+        self._apply_task_guard()
+
+    def _sync_piano_roll_note_widget_enabled(self) -> None:
+        is_roll = str(self._piano_conflict_policy_combo.currentData() or "").strip().lower() == "roll"
+        self._piano_roll_note_spin.setEnabled(is_roll)
+
+    def _browse_piano_midi_file(self) -> None:
+        initial_dir = str(self._piano_defaults.last_directory or Path.cwd())
+        selected_path, _selected_filter = QFileDialog.getOpenFileName(
+            self,
+            "选择 MIDI 文件",
+            initial_dir,
+            "MIDI 文件 (*.mid *.midi);;所有文件 (*.*)",
+        )
+        if not selected_path:
+            return
+        self._piano_file_edit.setText(selected_path)
+        self._persist_piano_defaults_from_widgets(resolved_file_path=str(Path(selected_path).resolve()))
+
+    def _on_piano_recent_file_selected(self, index: int) -> None:
+        if index <= 0:
+            return
+        file_path = str(self._piano_recent_combo.itemData(index) or "").strip()
+        if not file_path:
+            return
+        self._piano_file_edit.setText(file_path)
+        self._persist_piano_defaults_from_widgets(resolved_file_path=file_path)
+
+    def _on_piano_file_editing_finished(self) -> None:
+        self._persist_piano_defaults_from_widgets()
+
+    def _on_piano_defaults_widget_changed(self, *_args: object) -> None:
+        self._persist_piano_defaults_from_widgets()
+
     def _sync_combat_capture_widgets_enabled(self, *_args: object) -> None:
         enabled = bool(self._combat_capture_debug_enabled_check.isChecked())
         self._combat_capture_interval_spin.setEnabled(enabled)
@@ -1635,7 +1885,12 @@ class YihuanMainWindow(QMainWindow):
             QMessageBox.warning(self, "任务缺失", f"当前工作区没有找到任务：{task_display_name(task_ref)}")
             return
 
-        inputs = self._collect_selected_task_inputs()
+        try:
+            inputs = self._collect_selected_task_inputs()
+        except ValueError as exc:
+            QMessageBox.warning(self, "任务参数无效", str(exc))
+            self._append_log(str(exc), level="warning")
+            return
         delay_sec = int(self._ui_preferences.task_start_delay_sec)
         if delay_sec <= 0:
             self._append_log(f"正在提交任务：{task_display_name(task_ref)}")
@@ -1781,6 +2036,21 @@ class YihuanMainWindow(QMainWindow):
                 self._tetrominoes_start_game_check.isChecked(),
                 self._tetrominoes_defaults,
             )
+        if self._selected_task_id == "piano":
+            resolved_file_path = str(self._resolve_piano_file_path(self._piano_file_edit.text(), require_exists=True))
+            payload = build_piano_play_midi_inputs(
+                resolved_file_path,
+                self._piano_conflict_policy_combo.currentData() or self._piano_conflict_policy_combo.currentText(),
+                self._piano_transpose_spin.value(),
+                self._piano_tempo_scale_spin.value(),
+                self._piano_start_delay_spin.value(),
+                self._piano_roll_note_spin.value(),
+                self._piano_velocity_threshold_spin.value(),
+                self._piano_focus_window_check.isChecked(),
+                self._piano_dry_run_check.isChecked(),
+            )
+            self._persist_piano_defaults_from_widgets(resolved_file_path=resolved_file_path)
+            return payload
         raise ValueError(f"未知任务：{self._selected_task_id}")
 
     def _active_runtime_run(self) -> tuple[str | None, dict[str, Any] | None]:
@@ -1791,15 +2061,29 @@ class YihuanMainWindow(QMainWindow):
                 return str(cid), dict(run)
         return None, None
 
+    def _selected_task_local_error(self) -> str | None:
+        if self._selected_task_id != "piano":
+            return None
+        raw_path = self._piano_file_edit.text().strip()
+        if not raw_path:
+            return "请选择 MIDI 文件"
+        try:
+            self._resolve_piano_file_path(raw_path, require_exists=True)
+        except ValueError as exc:
+            return str(exc)
+        return None
+
     def _apply_task_guard(self) -> None:
         active_cid, active_run = self._active_runtime_run()
         active_runs = self._live_state.get("active_runs") or {}
         task_ref = self._selected_task_ref()
         task_available = self._task_available(task_ref)
+        local_error = self._selected_task_local_error()
         start_allowed = (
             self._runner_ready
             and self._tasks_ready
             and task_available
+            and local_error is None
             and self._pending_launch is None
             and not active_cid
             and task_is_enabled(task_ref, active_runs)
@@ -1820,6 +2104,8 @@ class YihuanMainWindow(QMainWindow):
                 status = "正在加载任务列表"
             elif not task_available:
                 status = "任务缺失"
+            elif local_error:
+                status = local_error
             elif active_cid:
                 status = f"运行中：{task_display_name((active_run or {}).get('task_name'))}"
             else:
@@ -1871,6 +2157,7 @@ class YihuanMainWindow(QMainWindow):
         self._mahjong_defaults = self._repo.get_mahjong_defaults(self._task_rows.get(TASK_MAHJONG_AUTO_LOOP))
         self._combat_defaults = self._repo.get_combat_defaults(self._task_rows.get(TASK_COMBAT_AUTO_LOOP))
         self._tetrominoes_defaults = self._repo.get_tetrominoes_defaults(self._task_rows.get(TASK_TETROMINOES_AUTO_LOOP))
+        self._piano_defaults = self._repo.get_piano_defaults(self._task_rows.get(TASK_PIANO_PLAY_MIDI))
         self._fishing_profile_label.setText(self._fishing_defaults.profile_name)
         self._cafe_profile_label.setText(self._cafe_defaults.profile_name)
         self._cafe_max_seconds_spin.setValue(int(self._cafe_defaults.max_seconds))
@@ -1883,6 +2170,7 @@ class YihuanMainWindow(QMainWindow):
         self._sync_mahjong_widgets_from_defaults()
         self._sync_combat_widgets_from_defaults()
         self._sync_tetrominoes_widgets_from_defaults()
+        self._sync_piano_widgets_from_defaults()
         self._append_log(f"任务列表已加载：{len(self._task_rows)} 个异环任务。")
         self._apply_task_guard()
 
@@ -1974,6 +2262,8 @@ class YihuanMainWindow(QMainWindow):
             self._append_log(f"自动战斗结果：{render_combat_loop_brief_text(payload)}")
         elif task_ref == TASK_TETROMINOES_AUTO_LOOP:
             self._append_log(f"俄罗斯方块结果：{render_tetrominoes_loop_brief_text(payload)}")
+        elif task_ref == TASK_PIANO_PLAY_MIDI:
+            self._append_log(f"自动弹钢琴结果：{render_piano_play_midi_brief_text(payload)}")
 
         final_status = str(
             auto_loop_business_status(payload)
@@ -1982,6 +2272,7 @@ class YihuanMainWindow(QMainWindow):
             or mahjong_loop_business_status(payload)
             or combat_loop_business_status(payload)
             or tetrominoes_loop_business_status(payload)
+            or piano_play_midi_business_status(payload)
             or payload.get("status")
             or ""
         ).lower()
