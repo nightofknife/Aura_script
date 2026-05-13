@@ -91,6 +91,7 @@ class _FakeCombatService:
     def __init__(self, states: list[dict], *, profile_overrides: dict | None = None, clock=None) -> None:
         self._real_service = YihuanCombatService()
         self.profile = self._real_service.load_profile()
+        self.profile = _deep_merge_dict(self.profile, {"post_combat_reward": {"enabled": False}})
         if profile_overrides:
             self.profile = _deep_merge_dict(self.profile, profile_overrides)
         self.states = list(states)
@@ -172,6 +173,7 @@ class TestYihuanCombatService(unittest.TestCase):
 
     def test_analyze_frame_detects_target_enemy_health_and_abilities(self):
         image = _make_supported_image(self.profile)
+        _draw_remaining_enemy_marker(image, self.profile)
         _paste_template(image, self.profile["templates"]["target_lock"]["path"], x=625, y=250)
         enemy_red = _rgb_from_cv2_hsv(0, 222, 242)
         _fill(image, (330, 220, 70, 6), enemy_red)
@@ -183,6 +185,8 @@ class TestYihuanCombatService(unittest.TestCase):
 
         self.assertTrue(state["in_supported_scene"])
         self.assertTrue(state["in_combat"])
+        self.assertTrue(state["remaining_enemy_marker_found"])
+        self.assertTrue(state["front_enemy_found"])
         self.assertTrue(state["target_found"])
         self.assertGreaterEqual(state["enemy_health_count"], 2)
         self.assertTrue(state["enemy_health_found"])
@@ -216,6 +220,48 @@ class TestYihuanCombatService(unittest.TestCase):
         self.assertFalse(state["in_combat"])
         self.assertTrue(state["challenge_success_found"])
         self.assertFalse(state["enemy_health_found"])
+
+    def test_analyze_frame_uses_remaining_enemy_marker_as_combat_gate(self):
+        image = _make_supported_image(self.profile)
+        _draw_remaining_enemy_marker(image, self.profile)
+
+        state = self.service.analyze_frame(image)
+
+        self.assertTrue(state["in_combat"])
+        self.assertTrue(state["remaining_enemy_marker_found"])
+        self.assertFalse(state["front_enemy_found"])
+        self.assertFalse(state["enemy_health_found"])
+
+    def test_analyze_frame_detects_post_combat_reward_marker_and_fixed_prompt_roi(self):
+        image = np.full((720, 1280, 3), (80, 150, 70), dtype=np.uint8)
+        reward_marker_path = self.profile["templates"]["reward_marker"]["path"]
+        _paste_template(image, reward_marker_path, x=500, y=340)
+        _paste_template(image, self.profile["templates"]["claim_memento_prompt"]["path"], x=777, y=384)
+
+        state = self.service.analyze_frame(image)
+
+        self.assertTrue(state["reward_marker_found"])
+        self.assertEqual(state["reward_marker_center_x"], 500 + _template_size(reward_marker_path)[0] // 2)
+        self.assertTrue(state["claim_memento_prompt_found"])
+
+        outside_roi = np.full((720, 1280, 3), (80, 150, 70), dtype=np.uint8)
+        _paste_template(outside_roi, self.profile["templates"]["claim_memento_prompt"]["path"], x=700, y=384)
+
+        outside_state = self.service.analyze_frame(outside_roi)
+
+        self.assertFalse(outside_state["claim_memento_prompt_found"])
+
+    def test_analyze_frame_enemy_health_without_remaining_marker_is_front_enemy_only(self):
+        image = _make_supported_image(self.profile)
+        enemy_red = _rgb_from_cv2_hsv(0, 222, 242)
+        _fill(image, (330, 220, 70, 6), enemy_red)
+
+        state = self.service.analyze_frame(image)
+
+        self.assertFalse(state["in_combat"])
+        self.assertFalse(state["remaining_enemy_marker_found"])
+        self.assertTrue(state["front_enemy_found"])
+        self.assertTrue(state["enemy_health_found"])
 
     def test_analyze_frame_does_not_mark_plain_scene_as_combat(self):
         state = self.service.analyze_frame(np.zeros((720, 1280, 3), dtype=np.uint8))
@@ -423,6 +469,7 @@ class TestYihuanCombatActions(unittest.TestCase):
         clock = _FakeClock()
         rear_only_state = _state(
             enemy=False,
+            stage_active=True,
             target=False,
             current_slot=1,
             enemy_direction_found=True,
@@ -445,11 +492,151 @@ class TestYihuanCombatActions(unittest.TestCase):
 
         self.assertEqual(result["status"], "success")
         actions = [entry["action"] for entry in result["action_trace"]]
-        self.assertIn("rear_enemy_hold_combat", actions)
         self.assertIn("turn_to_rear_enemy", actions)
         self.assertIn("auto_target_after_turn", actions)
         self.assertLess(actions.index("turn_to_rear_enemy"), actions.index("exit_pending_start"))
-        self.assertIn(("look_delta", -220, 0), app.calls)
+        look_calls = [call for call in app.calls if call[0] == "look_delta"]
+        expected_dx = sum(entry.get("turn_dx", 0) for entry in result["action_trace"] if entry["action"] == "turn_to_rear_enemy")
+        self.assertGreater(len(look_calls), 1)
+        self.assertEqual(sum(call[1] for call in look_calls), expected_dx)
+        self.assertEqual(sum(call[2] for call in look_calls), 0)
+        self.assertTrue(all(abs(call[1]) <= 80 for call in look_calls))
+
+    def test_collect_post_combat_reward_presses_interact_after_prompt(self):
+        clock = _FakeClock()
+        service = _FakeCombatService(
+            [
+                _state(enemy=False, stage_active=False, reward_marker=True, reward_marker_center_x=640),
+                _state(
+                    enemy=False,
+                    stage_active=False,
+                    reward_marker=True,
+                    reward_marker_center_x=640,
+                    claim_prompt=True,
+                ),
+            ],
+            clock=clock,
+            profile_overrides={"post_combat_reward": {"enabled": True, "interact_key": "f"}},
+        )
+        app = _FakeApp()
+        action_trace: list[dict] = []
+        combat_state_trace: list[dict] = []
+
+        with patch("plans.yihuan.src.actions.combat_actions.time.monotonic", side_effect=clock.monotonic), patch(
+            "plans.yihuan.src.actions.combat_actions.time.sleep",
+            side_effect=clock.sleep,
+        ):
+            result = combat_actions._collect_post_combat_reward(
+                app,
+                service,
+                service.profile,
+                profile_name="default_1280x720_cn",
+                dry_run=False,
+                action_trace=action_trace,
+                combat_state_trace=combat_state_trace,
+                capture_debug=None,
+                start_time=0.0,
+                trace_limit=50,
+            )
+
+        self.assertEqual(result["status"], "success")
+        self.assertIn(("key_down", "w"), app.calls)
+        self.assertIn(("key_up", "w"), app.calls)
+        self.assertIn(("press_key", "f", 1), app.calls)
+        actions = [entry["action"] for entry in action_trace]
+        self.assertIn("reward_move_forward_start", actions)
+        self.assertIn("reward_claim_prompt_found", actions)
+        self.assertIn("reward_interact", actions)
+
+    def test_collect_post_combat_reward_aligns_marker_to_configured_x_only(self):
+        clock = _FakeClock()
+        service = _FakeCombatService(
+            [
+                _state(enemy=False, stage_active=False, reward_marker=True, reward_marker_center_x=700),
+                _state(enemy=False, stage_active=False, reward_marker=True, reward_marker_center_x=638),
+                _state(
+                    enemy=False,
+                    stage_active=False,
+                    reward_marker=True,
+                    reward_marker_center_x=638,
+                    claim_prompt=True,
+                ),
+            ],
+            clock=clock,
+            profile_overrides={
+                "post_combat_reward": {
+                    "enabled": True,
+                    "align_target_x": 640,
+                    "align_tolerance_px": 20,
+                    "look_pixels_per_px": 1.0,
+                    "min_turn_pixels": 1,
+                    "max_turn_pixels": 200,
+                }
+            },
+        )
+        app = _FakeApp()
+        action_trace: list[dict] = []
+        combat_state_trace: list[dict] = []
+
+        with patch("plans.yihuan.src.actions.combat_actions.time.monotonic", side_effect=clock.monotonic), patch(
+            "plans.yihuan.src.actions.combat_actions.time.sleep",
+            side_effect=clock.sleep,
+        ):
+            result = combat_actions._collect_post_combat_reward(
+                app,
+                service,
+                service.profile,
+                profile_name="default_1280x720_cn",
+                dry_run=False,
+                action_trace=action_trace,
+                combat_state_trace=combat_state_trace,
+                capture_debug=None,
+                start_time=0.0,
+                trace_limit=50,
+            )
+
+        self.assertEqual(result["status"], "success")
+        align_entries = [entry for entry in action_trace if entry["action"] == "reward_align_marker"]
+        self.assertEqual(len(align_entries), 1)
+        self.assertEqual(align_entries[0]["marker_center_x"], 700)
+        self.assertEqual(align_entries[0]["target_x"], 640.0)
+        self.assertEqual(align_entries[0]["error_x"], 60.0)
+        self.assertNotIn("screen_center_x", align_entries[0])
+        self.assertEqual(sum(call[1] for call in app.calls if call[0] == "look_delta"), 40)
+        self.assertIn(("key_down", "w"), app.calls)
+        self.assertIn(("press_key", "f", 1), app.calls)
+
+    def test_reward_turn_pixels_preserves_direction_and_deadzone(self):
+        self.assertEqual(
+            combat_actions._reward_turn_pixels_for_error(
+                -296,
+                align_tolerance_px=50,
+                look_pixels_per_px=0.55,
+                min_turn_pixels=8,
+                max_turn_pixels=160,
+            ),
+            -135,
+        )
+        self.assertEqual(
+            combat_actions._reward_turn_pixels_for_error(
+                306,
+                align_tolerance_px=50,
+                look_pixels_per_px=0.55,
+                min_turn_pixels=8,
+                max_turn_pixels=160,
+            ),
+            141,
+        )
+        self.assertEqual(
+            combat_actions._reward_turn_pixels_for_error(
+                42,
+                align_tolerance_px=50,
+                look_pixels_per_px=0.55,
+                min_turn_pixels=8,
+                max_turn_pixels=160,
+            ),
+            0,
+        )
 
     def test_run_session_audio_dodge_has_highest_priority(self):
         clock = _FakeClock()
@@ -698,6 +885,7 @@ class TestYihuanCombatActions(unittest.TestCase):
 def _state(
     *,
     enemy: bool,
+    stage_active: bool | None = None,
     target: bool = False,
     supported: bool = True,
     current_slot: int | None = 1,
@@ -710,14 +898,26 @@ def _state(
     enemy_direction_count: int = 0,
     enemy_direction_primary_side: str | None = None,
     enemy_direction_markers: list[dict] | None = None,
+    reward_marker: bool = False,
+    reward_marker_center_x: int | None = None,
+    claim_prompt: bool = False,
 ) -> dict:
     resolved_skill_state = skill_state or ("ready" if skill else "disabled_or_unready")
     resolved_ultimate_state = ultimate_state or ("ready" if ultimate else "disabled_or_unready")
+    resolved_stage_active = bool(enemy) if stage_active is None else bool(stage_active)
     return {
         "profile_name": "default_1280x720_cn",
         "capture_size": [1280, 720],
         "in_supported_scene": bool(supported),
-        "in_combat": bool(enemy),
+        "in_combat": resolved_stage_active,
+        "remaining_enemy_marker_found": resolved_stage_active,
+        "remaining_enemy_marker_count": 1 if resolved_stage_active else 0,
+        "remaining_enemy_markers": (
+            [{"x": 28, "y": 187, "width": 20, "height": 23, "region": "remaining_enemy_marker"}]
+            if resolved_stage_active
+            else []
+        ),
+        "front_enemy_found": bool(enemy),
         "target_found": bool(target),
         "target_confidence": 0.84 if target else 0.0,
         "enemy_level_found": False,
@@ -737,6 +937,12 @@ def _state(
         "ultimate_state": resolved_ultimate_state,
         "arc_available": False,
         "challenge_success_found": bool(challenge_success),
+        "reward_marker_found": bool(reward_marker),
+        "reward_marker_center_x": reward_marker_center_x if reward_marker else None,
+        "reward_marker_center_y": 360 if reward_marker else None,
+        "reward_marker_box": [630, 350, 20, 20] if reward_marker else [],
+        "claim_memento_prompt_found": bool(claim_prompt),
+        "claim_memento_prompt_box": [777, 384, 20, 18] if claim_prompt else [],
         "confidence": 0.8 if enemy else 0.1,
         "debug": {},
     }
@@ -758,6 +964,14 @@ def _paste_template(image: np.ndarray, template_path: str, *, x: int, y: int) ->
     image[y : y + height, x : x + width] = template
 
 
+def _template_size(template_path: str) -> tuple[int, int]:
+    template = cv2.imread(str(Path(template_path)), cv2.IMREAD_COLOR)
+    if template is None:
+        raise FileNotFoundError(template_path)
+    height, width = template.shape[:2]
+    return width, height
+
+
 def _region_view(image: np.ndarray, region: tuple[int, int, int, int]) -> np.ndarray:
     x, y, width, height = region
     return image[y : y + height, x : x + width]
@@ -776,6 +990,23 @@ def _draw_enemy_direction_marker(
     color: tuple[int, int, int],
 ) -> None:
     cv2.circle(image, center, int(radius), color, thickness=-1, lineType=cv2.LINE_AA)
+
+
+def _draw_remaining_enemy_marker(image: np.ndarray, profile: dict) -> None:
+    x, y, _width, _height = tuple(profile["regions"]["remaining_enemy_marker"])
+    marker_color = _rgb_from_cv2_hsv(94, 180, 230)
+    points = np.array(
+        [
+            [x + 8, y + 24],
+            [x + 20, y + 12],
+            [x + 30, y + 17],
+            [x + 20, y + 24],
+            [x + 30, y + 31],
+            [x + 20, y + 36],
+        ],
+        dtype=np.int32,
+    )
+    cv2.fillPoly(image, [points], marker_color, lineType=cv2.LINE_AA)
 
 
 def _rgb_from_cv2_hsv(h: int, s: int, v: int) -> tuple[int, int, int]:

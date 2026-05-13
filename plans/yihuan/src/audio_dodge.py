@@ -104,17 +104,30 @@ class AudioDodgeRuntime:
     def start(self) -> None:
         if not self.settings.enabled:
             self._status = "disabled"
+            logger.info("AudioDodge[start] disabled")
             return
         if sc is None:
             self._set_error("soundcard_unavailable")
+            logger.warning("AudioDodge[start] unavailable error=soundcard_unavailable")
             return
         if self._error is not None:
+            logger.warning("AudioDodge[start] unavailable error=%s sample_path=%s", self._error, self.settings.sample_path)
             return
         if self._thread is not None and self._thread.is_alive():
+            logger.info("AudioDodge[start] already_running status=%s", self._status)
             return
         self._stop_event.clear()
         self._thread = threading.Thread(target=self._run_loop, name="yihuan-audio-dodge", daemon=True)
         self._thread.start()
+        logger.info(
+            "AudioDodge[start] thread_started sample_path=%s sample_rate=%s channels=%s chunk_size=%s threshold=%.4f cooldown_sec=%.3f",
+            self.settings.sample_path,
+            int(self.settings.sample_rate),
+            int(self.settings.channels),
+            int(self.settings.chunk_size),
+            float(self.settings.threshold),
+            float(self.settings.cooldown_sec),
+        )
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -159,6 +172,8 @@ class AudioDodgeRuntime:
                 "last_score": round(float(self._last_score), 5),
                 "queued_triggers": int(len(self._events)),
                 "sample_path": str(self.settings.sample_path),
+                "threshold": round(float(self.settings.threshold), 5),
+                "cooldown_sec": round(float(self.settings.cooldown_sec), 3),
             }
 
     def _prepare_reference(self) -> None:
@@ -186,13 +201,23 @@ class AudioDodgeRuntime:
         self._fft_n = 1 << ((self._buf_size + len(self._ref) - 1).bit_length())
         self._ref_fft = np.fft.rfft(self._ref, n=self._fft_n).conj()
         self._status = "ready"
+        logger.info(
+            "AudioDodge[sample] ready sample_path=%s sample_frames=%s sample_rate=%s window_sec=%.3f threshold=%.4f",
+            self.settings.sample_path,
+            int(len(self._ref)),
+            int(self.settings.sample_rate),
+            float(self.settings.window_sec),
+            float(self.settings.threshold),
+        )
 
     def _run_loop(self) -> None:
         self._active = True
         self._status = "running"
         while not self._stop_event.is_set():
             try:
-                speaker = sc.get_microphone(id=str(sc.default_speaker().name), include_loopback=True)
+                default_speaker = sc.default_speaker()
+                speaker = sc.get_microphone(id=str(default_speaker.name), include_loopback=True)
+                logger.info("AudioDodge[loopback] recording speaker=%s loopback=%s", default_speaker, speaker)
                 with speaker.recorder(
                     samplerate=self.settings.sample_rate,
                     channels=self.settings.channels,
@@ -219,6 +244,7 @@ class AudioDodgeRuntime:
                 with self._lock:
                     self._events.append({"t": now, "score": float(score)})
                 self._last_trigger_at = now
+                logger.info("AudioDodge[trigger] score=%.5f threshold=%.5f", float(score), float(self.settings.threshold))
             self._ready = False
             return
         if not hit:

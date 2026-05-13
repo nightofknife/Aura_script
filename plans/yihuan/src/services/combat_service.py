@@ -63,11 +63,13 @@ class YihuanCombatService:
         health_rect_payload = dict(payload.get("enemy_health_rect") or {})
         boss_health_rect_payload = dict(payload.get("boss_health_rect") or {})
         enemy_direction_rect_payload = dict(payload.get("enemy_direction_rect") or {})
+        remaining_enemy_marker_rect_payload = dict(payload.get("remaining_enemy_marker_rect") or {})
         audio_dodge_payload = dict(payload.get("audio_dodge") or {})
         switch_policy_payload = dict(payload.get("switch_policy") or {})
         ability_schedule_payload = dict(payload.get("ability_schedule") or {})
         combat_exit_payload = dict(payload.get("combat_exit") or {})
         enemy_direction_reacquire_payload = dict(payload.get("enemy_direction_reacquire") or {})
+        post_combat_reward_payload = dict(payload.get("post_combat_reward") or {})
 
         ability_regions = {
             "skill": self._coerce_region(
@@ -158,6 +160,10 @@ class YihuanCombatService:
                     regions_payload.get("enemy_direction_bottom"),
                     default=(500, 610, 300, 90),
                 ),
+                "remaining_enemy_marker": self._coerce_region(
+                    regions_payload.get("remaining_enemy_marker"),
+                    default=(20, 170, 70, 80),
+                ),
                 "boss_health_bar": self._coerce_region(
                     regions_payload.get("boss_health_bar"),
                     default=(250, 612, 780, 72),
@@ -168,6 +174,14 @@ class YihuanCombatService:
                 "challenge_success_region": self._coerce_region(
                     regions_payload.get("challenge_success_region"),
                     default=(450, 130, 380, 150),
+                ),
+                "reward_marker_search_region": self._coerce_region(
+                    regions_payload.get("reward_marker_search_region"),
+                    default=(120, 110, 900, 520),
+                ),
+                "claim_memento_prompt_region": self._coerce_region(
+                    regions_payload.get("claim_memento_prompt_region"),
+                    default=(760, 372, 50, 50),
                 ),
             },
             "ability_regions": ability_regions,
@@ -230,6 +244,67 @@ class YihuanCombatService:
                     combat_exit_payload.get("challenge_success_immediate", True)
                 ),
                 "reset_on_reacquire": bool(combat_exit_payload.get("reset_on_reacquire", True)),
+            },
+            "post_combat_reward": {
+                "enabled": bool(post_combat_reward_payload.get("enabled", True)),
+                "search_timeout_sec": max(
+                    self._coerce_float(post_combat_reward_payload.get("search_timeout_sec"), 14.0),
+                    0.1,
+                ),
+                "walk_timeout_sec": max(
+                    self._coerce_float(post_combat_reward_payload.get("walk_timeout_sec"), 26.0),
+                    0.1,
+                ),
+                "scan_interval_sec": max(
+                    self._coerce_float(post_combat_reward_payload.get("scan_interval_sec"), 0.18),
+                    0.05,
+                ),
+                "align_target_x": max(
+                    self._coerce_int(post_combat_reward_payload.get("align_target_x"), 640),
+                    1,
+                ),
+                "align_tolerance_px": max(
+                    self._coerce_int(post_combat_reward_payload.get("align_tolerance_px"), 50),
+                    1,
+                ),
+                "look_pixels_per_px": max(
+                    self._coerce_float(post_combat_reward_payload.get("look_pixels_per_px"), 0.55),
+                    0.01,
+                ),
+                "min_turn_pixels": max(
+                    self._coerce_int(post_combat_reward_payload.get("min_turn_pixels"), 8),
+                    1,
+                ),
+                "max_turn_pixels": max(
+                    self._coerce_int(post_combat_reward_payload.get("max_turn_pixels"), 160),
+                    1,
+                ),
+                "post_turn_delay_ms": max(
+                    self._coerce_int(post_combat_reward_payload.get("post_turn_delay_ms"), 120),
+                    0,
+                ),
+                "walk_key": str(post_combat_reward_payload.get("walk_key") or "w"),
+                "walk_step_sec": max(
+                    self._coerce_float(post_combat_reward_payload.get("walk_step_sec"), 0.24),
+                    0.05,
+                ),
+                "search_turn_pixels": max(
+                    self._coerce_int(post_combat_reward_payload.get("search_turn_pixels"), 520),
+                    1,
+                ),
+                "search_turn_interval_sec": max(
+                    self._coerce_float(post_combat_reward_payload.get("search_turn_interval_sec"), 0.65),
+                    0.1,
+                ),
+                "prompt_required_scans": max(
+                    self._coerce_int(post_combat_reward_payload.get("prompt_required_scans"), 1),
+                    1,
+                ),
+                "interact_key": str(post_combat_reward_payload.get("interact_key") or "f"),
+                "post_interact_delay_ms": max(
+                    self._coerce_int(post_combat_reward_payload.get("post_interact_delay_ms"), 120),
+                    0,
+                ),
             },
             "ability_schedule": {
                 "skill_interval_sec": max(
@@ -308,6 +383,12 @@ class YihuanCombatService:
                     default_lower_2=(0, 50, 150),
                     default_upper_2=(4, 150, 255),
                 ),
+                "remaining_enemy_marker_cyan": self._coerce_hsv_rule(
+                    hsv_payload.get("remaining_enemy_marker_cyan"),
+                    default_lower=(85, 80, 80),
+                    default_upper=(105, 255, 255),
+                    default_min_ratio=0.01,
+                ),
             },
             "ability_thresholds": self._coerce_ability_thresholds(ability_thresholds_payload),
             "enemy_health_rect": {
@@ -363,6 +444,30 @@ class YihuanCombatService:
                     1.0,
                 ),
             },
+            "remaining_enemy_marker_rect": {
+                "min_width": max(self._coerce_int(remaining_enemy_marker_rect_payload.get("min_width"), 12), 1),
+                "max_width": max(self._coerce_int(remaining_enemy_marker_rect_payload.get("max_width"), 36), 1),
+                "min_height": max(self._coerce_int(remaining_enemy_marker_rect_payload.get("min_height"), 14), 1),
+                "max_height": max(self._coerce_int(remaining_enemy_marker_rect_payload.get("max_height"), 34), 1),
+                "min_area": max(self._coerce_int(remaining_enemy_marker_rect_payload.get("min_area"), 120), 1),
+                "max_area": max(self._coerce_int(remaining_enemy_marker_rect_payload.get("max_area"), 850), 1),
+                "min_aspect_ratio": max(
+                    self._coerce_float(remaining_enemy_marker_rect_payload.get("min_aspect_ratio"), 0.45),
+                    0.1,
+                ),
+                "max_aspect_ratio": max(
+                    self._coerce_float(remaining_enemy_marker_rect_payload.get("max_aspect_ratio"), 1.65),
+                    0.1,
+                ),
+                "min_fill_ratio": min(
+                    max(self._coerce_float(remaining_enemy_marker_rect_payload.get("min_fill_ratio"), 0.22), 0.0),
+                    1.0,
+                ),
+                "max_fill_ratio": min(
+                    max(self._coerce_float(remaining_enemy_marker_rect_payload.get("max_fill_ratio"), 0.9), 0.0),
+                    1.0,
+                ),
+            },
             "thresholds": {
                 "supported_scene_min_features": max(
                     self._coerce_int(thresholds_payload.get("supported_scene_min_features"), 1),
@@ -377,12 +482,33 @@ class YihuanCombatService:
                     default_threshold=0.68,
                     default_scales=(0.75, 0.9, 1.0, 1.15, 1.3),
                 ),
+                "remaining_enemy_marker": self._coerce_template_spec(
+                    templates_payload.get("remaining_enemy_marker"),
+                    default_path=f"{resolved_name}/remaining_enemy_marker.png",
+                    default_region=regions_payload.get("remaining_enemy_marker") or (20, 170, 70, 80),
+                    default_threshold=0.78,
+                    default_scales=(0.9, 1.0, 1.1),
+                ),
                 "challenge_success": self._coerce_template_spec(
                     templates_payload.get("challenge_success"),
                     default_path=f"{resolved_name}/challenge_success.png",
                     default_region=regions_payload.get("challenge_success_region") or (450, 130, 380, 150),
                     default_threshold=0.74,
                     default_scales=(1.0,),
+                ),
+                "reward_marker": self._coerce_template_spec(
+                    templates_payload.get("reward_marker"),
+                    default_path=f"{resolved_name}/reward_marker.png",
+                    default_region=regions_payload.get("reward_marker_search_region") or (80, 300, 1040, 330),
+                    default_threshold=0.72,
+                    default_scales=(0.8, 0.9, 1.0, 1.12, 1.25),
+                ),
+                "claim_memento_prompt": self._coerce_template_spec(
+                    templates_payload.get("claim_memento_prompt"),
+                    default_path=f"{resolved_name}/claim_memento_prompt.png",
+                    default_region=regions_payload.get("claim_memento_prompt_region") or (760, 372, 50, 50),
+                    default_threshold=0.94,
+                    default_scales=(0.9, 1.0, 1.08),
                 ),
             },
             "audio_dodge": {
@@ -453,6 +579,7 @@ class YihuanCombatService:
             dict(profile["enemy_direction_rect"]),
             profile,
         )
+        remaining_enemy_markers = self._find_remaining_enemy_markers(source_image, profile)
         boss_health_boxes = self._find_enemy_health_boxes(
             source_image,
             regions["boss_health_bar"],
@@ -480,16 +607,40 @@ class YihuanCombatService:
             dict(profile["templates"])["target_lock"],
             profile=profile,
         )
+        remaining_enemy_marker_match = self._match_template_in_region(
+            source_image,
+            dict(profile["templates"])["remaining_enemy_marker"],
+            profile=profile,
+        )
         success_match = self._match_template_in_region(
             source_image,
             dict(profile["templates"])["challenge_success"],
             profile=profile,
         )
+        reward_marker_match = {"found": False, "score": 0.0, "box": None}
+        claim_prompt_match = {"found": False, "score": 0.0, "box": None}
 
         enemy_health_found = bool(enemy_health_boxes)
         enemy_direction_found = bool(enemy_direction_markers)
+        remaining_enemy_marker_found = bool(remaining_enemy_markers or remaining_enemy_marker_match["found"])
+        if (
+            not remaining_enemy_markers
+            and bool(remaining_enemy_marker_match["found"])
+            and remaining_enemy_marker_match.get("box") is not None
+        ):
+            mx, my, mw, mh = [int(item) for item in remaining_enemy_marker_match["box"]]
+            remaining_enemy_markers = [
+                {
+                    "x": mx,
+                    "y": my,
+                    "width": mw,
+                    "height": mh,
+                    "region": "remaining_enemy_marker_template",
+                }
+            ]
         enemy_direction_primary_side = self._resolve_primary_enemy_direction(enemy_direction_markers)
         boss_found = bool(boss_health_boxes)
+        front_enemy_found = bool(enemy_health_found or boss_found)
         team_found = team_ratio >= hsv_rules["team_hud"]["min_ratio"]
         ability_available = {
             name: ability_analysis[name]["state"] == "ready"
@@ -498,6 +649,27 @@ class YihuanCombatService:
         current_slot = self._detect_current_slot(slot_ratios, hsv_rules["slot_active"]["min_ratio"])
         target_found = bool(target_match["found"] and (enemy_health_found or boss_found))
         challenge_success_found = bool(success_match["found"])
+        reward_scan_allowed = bool(not remaining_enemy_marker_found)
+        if reward_scan_allowed:
+            reward_marker_match = self._match_template_in_region(
+                source_image,
+                dict(profile["templates"])["reward_marker"],
+                profile=profile,
+            )
+            claim_prompt_match = self._match_template_in_region(
+                source_image,
+                dict(profile["templates"])["claim_memento_prompt"],
+                profile=profile,
+            )
+        reward_marker_found = bool(reward_marker_match["found"])
+        reward_marker_box = reward_marker_match.get("box")
+        reward_marker_center_x = None
+        reward_marker_center_y = None
+        if reward_marker_box is not None:
+            rx, ry, rw, rh = [int(item) for item in reward_marker_box]
+            reward_marker_center_x = int(round(rx + rw / 2.0))
+            reward_marker_center_y = int(round(ry + rh / 2.0))
+        claim_memento_prompt_found = bool(claim_prompt_match["found"])
 
         supported_features = [
             team_found,
@@ -506,14 +678,14 @@ class YihuanCombatService:
         ]
         supported_feature_count = sum(1 for value in supported_features if value)
         in_supported_scene = supported_feature_count >= int(profile["thresholds"]["supported_scene_min_features"])
-        in_combat = bool(enemy_health_found or boss_found)
-        combat_gate_reason = "enemy_health" if enemy_health_found else ("boss_health" if boss_found else "none")
+        in_combat = bool(remaining_enemy_marker_found)
+        combat_gate_reason = "remaining_enemy_marker" if remaining_enemy_marker_found else "none"
         confidence = min(
             1.0,
             (
-                int(enemy_health_found)
+                int(remaining_enemy_marker_found)
+                + int(front_enemy_found)
                 + int(target_found)
-                + int(boss_found)
                 + (1 if any(ability_available.values()) else 0)
             )
             / 4.0,
@@ -527,6 +699,19 @@ class YihuanCombatService:
             "target_found": bool(target_found),
             "target_confidence": round(float(target_match["score"]), 3),
             "enemy_level_found": False,
+            "front_enemy_found": bool(front_enemy_found),
+            "remaining_enemy_marker_found": bool(remaining_enemy_marker_found),
+            "remaining_enemy_marker_count": int(len(remaining_enemy_markers)),
+            "remaining_enemy_markers": [
+                {
+                    "x": int(box["x"]),
+                    "y": int(box["y"]),
+                    "width": int(box["width"]),
+                    "height": int(box["height"]),
+                    "region": str(box["region"]),
+                }
+                for box in remaining_enemy_markers[:5]
+            ],
             "enemy_health_found": bool(enemy_health_found),
             "enemy_health_count": int(len(enemy_health_boxes)),
             "enemy_direction_found": bool(enemy_direction_found),
@@ -552,10 +737,40 @@ class YihuanCombatService:
             "ultimate_state": str(ability_analysis["ultimate"]["state"]),
             "arc_available": False,
             "challenge_success_found": bool(challenge_success_found),
+            "reward_marker_found": bool(reward_marker_found),
+            "reward_marker_confidence": round(float(reward_marker_match["score"]), 3),
+            "reward_marker_box": [
+                int(item)
+                for item in (list(reward_marker_box) if reward_marker_box is not None else [])
+            ],
+            "reward_marker_center_x": reward_marker_center_x,
+            "reward_marker_center_y": reward_marker_center_y,
+            "claim_memento_prompt_found": bool(claim_memento_prompt_found),
+            "claim_memento_prompt_confidence": round(float(claim_prompt_match["score"]), 3),
+            "claim_memento_prompt_box": [
+                int(item)
+                for item in (
+                    list(claim_prompt_match["box"]) if claim_prompt_match.get("box") is not None else []
+                )
+            ],
             "confidence": round(float(confidence), 3),
             "debug": {
                 "combat_gate_reason": combat_gate_reason,
+                "remaining_enemy_marker_search_region": list(
+                    self.scale_region(source_image, regions["remaining_enemy_marker"], profile=profile)
+                ),
+                "remaining_enemy_marker_boxes": [
+                    {
+                        "x": int(box["x"]),
+                        "y": int(box["y"]),
+                        "width": int(box["width"]),
+                        "height": int(box["height"]),
+                        "region": str(box["region"]),
+                    }
+                    for box in remaining_enemy_markers[:5]
+                ],
                 "enemy_signal_count": int(len(enemy_health_boxes)),
+                "front_enemy_signal_count": int(len(enemy_health_boxes) + len(boss_health_boxes)),
                 "boss_signal": bool(boss_found),
                 "enemy_health_search_region": list(
                     self.scale_region(source_image, regions["enemy_health_search_region"], profile=profile)
@@ -567,6 +782,12 @@ class YihuanCombatService:
                 },
                 "boss_health_search_region": list(
                     self.scale_region(source_image, regions["boss_health_bar"], profile=profile)
+                ),
+                "reward_marker_search_region": list(
+                    self.scale_region(source_image, regions["reward_marker_search_region"], profile=profile)
+                ),
+                "claim_memento_prompt_region": list(
+                    self.scale_region(source_image, regions["claim_memento_prompt_region"], profile=profile)
                 ),
                 "ratios": {
                     "boss_health": round(float(len(boss_health_boxes)), 4),
@@ -589,7 +810,10 @@ class YihuanCombatService:
                 },
                 "matches": {
                     "target_lock": round(float(target_match["score"]), 4),
+                    "remaining_enemy_marker": round(float(remaining_enemy_marker_match["score"]), 4),
                     "challenge_success": round(float(success_match["score"]), 4),
+                    "reward_marker": round(float(reward_marker_match["score"]), 4),
+                    "claim_memento_prompt": round(float(claim_prompt_match["score"]), 4),
                 },
                 "target_lock_box": [
                     int(item)
@@ -614,8 +838,19 @@ class YihuanCombatService:
                     [int(box["x"]), int(box["y"]), int(box["width"]), int(box["height"])]
                     for box in boss_health_boxes[:5]
                 ],
+                "reward_marker_box": [
+                    int(item)
+                    for item in (list(reward_marker_box) if reward_marker_box is not None else [])
+                ],
+                "claim_memento_prompt_box": [
+                    int(item)
+                    for item in (
+                        list(claim_prompt_match["box"]) if claim_prompt_match.get("box") is not None else []
+                    )
+                ],
                 "feature_counts": {
                     "supported": int(supported_feature_count),
+                    "remaining_enemy_marker": int(len(remaining_enemy_markers)),
                     "enemy_health": int(len(enemy_health_boxes)),
                     "enemy_direction": int(len(enemy_direction_markers)),
                 },
@@ -652,6 +887,10 @@ class YihuanCombatService:
                 1,
                 cv2.LINE_AA,
             )
+        remaining_region = list(dict(resolved_state.get("debug") or {}).get("remaining_enemy_marker_search_region") or [])
+        if len(remaining_region) >= 4:
+            rx, ry, rw, rh = [int(item) for item in remaining_region[:4]]
+            cv2.rectangle(canvas, (rx, ry), (rx + rw, ry + rh), (80, 235, 235), 2)
         target_lock_box = list(dict(resolved_state.get("debug") or {}).get("target_lock_box") or [])
         if len(target_lock_box) >= 4:
             tx, ty, tw, th = [int(item) for item in target_lock_box[:4]]
@@ -667,16 +906,43 @@ class YihuanCombatService:
             width = int(box.get("width") or 0)
             height = int(box.get("height") or 0)
             cv2.rectangle(canvas, (x, y), (x + width, y + height), (255, 120, 210), 2)
+        for box in list(dict(resolved_state.get("debug") or {}).get("remaining_enemy_marker_boxes") or []):
+            if not isinstance(box, Mapping):
+                continue
+            x = int(box.get("x") or 0)
+            y = int(box.get("y") or 0)
+            width = int(box.get("width") or 0)
+            height = int(box.get("height") or 0)
+            cv2.rectangle(canvas, (x, y), (x + width, y + height), (80, 235, 235), 2)
         boss_boxes = list(dict(resolved_state.get("debug") or {}).get("boss_health_boxes") or [])
         if boss_boxes:
             x, y, width, height = [int(item) for item in boss_boxes[0][:4]]
             cv2.rectangle(canvas, (x, y), (x + width, y + height), (80, 180, 255), 2)
+        reward_region = list(dict(resolved_state.get("debug") or {}).get("reward_marker_search_region") or [])
+        if len(reward_region) >= 4:
+            rx, ry, rw, rh = [int(item) for item in reward_region[:4]]
+            cv2.rectangle(canvas, (rx, ry), (rx + rw, ry + rh), (120, 255, 160), 1)
+        reward_box = list(dict(resolved_state.get("debug") or {}).get("reward_marker_box") or [])
+        if len(reward_box) >= 4:
+            rx, ry, rw, rh = [int(item) for item in reward_box[:4]]
+            cv2.rectangle(canvas, (rx, ry), (rx + rw, ry + rh), (120, 255, 160), 2)
+            cv2.line(canvas, (rx + rw // 2, 0), (rx + rw // 2, canvas.shape[0]), (120, 255, 160), 1)
+        claim_region = list(dict(resolved_state.get("debug") or {}).get("claim_memento_prompt_region") or [])
+        if len(claim_region) >= 4:
+            px, py, pw, ph = [int(item) for item in claim_region[:4]]
+            cv2.rectangle(canvas, (px, py), (px + pw, py + ph), (255, 120, 210), 1)
+        claim_box = list(dict(resolved_state.get("debug") or {}).get("claim_memento_prompt_box") or [])
+        if len(claim_box) >= 4:
+            px, py, pw, ph = [int(item) for item in claim_box[:4]]
+            cv2.rectangle(canvas, (px, py), (px + pw, py + ph), (255, 120, 210), 2)
 
         extra = dict(overlay or {})
         summary_lines = [
             f"phase={str(extra.get('phase') or 'unknown')}",
             f"note={str(extra.get('note') or '')}",
             f"t={float(extra.get('t') or 0.0):.3f}s",
+            f"remaining_marker={bool(resolved_state.get('remaining_enemy_marker_found'))}",
+            f"front_enemy={bool(resolved_state.get('front_enemy_found'))}",
             f"enemy_health_count={int(resolved_state.get('enemy_health_count') or 0)}",
             f"enemy_health_found={bool(resolved_state.get('enemy_health_found'))}",
             f"enemy_direction_count={int(resolved_state.get('enemy_direction_count') or 0)}",
@@ -686,6 +952,9 @@ class YihuanCombatService:
             f"in_combat={bool(resolved_state.get('in_combat'))}",
             f"combat_active={bool(extra.get('combat_active'))}",
             f"target_found={bool(resolved_state.get('target_found'))}",
+            f"reward_marker={bool(resolved_state.get('reward_marker_found'))}",
+            f"reward_x={resolved_state.get('reward_marker_center_x')}",
+            f"claim_prompt={bool(resolved_state.get('claim_memento_prompt_found'))}",
             f"current_slot={resolved_state.get('current_slot')}",
             f"skill_state={resolved_state.get('skill_state')}",
             f"ultimate_state={resolved_state.get('ultimate_state')}",
@@ -788,6 +1057,19 @@ class YihuanCombatService:
         boxes.sort(key=lambda item: (item["y"], item["x"]))
         return boxes
 
+    def _find_remaining_enemy_markers(
+        self,
+        source_image: np.ndarray,
+        profile: Mapping[str, Any],
+    ) -> list[dict[str, Any]]:
+        return self._find_enemy_direction_markers(
+            source_image,
+            {"remaining_enemy_marker": dict(profile["regions"])["remaining_enemy_marker"]},
+            dict(profile["hsv_rules"])["remaining_enemy_marker_cyan"],
+            dict(profile["remaining_enemy_marker_rect"]),
+            profile,
+        )
+
     def _find_enemy_direction_markers(
         self,
         source_image: np.ndarray,
@@ -878,7 +1160,11 @@ class YihuanCombatService:
         template = self._load_template_image(template_path)
         if template is None:
             return {"found": False, "score": 0.0, "box": None}
-        template_mask = self._load_template_mask(template_path)
+        template_mask = (
+            self._load_template_mask(template_path, mask_path=template_spec.get("mask_path"))
+            if bool(template_spec.get("use_mask", True))
+            else None
+        )
 
         search_region = self.scale_region(source_image, tuple(template_spec["search_region"]), profile=profile)
         crop = self._crop_region(source_image, search_region)
@@ -933,17 +1219,45 @@ class YihuanCombatService:
         if not path.is_file():
             self._template_cache[path] = None
             return None
-        image = cv2.imread(str(path), cv2.IMREAD_COLOR)
-        if image is None:
+        raw_image = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+        if raw_image is None:
             self._template_cache[path] = None
             self._template_mask_cache[path] = None
             return None
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        alpha_mask = None
+        if raw_image.ndim == 3 and raw_image.shape[2] == 4:
+            alpha_mask = raw_image[:, :, 3]
+            image = cv2.cvtColor(raw_image[:, :, :3], cv2.COLOR_BGR2RGB)
+        elif raw_image.ndim == 3:
+            image = cv2.cvtColor(raw_image, cv2.COLOR_BGR2RGB)
+        else:
+            image = cv2.cvtColor(raw_image, cv2.COLOR_GRAY2RGB)
         self._template_cache[path] = image
-        self._template_mask_cache[path] = self._build_template_mask(image)
+        self._template_mask_cache[path] = self._build_template_mask(image, alpha_mask=alpha_mask)
         return image
 
-    def _load_template_mask(self, template_path: Any) -> np.ndarray | None:
+    def _load_template_mask(self, template_path: Any, *, mask_path: Any | None = None) -> np.ndarray | None:
+        if mask_path is not None:
+            path = Path(str(mask_path)).resolve()
+            cached = self._template_mask_cache.get(path)
+            if cached is not None or path in self._template_mask_cache:
+                return cached
+            if not path.is_file():
+                self._template_mask_cache[path] = None
+                return None
+            raw_mask = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+            if raw_mask is None:
+                self._template_mask_cache[path] = None
+                return None
+            if raw_mask.ndim == 3 and raw_mask.shape[2] == 4:
+                mask_source = raw_mask[:, :, 3]
+            elif raw_mask.ndim == 3:
+                mask_source = cv2.cvtColor(raw_mask, cv2.COLOR_BGR2GRAY)
+            else:
+                mask_source = raw_mask
+            mask = (mask_source > 8).astype(np.uint8) * 255
+            self._template_mask_cache[path] = mask if np.any(mask) else None
+            return self._template_mask_cache[path]
         if template_path is None:
             return None
         path = Path(str(template_path)).resolve()
@@ -951,9 +1265,16 @@ class YihuanCombatService:
             self._load_template_image(template_path)
         return self._template_mask_cache.get(path)
 
-    def _build_template_mask(self, image: np.ndarray) -> np.ndarray | None:
+    def _build_template_mask(self, image: np.ndarray, *, alpha_mask: np.ndarray | None = None) -> np.ndarray | None:
         if image.size == 0:
             return None
+        if alpha_mask is not None:
+            visible = (alpha_mask > 8).astype(np.uint8) * 255
+            if np.all(visible):
+                return None
+            if not np.any(visible):
+                return None
+            return visible
         non_black = np.any(image > 8, axis=2).astype(np.uint8) * 255
         if np.all(non_black):
             return None
@@ -1212,6 +1533,12 @@ class YihuanCombatService:
             "search_region": self._coerce_region(payload.get("search_region"), default=self._coerce_region(default_region, default=(0, 0, 1, 1))),
             "match_threshold": min(max(self._coerce_float(payload.get("match_threshold"), default_threshold), 0.0), 1.0),
             "scales": self._coerce_scale_list(payload.get("scales"), default=default_scales),
+            "use_mask": bool(payload.get("use_mask", True)),
+            "mask_path": (
+                str(self._resolve_template_path(payload.get("mask_path")))
+                if payload.get("mask_path") is not None
+                else None
+            ),
         }
 
     def _resolve_template_path(self, value: Any) -> Path:

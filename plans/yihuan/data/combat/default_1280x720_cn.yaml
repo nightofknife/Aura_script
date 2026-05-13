@@ -58,6 +58,25 @@ combat_exit:
   challenge_success_immediate: true
   reset_on_reacquire: true
 
+post_combat_reward:
+  enabled: true
+  search_timeout_sec: 14.0
+  walk_timeout_sec: 26.0
+  scan_interval_sec: 0.18
+  align_target_x: 640
+  align_tolerance_px: 50
+  look_pixels_per_px: 0.55
+  min_turn_pixels: 8
+  max_turn_pixels: 160
+  post_turn_delay_ms: 120
+  walk_key: w
+  walk_step_sec: 0.24
+  interact_key: f
+  post_interact_delay_ms: 120
+  search_turn_pixels: 520
+  search_turn_interval_sec: 0.65
+  prompt_required_scans: 1
+
 ability_schedule:
   skill_interval_sec: 3.0
   ultimate_interval_sec: 5.0
@@ -76,10 +95,10 @@ regions:
     - 880
     - 320
   enemy_health_search_region:
-    - 160
-    - 105
-    - 960
-    - 380
+    - 0
+    - 0
+    - 1280
+    - 720
   enemy_direction_left:
     - 48
     - 310
@@ -95,6 +114,11 @@ regions:
     - 610
     - 300
     - 90
+  remaining_enemy_marker:
+    - 20
+    - 180
+    - 55
+    - 55
   boss_health_bar:
     - 250
     - 612
@@ -120,6 +144,16 @@ regions:
     - 130
     - 380
     - 150
+  reward_marker_search_region:
+    - 80
+    - 300
+    - 1040
+    - 330
+  claim_memento_prompt_region:
+    - 760
+    - 372
+    - 50
+    - 50
 
 ability_regions:
   skill:
@@ -170,6 +204,10 @@ hsv_rules:
     min_ratio: 0.003
     lower_2: [0, 50, 150]
     upper_2: [4, 150, 255]
+  remaining_enemy_marker_cyan:
+    lower: [88, 80, 100]
+    upper: [110, 255, 255]
+    min_ratio: 0.01
 
 ability_thresholds:
   ready:
@@ -224,10 +262,22 @@ enemy_direction_rect:
   min_fill_ratio: 0.16
   max_fill_ratio: 0.88
 
+remaining_enemy_marker_rect:
+  min_width: 12
+  max_width: 36
+  min_height: 10
+  max_height: 60
+  min_area: 60
+  max_area: 1200
+  min_aspect_ratio: 0.35
+  max_aspect_ratio: 1.65
+  min_fill_ratio: 0.22
+  max_fill_ratio: 0.90
+
 enemy_direction_reacquire:
   turn_interval_sec: 0.9
-  turn_pixels_side: 220
-  turn_pixels_bottom: 340
+  turn_pixels_side: 660
+  turn_pixels_bottom: 1020
   vertical_delta: 0
   post_turn_delay_ms: 80
   auto_target_after_turn: true
@@ -241,11 +291,27 @@ templates:
     search_region: [200, 120, 880, 320]
     match_threshold: 0.68
     scales: [0.75, 0.9, 1.0, 1.15, 1.3]
+  remaining_enemy_marker:
+    path: default_1280x720_cn/remaining_enemy_marker.png
+    search_region: [20, 180, 55, 55]
+    match_threshold: 0.78
+    scales: [0.9, 1.0, 1.1]
   challenge_success:
     path: default_1280x720_cn/challenge_success.png
     search_region: [450, 130, 380, 150]
     match_threshold: 0.74
     scales: [1.0]
+  reward_marker:
+    path: default_1280x720_cn/reward_marker.png
+    mask_path: default_1280x720_cn/reward_marker_mask.png
+    search_region: [80, 300, 1040, 330]
+    match_threshold: 0.72
+    scales: [0.8, 0.9, 1.0, 1.12, 1.25]
+  claim_memento_prompt:
+    path: default_1280x720_cn/claim_memento_prompt.png
+    search_region: [760, 372, 50, 50]
+    match_threshold: 0.94
+    scales: [0.9, 1.0, 1.08]
 
 audio_dodge:
   enabled: true

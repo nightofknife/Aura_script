@@ -22,6 +22,10 @@ class _CombatSessionCancelled(Exception):
     """Internal marker used to stop the sync combat action cooperatively."""
 
 
+_LOOK_SMOOTH_STEP_PIXELS = 80
+_LOOK_SMOOTH_STEP_DELAY_MS = 8
+
+
 def _coerce_bool(value: bool | str | int | float | None) -> bool:
     if isinstance(value, bool):
         return value
@@ -182,6 +186,8 @@ class _CombatCaptureLogger:
             "phase": str(phase),
             "in_combat": bool(payload.get("in_combat")),
             "combat_active": bool(combat_active) if combat_active is not None else bool(payload.get("in_combat")),
+            "remaining_enemy_marker_found": bool(payload.get("remaining_enemy_marker_found")),
+            "front_enemy_found": bool(payload.get("front_enemy_found")),
             "enemy_health_found": bool(payload.get("enemy_health_found")),
             "enemy_health_count": int(payload.get("enemy_health_count") or 0),
             "enemy_direction_found": bool(payload.get("enemy_direction_found")),
@@ -189,6 +195,9 @@ class _CombatCaptureLogger:
             "enemy_direction_primary_side": payload.get("enemy_direction_primary_side"),
             "boss_found": bool(payload.get("boss_found")),
             "target_found": bool(payload.get("target_found")),
+            "reward_marker_found": bool(payload.get("reward_marker_found")),
+            "reward_marker_center_x": payload.get("reward_marker_center_x"),
+            "claim_memento_prompt_found": bool(payload.get("claim_memento_prompt_found")),
             "current_slot": payload.get("current_slot"),
             "skill_state": payload.get("skill_state"),
             "ultimate_state": payload.get("ultimate_state"),
@@ -414,12 +423,17 @@ def _append_state_trace(
             "combat_active": bool(combat_active),
             "in_supported_scene": bool(state.get("in_supported_scene")),
             "in_combat": bool(state.get("in_combat")),
+            "remaining_enemy_marker_found": bool(state.get("remaining_enemy_marker_found")),
+            "front_enemy_found": _has_front_enemy(state),
             "target_found": bool(state.get("target_found")),
             "target_confidence": state.get("target_confidence"),
             "enemy_health_found": bool(state.get("enemy_health_found")),
             "enemy_health_count": int(state.get("enemy_health_count") or 0),
             "boss_found": bool(state.get("boss_found")),
             "challenge_success_found": bool(state.get("challenge_success_found")),
+            "reward_marker_found": bool(state.get("reward_marker_found")),
+            "reward_marker_center_x": state.get("reward_marker_center_x"),
+            "claim_memento_prompt_found": bool(state.get("claim_memento_prompt_found")),
             "current_slot": state.get("current_slot"),
             "skill_available": bool(state.get("skill_available")),
             "skill_state": state.get("skill_state"),
@@ -446,6 +460,7 @@ def _final_result(
     start_time: float,
     dry_run: bool,
     capture_debug: _CombatCaptureLogger | None = None,
+    post_combat_reward: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     result = {
         "status": status,
@@ -460,6 +475,7 @@ def _final_result(
         "action_trace": list(action_trace),
         "elapsed_sec": round(time.monotonic() - start_time, 3),
         "dry_run": bool(dry_run),
+        "post_combat_reward": dict(post_combat_reward or {}),
     }
     if capture_debug is not None:
         result.update(capture_debug.result_payload())
@@ -697,14 +713,37 @@ def _perform_look_delta_with_retry(
 ) -> None:
     if dry_run:
         return
-    _call_with_focus_retry(
-        app,
-        lambda: app.look_delta(int(dx), int(dy)),
-        dry_run=dry_run,
-        action_trace=action_trace,
-        start_time=start_time,
-        retry_reason=retry_reason,
+    total_dx = int(dx)
+    total_dy = int(dy)
+    if total_dx == 0 and total_dy == 0:
+        return
+    step_pixels = max(int(_LOOK_SMOOTH_STEP_PIXELS), 1)
+    steps = max(
+        int((abs(total_dx) + step_pixels - 1) / step_pixels),
+        int((abs(total_dy) + step_pixels - 1) / step_pixels),
+        1,
     )
+    sent_dx = 0
+    sent_dy = 0
+    for index in range(steps):
+        next_dx_total = int(round(total_dx * float(index + 1) / float(steps)))
+        next_dy_total = int(round(total_dy * float(index + 1) / float(steps)))
+        step_dx = next_dx_total - sent_dx
+        step_dy = next_dy_total - sent_dy
+        sent_dx = next_dx_total
+        sent_dy = next_dy_total
+        if step_dx == 0 and step_dy == 0:
+            continue
+        _call_with_focus_retry(
+            app,
+            lambda step_dx=step_dx, step_dy=step_dy: app.look_delta(int(step_dx), int(step_dy)),
+            dry_run=dry_run,
+            action_trace=action_trace,
+            start_time=start_time,
+            retry_reason=retry_reason,
+        )
+        if index + 1 < steps:
+            _sleep_ms_uninterruptible(_LOOK_SMOOTH_STEP_DELAY_MS, dry_run=False)
 
 
 def _perform_mouse_tap_without_move_with_retry(
@@ -893,6 +932,86 @@ def _release_inputs(app: Any, profile: Mapping[str, Any], *, dry_run: bool) -> N
             logger.warning("Combat[release] failed to release key %s: %s", key, exc)
 
 
+def _perform_key_down_with_retry(
+    app: Any,
+    key: str,
+    *,
+    dry_run: bool,
+    action_trace: list[dict[str, Any]],
+    start_time: float,
+    retry_reason: str,
+) -> None:
+    if dry_run:
+        return
+    _call_with_focus_retry(
+        app,
+        lambda: app.key_down(str(key)),
+        dry_run=dry_run,
+        action_trace=action_trace,
+        start_time=start_time,
+        retry_reason=retry_reason,
+    )
+
+
+def _perform_key_up_with_retry(
+    app: Any,
+    key: str,
+    *,
+    dry_run: bool,
+    action_trace: list[dict[str, Any]],
+    start_time: float,
+    retry_reason: str,
+) -> None:
+    if dry_run:
+        return
+    _call_with_focus_retry(
+        app,
+        lambda: app.key_up(str(key)),
+        dry_run=dry_run,
+        action_trace=action_trace,
+        start_time=start_time,
+        retry_reason=retry_reason,
+    )
+
+
+def _clamp_signed(value: float, *, minimum_abs: int, maximum_abs: int) -> int:
+    if value == 0:
+        return 0
+    sign = 1 if value > 0 else -1
+    magnitude = min(max(int(round(abs(value))), int(minimum_abs)), int(maximum_abs))
+    return sign * magnitude
+
+
+def _reward_turn_pixels_for_error(
+    error_x: float,
+    *,
+    align_tolerance_px: int,
+    look_pixels_per_px: float,
+    min_turn_pixels: int,
+    max_turn_pixels: int,
+) -> int:
+    distance = abs(float(error_x))
+    tolerance = max(float(align_tolerance_px), 0.0)
+    if distance <= tolerance:
+        return 0
+    # Reduce correction near the deadzone so repeated scan/turn cycles converge instead of bouncing.
+    effective_distance = max(distance - tolerance, 0.0)
+    signed_distance = effective_distance if error_x > 0 else -effective_distance
+    return _clamp_signed(
+        signed_distance * float(look_pixels_per_px),
+        minimum_abs=int(min_turn_pixels),
+        maximum_abs=int(max_turn_pixels),
+    ) if error_x else 0
+
+
+def _reward_align_target_x(config: Mapping[str, Any], *, capture_width: int) -> float:
+    configured = config.get("align_target_x")
+    if configured is None:
+        return float(max(int(capture_width), 1)) / 2.0
+    target_x = float(_coerce_int(configured, 640))
+    return min(max(target_x, 1.0), float(max(int(capture_width), 1)))
+
+
 def _sleep_ms(milliseconds: int, *, dry_run: bool) -> None:
     _raise_if_cancelled()
     if dry_run:
@@ -924,6 +1043,12 @@ def _is_available(
     lock_until = float(ability_lockouts.get(name, 0.0))
     current = now if now is not None else time.monotonic()
     return current >= lock_until
+
+
+def _has_front_enemy(state: Mapping[str, Any]) -> bool:
+    if "front_enemy_found" in state:
+        return bool(state.get("front_enemy_found"))
+    return bool(state.get("enemy_health_found") or state.get("boss_found"))
 
 
 def _lock_ability(
@@ -1031,12 +1156,14 @@ def _trace_scan(
         trace_limit=trace_limit,
     )
     logger.info(
-        "Combat[state] phase=%s note=%s combat_active=%s in_supported_scene=%s in_combat=%s enemy_health_found=%s enemy_health_count=%s enemy_direction_found=%s enemy_direction_count=%s enemy_direction_side=%s boss_found=%s target_found=%s current_slot=%s skill_state=%s ultimate_state=%s confidence=%s",
+        "Combat[state] phase=%s note=%s combat_active=%s in_supported_scene=%s in_combat=%s remaining_enemy_marker_found=%s front_enemy_found=%s enemy_health_found=%s enemy_health_count=%s enemy_direction_found=%s enemy_direction_count=%s enemy_direction_side=%s boss_found=%s target_found=%s reward_marker_found=%s reward_marker_center_x=%s claim_memento_prompt_found=%s current_slot=%s skill_state=%s ultimate_state=%s confidence=%s",
         phase,
         note,
         bool(combat_active),
         bool(state.get("in_supported_scene")),
         bool(state.get("in_combat")),
+        bool(state.get("remaining_enemy_marker_found")),
+        _has_front_enemy(state),
         bool(state.get("enemy_health_found")),
         int(state.get("enemy_health_count") or 0),
         bool(state.get("enemy_direction_found")),
@@ -1044,6 +1171,9 @@ def _trace_scan(
         state.get("enemy_direction_primary_side"),
         bool(state.get("boss_found")),
         bool(state.get("target_found")),
+        bool(state.get("reward_marker_found")),
+        state.get("reward_marker_center_x"),
+        bool(state.get("claim_memento_prompt_found")),
         state.get("current_slot"),
         state.get("skill_state"),
         state.get("ultimate_state"),
@@ -1466,6 +1596,311 @@ def _pause_after_encounter(
     _sleep_ms(cooldown_ms, dry_run=dry_run)
 
 
+def _collect_post_combat_reward(
+    app: Any,
+    yihuan_combat: YihuanCombatService,
+    profile: Mapping[str, Any],
+    *,
+    profile_name: str,
+    dry_run: bool,
+    action_trace: list[dict[str, Any]],
+    combat_state_trace: list[dict[str, Any]],
+    capture_debug: _CombatCaptureLogger | None,
+    start_time: float,
+    trace_limit: int,
+) -> dict[str, Any]:
+    config = dict(profile.get("post_combat_reward") or {})
+    phase = "post_combat_reward"
+    if not bool(config.get("enabled", True)):
+        result = {"enabled": False, "status": "skipped", "reason": "disabled"}
+        _record_action(action_trace, start_time=start_time, action="reward_skipped", dry_run=dry_run, details=result)
+        return result
+    if dry_run:
+        result = {"enabled": True, "status": "skipped", "reason": "dry_run"}
+        _record_action(action_trace, start_time=start_time, action="reward_skipped", dry_run=dry_run, details=result)
+        return result
+
+    walk_key = str(config.get("walk_key") or "w")
+    scan_interval_sec = max(float(config.get("scan_interval_sec") or 0.18), 0.05)
+    search_timeout_sec = max(float(config.get("search_timeout_sec") or 14.0), 0.1)
+    walk_timeout_sec = max(float(config.get("walk_timeout_sec") or 26.0), 0.1)
+    configured_align_target_x = config.get("align_target_x")
+    align_tolerance_px = max(int(config.get("align_tolerance_px") or 50), 1)
+    look_pixels_per_px = max(float(config.get("look_pixels_per_px") or 0.55), 0.01)
+    min_turn_pixels = max(int(config.get("min_turn_pixels") or 8), 1)
+    max_turn_pixels = max(int(config.get("max_turn_pixels") or 160), 1)
+    post_turn_delay_ms = max(int(config.get("post_turn_delay_ms") or 0), 0)
+    walk_step_sec = max(float(config.get("walk_step_sec") or 0.24), 0.05)
+    interact_key = str(config.get("interact_key") or "f")
+    post_interact_delay_ms = max(int(config.get("post_interact_delay_ms") or 120), 0)
+    search_turn_pixels = max(int(config.get("search_turn_pixels") or 520), 1)
+    search_turn_interval_sec = max(float(config.get("search_turn_interval_sec") or 0.65), 0.1)
+    prompt_required_scans = max(int(config.get("prompt_required_scans") or 1), 1)
+
+    started_at = time.monotonic()
+    deadline = started_at + search_timeout_sec + walk_timeout_sec
+    last_search_turn_at = 0.0
+    search_direction = 1
+    walk_started_at: float | None = None
+    walking = False
+    prompt_scans = 0
+    last_state: dict[str, Any] | None = None
+    last_capture_image: Any = None
+
+    _record_action(
+        action_trace,
+        start_time=start_time,
+        action="reward_collect_start",
+        dry_run=dry_run,
+        details={
+            "search_timeout_sec": round(search_timeout_sec, 3),
+            "walk_timeout_sec": round(walk_timeout_sec, 3),
+            "align_target_x": _coerce_int(configured_align_target_x, 640) if configured_align_target_x is not None else None,
+            "align_tolerance_px": align_tolerance_px,
+        },
+    )
+
+    try:
+        while time.monotonic() <= deadline:
+            state, capture = _capture_state(app, yihuan_combat, profile_name=profile_name)
+            last_state = dict(state)
+            last_capture_image = capture.image
+            _trace_scan(
+                combat_state_trace,
+                start_time=start_time,
+                state=state,
+                combat_active=False,
+                phase=phase,
+                note="reward_scan",
+                trace_limit=trace_limit,
+            )
+            _capture_periodic_if_due(
+                app,
+                capture_debug,
+                state=state,
+                phase=phase,
+                start_time=start_time,
+                combat_active=False,
+            )
+
+            if bool(state.get("claim_memento_prompt_found")):
+                prompt_scans += 1
+                if prompt_scans >= prompt_required_scans:
+                    if walking:
+                        _perform_key_up_with_retry(
+                            app,
+                            walk_key,
+                            dry_run=dry_run,
+                            action_trace=action_trace,
+                            start_time=start_time,
+                            retry_reason="reward_stop_at_prompt",
+                        )
+                        walking = False
+                    _capture_event_image(
+                        capture_debug,
+                        label="reward_claim_prompt_found",
+                        phase=phase,
+                        source_image=last_capture_image,
+                        state=state,
+                        start_time=start_time,
+                        combat_active=False,
+                    )
+                    result = {
+                        "enabled": True,
+                        "status": "success",
+                        "reason": "claim_prompt_found",
+                        "elapsed_sec": round(time.monotonic() - started_at, 3),
+                        "reward_marker_found": bool(state.get("reward_marker_found")),
+                        "claim_memento_prompt_found": True,
+                    }
+                    _record_action(
+                        action_trace,
+                        start_time=start_time,
+                        action="reward_claim_prompt_found",
+                        dry_run=dry_run,
+                        details=result,
+                    )
+                    _tap_binding(
+                        app,
+                        interact_key,
+                        dry_run=dry_run,
+                        action_trace=action_trace,
+                        start_time=start_time,
+                        action_name="reward_interact",
+                    )
+                    _sleep_ms(post_interact_delay_ms, dry_run=dry_run)
+                    return result | {"state": dict(state)}
+                _sleep_interruptibly(scan_interval_sec)
+                continue
+
+            prompt_scans = 0
+            if walk_started_at is not None and time.monotonic() - walk_started_at >= walk_timeout_sec:
+                break
+
+            marker_found = bool(state.get("reward_marker_found"))
+            marker_center_x = state.get("reward_marker_center_x")
+            capture_width = int((state.get("capture_size") or [1280, 720])[0] or 1280)
+            target_x = _reward_align_target_x(config, capture_width=capture_width)
+            if marker_found and marker_center_x is not None:
+                error_x = float(marker_center_x) - target_x
+                if abs(error_x) > align_tolerance_px:
+                    if walking:
+                        _perform_key_up_with_retry(
+                            app,
+                            walk_key,
+                            dry_run=dry_run,
+                            action_trace=action_trace,
+                            start_time=start_time,
+                            retry_reason="reward_align_marker",
+                        )
+                        walking = False
+                    turn_dx = _reward_turn_pixels_for_error(
+                        error_x,
+                        align_tolerance_px=align_tolerance_px,
+                        look_pixels_per_px=look_pixels_per_px,
+                        min_turn_pixels=min_turn_pixels,
+                        max_turn_pixels=max_turn_pixels,
+                    )
+                    _record_action(
+                        action_trace,
+                        start_time=start_time,
+                        action="reward_align_marker",
+                        dry_run=dry_run,
+                        details={
+                            "marker_center_x": int(marker_center_x),
+                            "target_x": round(target_x, 1),
+                            "error_x": round(error_x, 1),
+                            "turn_dx": int(turn_dx),
+                        },
+                    )
+                    _capture_event_image(
+                        capture_debug,
+                        label="reward_align_marker",
+                        phase=phase,
+                        source_image=last_capture_image,
+                        state=state,
+                        start_time=start_time,
+                        combat_active=False,
+                    )
+                    _perform_look_delta_with_retry(
+                        app,
+                        turn_dx,
+                        0,
+                        dry_run=dry_run,
+                        action_trace=action_trace,
+                        start_time=start_time,
+                        retry_reason="reward_align_marker",
+                    )
+                    _sleep_ms(post_turn_delay_ms, dry_run=dry_run)
+                    continue
+
+                if not walking:
+                    _record_action(
+                        action_trace,
+                        start_time=start_time,
+                        action="reward_move_forward_start",
+                        dry_run=dry_run,
+                        details={
+                            "binding": walk_key,
+                            "marker_center_x": int(marker_center_x),
+                            "target_x": round(target_x, 1),
+                            "error_x": round(error_x, 1),
+                        },
+                    )
+                    _capture_event_image(
+                        capture_debug,
+                        label="reward_move_forward_start",
+                        phase=phase,
+                        source_image=last_capture_image,
+                        state=state,
+                        start_time=start_time,
+                        combat_active=False,
+                    )
+                    _perform_key_down_with_retry(
+                        app,
+                        walk_key,
+                        dry_run=dry_run,
+                        action_trace=action_trace,
+                        start_time=start_time,
+                        retry_reason="reward_move_forward_start",
+                    )
+                    walking = True
+                    walk_started_at = time.monotonic()
+                _sleep_interruptibly(walk_step_sec)
+                continue
+
+            if walking:
+                _perform_key_up_with_retry(
+                    app,
+                    walk_key,
+                    dry_run=dry_run,
+                    action_trace=action_trace,
+                    start_time=start_time,
+                    retry_reason="reward_marker_lost",
+                )
+                walking = False
+            if time.monotonic() - last_search_turn_at >= search_turn_interval_sec:
+                turn_dx = search_direction * search_turn_pixels
+                search_direction *= -1
+                last_search_turn_at = time.monotonic()
+                _record_action(
+                    action_trace,
+                    start_time=start_time,
+                    action="reward_search_turn",
+                    dry_run=dry_run,
+                    details={"turn_dx": int(turn_dx)},
+                )
+                _capture_event_image(
+                    capture_debug,
+                    label="reward_search_turn",
+                    phase=phase,
+                    source_image=last_capture_image,
+                    state=state,
+                    start_time=start_time,
+                    combat_active=False,
+                )
+                _perform_look_delta_with_retry(
+                    app,
+                    turn_dx,
+                    0,
+                    dry_run=dry_run,
+                    action_trace=action_trace,
+                    start_time=start_time,
+                    retry_reason="reward_search_turn",
+                )
+            _sleep_interruptibly(scan_interval_sec)
+    finally:
+        if walking:
+            _perform_key_up_with_retry(
+                app,
+                walk_key,
+                dry_run=dry_run,
+                action_trace=action_trace,
+                start_time=start_time,
+                retry_reason="reward_finish_release",
+            )
+
+    result = {
+        "enabled": True,
+        "status": "timeout",
+        "reason": "claim_prompt_timeout",
+        "elapsed_sec": round(time.monotonic() - started_at, 3),
+        "reward_marker_found": bool((last_state or {}).get("reward_marker_found")),
+        "claim_memento_prompt_found": bool((last_state or {}).get("claim_memento_prompt_found")),
+    }
+    _record_action(action_trace, start_time=start_time, action="reward_timeout", dry_run=dry_run, details=result)
+    _capture_event_image(
+        capture_debug,
+        label="reward_timeout",
+        phase=phase,
+        source_image=last_capture_image,
+        state=last_state,
+        start_time=start_time,
+        combat_active=False,
+    )
+    return result | {"state": dict(last_state or {})}
+
+
 def _consume_audio_dodge_trigger(
     audio_dodge_runtime: AudioDodgeRuntime | None,
     *,
@@ -1671,6 +2106,81 @@ def _turn_to_rear_enemy(
     }
 
 
+def _turn_to_front_enemy(
+    app: Any,
+    profile: Mapping[str, Any],
+    state: Mapping[str, Any],
+    *,
+    auto_target_enabled: bool,
+    scan_direction: int,
+    dry_run: bool,
+    action_trace: list[dict[str, Any]],
+    start_time: float,
+) -> dict[str, Any]:
+    if list(state.get("enemy_direction_markers") or []):
+        result = _turn_to_rear_enemy(
+            app,
+            profile,
+            state,
+            auto_target_enabled=auto_target_enabled,
+            dry_run=dry_run,
+            action_trace=action_trace,
+            start_time=start_time,
+        )
+        result["used_direction_marker"] = True
+        return result
+
+    reacquire = dict(profile.get("enemy_direction_reacquire") or {})
+    side_turn = max(_coerce_int(reacquire.get("turn_pixels_side"), 220), 1)
+    vertical_delta = _coerce_int(reacquire.get("vertical_delta"), 0)
+    turn_dx = side_turn if int(scan_direction or 1) >= 0 else -side_turn
+    auto_target_after_turn = auto_target_enabled and bool(reacquire.get("auto_target_after_turn", True))
+    _record_action(
+        action_trace,
+        start_time=start_time,
+        action="turn_to_front_enemy",
+        dry_run=dry_run,
+        details={
+            "reason": "front_enemy_missing",
+            "used_direction_marker": False,
+            "scan_mode": "fixed_direction",
+            "turn_dx": int(turn_dx),
+            "turn_dy": int(vertical_delta),
+        },
+    )
+    _perform_look_delta_with_retry(
+        app,
+        int(turn_dx),
+        int(vertical_delta),
+        dry_run=dry_run,
+        action_trace=action_trace,
+        start_time=start_time,
+        retry_reason="turn_to_front_enemy",
+    )
+    post_turn_delay_ms = max(_coerce_int(reacquire.get("post_turn_delay_ms"), 0), 0)
+    if post_turn_delay_ms > 0:
+        _sleep_ms(post_turn_delay_ms, dry_run=dry_run)
+
+    auto_targeted = False
+    if auto_target_after_turn:
+        _tap_binding(
+            app,
+            str(dict(profile["keys"]).get("target") or "mouse_middle"),
+            dry_run=dry_run,
+            action_trace=action_trace,
+            start_time=start_time,
+            action_name="auto_target_after_turn",
+        )
+        auto_targeted = True
+    return {
+        "executed": True,
+        "auto_targeted": auto_targeted,
+        "turn_dx": int(turn_dx),
+        "turn_dy": int(vertical_delta),
+        "used_direction_marker": False,
+    }
+
+
 @action_info(
     name="yihuan_combat_run_session",
     public=False,
@@ -1714,6 +2224,8 @@ def yihuan_combat_run_session(
     initial_monitor_captured = False
     last_known_slot: int | None = None
     last_rear_turn_at = 0.0
+    front_enemy_scan_direction = 1
+    post_combat_reward_result: dict[str, Any] | None = None
 
     try:
         profile = yihuan_combat.load_profile(profile_name)
@@ -1751,7 +2263,8 @@ def yihuan_combat_run_session(
             dry_run_enabled,
         )
         logger.info(
-            "Combat[config] enemy_health_search_region=%s enemy_direction_regions=%s skill_press_ms=%s ultimate_press_ms=%s switch_press_ms=%s monitor_scan_interval_sec=%.2f combat_scan_interval_sec=%.2f switch_interval_sec=%.2f switch_confirm_required_matches=%s failed_switch_cooldown_sec=%.2f rear_enemy_turn_interval_sec=%.2f exit_confirm_required_scans=%s exit_confirm_interval_sec=%.2f exit_post_cooldown_ms=%s",
+            "Combat[config] remaining_enemy_marker_region=%s enemy_health_search_region=%s enemy_direction_regions=%s skill_press_ms=%s ultimate_press_ms=%s switch_press_ms=%s monitor_scan_interval_sec=%.2f combat_scan_interval_sec=%.2f switch_interval_sec=%.2f switch_confirm_required_matches=%s failed_switch_cooldown_sec=%.2f rear_enemy_turn_interval_sec=%.2f exit_confirm_required_scans=%s exit_confirm_interval_sec=%.2f exit_post_cooldown_ms=%s",
+            dict(profile.get("regions") or {}).get("remaining_enemy_marker"),
             dict(profile.get("regions") or {}).get("enemy_health_search_region"),
             {
                 "left": dict(profile.get("regions") or {}).get("enemy_direction_left"),
@@ -1790,6 +2303,8 @@ def yihuan_combat_run_session(
 
         audio_dodge_runtime = AudioDodgeRuntime.from_profile(profile, enabled=auto_dodge_enabled)
         audio_dodge_runtime.start()
+        audio_status = audio_dodge_runtime.status() if hasattr(audio_dodge_runtime, "status") else {"status": "unknown"}
+        logger.info("Combat[audio_dodge] status=%s", audio_status)
         capture_debug = _CombatCaptureLogger(
             enabled=capture_debug_enabled_resolved,
             interval_sec=capture_interval_sec_resolved,
@@ -1957,6 +2472,21 @@ def yihuan_combat_run_session(
                             cooldown_ms=post_exit_cooldown_ms,
                         )
                         if encounter_limit > 0 and encounters_completed >= encounter_limit:
+                            current_phase = "post_combat_reward"
+                            post_combat_reward_result = _collect_post_combat_reward(
+                                app,
+                                yihuan_combat,
+                                profile,
+                                profile_name=resolved_profile,
+                                dry_run=dry_run_enabled,
+                                action_trace=action_trace,
+                                combat_state_trace=combat_state_trace,
+                                capture_debug=capture_debug,
+                                start_time=start_time,
+                                trace_limit=trace_limit,
+                            )
+                            if post_combat_reward_result.get("state"):
+                                last_state = dict(post_combat_reward_result.get("state") or {})
                             return _final_result(
                                 status="success",
                                 stopped_reason="max_encounters",
@@ -1971,6 +2501,7 @@ def yihuan_combat_run_session(
                                 start_time=start_time,
                                 dry_run=dry_run_enabled,
                                 capture_debug=capture_debug,
+                                post_combat_reward=post_combat_reward_result,
                             )
                         current_phase = "monitor"
                         next_scan_at = _enqueue_next_scan(
@@ -2004,30 +2535,6 @@ def yihuan_combat_run_session(
                                 note="exit_pending_reset_on_reacquire",
                                 trace_limit=trace_limit,
                             )
-                    elif bool(state.get("enemy_direction_found")):
-                        exit_pending = False
-                        exit_pending_scans = 0
-                        next_exit_confirm_at = float("inf")
-                        current_phase = "reacquire_target"
-                        _record_action(
-                            action_trace,
-                            start_time=start_time,
-                            action="rear_enemy_hold_combat",
-                            dry_run=dry_run_enabled,
-                            details={
-                                "marker_count": int(state.get("enemy_direction_count") or 0),
-                                "primary_side": state.get("enemy_direction_primary_side"),
-                            },
-                        )
-                        _trace_scan(
-                            combat_state_trace,
-                            start_time=start_time,
-                            state=state,
-                            combat_active=True,
-                            phase=current_phase,
-                            note="rear_enemy_hold_combat",
-                            trace_limit=trace_limit,
-                        )
                     else:
                         current_phase = "exit_pending"
                         if not exit_pending:
@@ -2142,6 +2649,21 @@ def yihuan_combat_run_session(
                             cooldown_ms=post_exit_cooldown_ms,
                         )
                         if encounter_limit > 0 and encounters_completed >= encounter_limit:
+                            current_phase = "post_combat_reward"
+                            post_combat_reward_result = _collect_post_combat_reward(
+                                app,
+                                yihuan_combat,
+                                profile,
+                                profile_name=resolved_profile,
+                                dry_run=dry_run_enabled,
+                                action_trace=action_trace,
+                                combat_state_trace=combat_state_trace,
+                                capture_debug=capture_debug,
+                                start_time=start_time,
+                                trace_limit=trace_limit,
+                            )
+                            if post_combat_reward_result.get("state"):
+                                last_state = dict(post_combat_reward_result.get("state") or {})
                             return _final_result(
                                 status="success",
                                 stopped_reason="max_encounters",
@@ -2156,6 +2678,7 @@ def yihuan_combat_run_session(
                                 start_time=start_time,
                                 dry_run=dry_run_enabled,
                                 capture_debug=capture_debug,
+                                post_combat_reward=post_combat_reward_result,
                             )
                         current_phase = "monitor"
                         next_scan_at = _enqueue_next_scan(
@@ -2189,7 +2712,7 @@ def yihuan_combat_run_session(
                         start_time=start_time,
                         combat_active=True,
                     )
-                    if auto_target_enabled and not bool(state.get("target_found")):
+                    if auto_target_enabled and _has_front_enemy(state) and not bool(state.get("target_found")):
                         current_phase = "acquire_target"
                         _capture_event_image(
                             capture_debug,
@@ -2278,7 +2801,7 @@ def yihuan_combat_run_session(
             state = dict(last_state)
             current_phase = "combat"
 
-            if bool(state.get("enemy_direction_found")) and not bool(state.get("in_combat")):
+            if not _has_front_enemy(state):
                 current_phase = "reacquire_target"
                 if time.monotonic() - last_rear_turn_at >= float(schedule["rear_enemy_turn_interval_sec"]):
                     _capture_event_image(
@@ -2290,11 +2813,12 @@ def yihuan_combat_run_session(
                         start_time=start_time,
                         combat_active=True,
                     )
-                    rear_turn_result = _turn_to_rear_enemy(
+                    rear_turn_result = _turn_to_front_enemy(
                         app,
                         profile,
                         state,
                         auto_target_enabled=auto_target_enabled,
+                        scan_direction=front_enemy_scan_direction,
                         dry_run=dry_run_enabled,
                         action_trace=action_trace,
                         start_time=start_time,
@@ -2308,7 +2832,7 @@ def yihuan_combat_run_session(
                         state=state,
                         combat_active=True,
                         phase=current_phase,
-                        note="rear_enemy_turn",
+                        note="front_enemy_reacquire",
                         trace_limit=trace_limit,
                     )
                 _capture_periodic_if_due(
