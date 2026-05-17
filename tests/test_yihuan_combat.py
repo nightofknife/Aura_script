@@ -39,6 +39,10 @@ class _FakeApp:
         self._maybe_raise_focus_error()
         self.calls.append(("click", button, x, y, clicks))
 
+    def move_to(self, x, y, duration=None):
+        self._maybe_raise_focus_error()
+        self.calls.append(("move_to", int(x), int(y), None if duration is None else round(float(duration), 3)))
+
     def press_key(self, key, presses=1, interval=0.1):
         self._maybe_raise_focus_error()
         self.calls.append(("press_key", str(key), int(presses)))
@@ -155,6 +159,23 @@ class _FakeAudioDodgeRuntime:
         return None
 
 
+class _FakeYoloService:
+    def __init__(self, detections: list[dict]) -> None:
+        self.detections = list(detections)
+        self.preloaded: list[str] = []
+
+    def preload_model(self, model_name: str) -> None:
+        self.preloaded.append(str(model_name))
+
+    def detect_image(self, source_image, *, model_name: str, options: dict):
+        return {
+            "provider": "fake",
+            "model": str(model_name),
+            "options": dict(options),
+            "detections": [dict(item) for item in self.detections],
+        }
+
+
 class _FakeClock:
     def __init__(self, *, start: float = 0.0) -> None:
         self.now = float(start)
@@ -250,6 +271,41 @@ class TestYihuanCombatService(unittest.TestCase):
         outside_state = self.service.analyze_frame(outside_roi)
 
         self.assertFalse(outside_state["claim_memento_prompt_found"])
+
+    def test_analyze_frame_detects_stage_enter_button_template(self):
+        image = np.zeros((720, 1280, 3), dtype=np.uint8)
+        template_path = self.profile["templates"]["stage_enter_button"]["path"]
+        _paste_template(image, template_path, x=990, y=634)
+
+        state = self.service.analyze_frame(image)
+
+        self.assertTrue(state["stage_enter_button_found"])
+        self.assertGreaterEqual(state["stage_enter_button_confidence"], 0.82)
+        self.assertEqual(state["stage_enter_button_center_x"], 990 + _template_size(template_path)[0] // 2)
+        self.assertFalse(state["in_combat"])
+
+    def test_analyze_frame_detects_reward_claim_and_result_buttons(self):
+        image = np.zeros((720, 1280, 3), dtype=np.uint8)
+        templates = self.profile["templates"]
+        _paste_template(image, templates["reward_claim_single_button"]["path"], x=425, y=445)
+        _paste_template(image, templates["reward_claim_double_button"]["path"], x=746, y=445)
+        _paste_template(image, templates["reward_result_exit_button"]["path"], x=390, y=599)
+        _paste_template(image, templates["reward_result_retry_button"]["path"], x=698, y=599)
+
+        state = self.service.analyze_frame(image)
+
+        self.assertTrue(state["reward_claim_single_button_found"])
+        self.assertTrue(state["reward_claim_double_button_found"])
+        self.assertTrue(state["reward_result_exit_button_found"])
+        self.assertTrue(state["reward_result_retry_button_found"])
+        self.assertEqual(
+            state["reward_claim_single_button_center_x"],
+            int(round(425 + _template_size(templates["reward_claim_single_button"]["path"])[0] / 2.0)),
+        )
+        self.assertEqual(
+            state["reward_result_retry_button_center_x"],
+            int(round(698 + _template_size(templates["reward_result_retry_button"]["path"])[0] / 2.0)),
+        )
 
     def test_analyze_frame_enemy_health_without_remaining_marker_is_front_enemy_only(self):
         image = _make_supported_image(self.profile)
@@ -442,6 +498,109 @@ class TestYihuanCombatActions(unittest.TestCase):
         self.assertLess(actions.index("auto_target"), actions.index("ultimate"))
         self.assertIn("skill", actions)
 
+    def test_run_session_clicks_entry_waits_for_stage_and_approaches_first_enemy(self):
+        clock = _FakeClock()
+        service = _FakeCombatService(
+            [
+                _state(enemy=False, supported=False, stage_active=False, stage_enter_button=True),
+                _state(enemy=False, stage_active=True, target=False),
+                _state(enemy=False, stage_active=False, target=False),
+                _state(enemy=True, stage_active=True, target=False),
+                _state(enemy=True, stage_active=True, target=True),
+                _state(enemy=False, stage_active=False, target=False),
+                _state(enemy=False, stage_active=False, target=False),
+            ],
+            clock=clock,
+            profile_overrides={
+                "stage_entry": {
+                    "enabled": True,
+                    "wait_after_click_ms": 800,
+                    "stage_confirm_sec": 0.0,
+                    "stage_start_timeout_sec": 5.0,
+                    "scan_interval_sec": 0.2,
+                },
+                "pre_combat_approach": {
+                    "enabled": True,
+                    "hold_key": "w",
+                    "scan_interval_sec": 0.1,
+                    "max_duration_sec": 4.0,
+                    "min_hold_sec": 0.0,
+                    "release_delay_ms": 80,
+                },
+            },
+        )
+        app = _FakeApp()
+
+        result, _clock = self._run_with_clock(app, service, max_encounters=1, auto_dodge=False, auto_target=False)
+
+        self.assertEqual(result["status"], "success")
+        self.assertIn(("move_to", 1062, 652, 0.1), app.calls)
+        self.assertIn(("click", "left", None, None, 1), app.calls)
+        self.assertIn(("key_down", "w"), app.calls)
+        self.assertIn(("key_up", "w"), app.calls)
+        self.assertLess(app.calls.index(("key_down", "w")), app.calls.index(("key_up", "w")))
+        actions = [entry["action"] for entry in result["action_trace"]]
+        self.assertIn("stage_entry_click", actions)
+        self.assertIn("stage_enter_confirmed", actions)
+        self.assertIn("approach_started", actions)
+        self.assertIn("approach_enemy_seen", actions)
+        self.assertIn("approach_stop", actions)
+        approach_stop = [entry for entry in result["action_trace"] if entry["action"] == "approach_stop"]
+        self.assertEqual(approach_stop[-1]["reason"], "enemy_seen")
+        self.assertLess(actions.index("stage_entry_click"), actions.index("stage_enter_confirmed"))
+        self.assertLess(actions.index("stage_enter_confirmed"), actions.index("approach_started"))
+        self.assertLess(actions.index("approach_started"), actions.index("approach_stop"))
+
+    def test_approach_until_enemy_seen_holds_w_for_configured_minimum(self):
+        clock = _FakeClock()
+        enemy_state = _state(enemy=True, stage_active=True, target=False)
+        service = _FakeCombatService(
+            [enemy_state],
+            clock=clock,
+            profile_overrides={
+                "pre_combat_approach": {
+                    "enabled": True,
+                    "hold_key": "w",
+                    "scan_interval_sec": 0.25,
+                    "max_duration_sec": 8.0,
+                    "min_hold_sec": 4.0,
+                    "release_delay_ms": 80,
+                }
+            },
+        )
+        app = _FakeApp()
+        action_trace: list[dict] = []
+
+        with patch("plans.yihuan.src.actions.combat_actions.time.monotonic", side_effect=clock.monotonic), patch(
+            "plans.yihuan.src.actions.combat_actions.time.sleep",
+            side_effect=clock.sleep,
+        ):
+            result = combat_actions._approach_until_enemy_seen(
+                app,
+                service,
+                service.profile,
+                profile_name="default_1280x720_cn",
+                combat_targets_yolo=None,
+                initial_state=enemy_state,
+                initial_capture_image=app.image.copy(),
+                dry_run=False,
+                action_trace=action_trace,
+                combat_state_trace=[],
+                capture_debug=None,
+                start_time=0.0,
+                trace_limit=50,
+            )
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["reason"], "enemy_seen")
+        self.assertIn(("key_down", "w"), app.calls)
+        self.assertIn(("key_up", "w"), app.calls)
+        self.assertLess(app.calls.index(("key_down", "w")), app.calls.index(("key_up", "w")))
+        self.assertGreaterEqual(clock.monotonic(), 4.0)
+        approach_stop = [entry for entry in action_trace if entry["action"] == "approach_stop"]
+        self.assertGreaterEqual(approach_stop[-1]["hold_elapsed_sec"], 4.0)
+        self.assertEqual(approach_stop[-1]["min_hold_sec"], 4.0)
+
     def test_run_session_waits_for_configured_exit_confirmation_scans(self):
         clock = _FakeClock()
         combat_state = _state(enemy=True, target=True, skill=False, ultimate=False)
@@ -606,6 +765,415 @@ class TestYihuanCombatActions(unittest.TestCase):
         self.assertIn(("key_down", "w"), app.calls)
         self.assertIn(("press_key", "f", 1), app.calls)
 
+    def test_handle_post_reward_claim_flow_uses_double_claim_and_retry(self):
+        clock = _FakeClock()
+        service = _FakeCombatService(
+            [
+                _state(
+                    enemy=False,
+                    stage_active=False,
+                    reward_claim_single_button=True,
+                    reward_claim_double_button=True,
+                ),
+                _state(
+                    enemy=False,
+                    stage_active=False,
+                    reward_result_exit_button=True,
+                    reward_result_retry_button=True,
+                ),
+            ],
+            clock=clock,
+            profile_overrides={"post_combat_reward": {"enabled": True}},
+        )
+        app = _FakeApp()
+        action_trace: list[dict] = []
+        combat_state_trace: list[dict] = []
+
+        with patch("plans.yihuan.src.actions.combat_actions.time.monotonic", side_effect=clock.monotonic), patch(
+            "plans.yihuan.src.actions.combat_actions.time.sleep",
+            side_effect=clock.sleep,
+        ):
+            result = combat_actions._handle_post_reward_claim_flow(
+                app,
+                service,
+                service.profile,
+                profile_name="default_1280x720_cn",
+                combat_targets_yolo=None,
+                claim_mode="double",
+                completed_runs=0,
+                total_runs=3,
+                dry_run=False,
+                action_trace=action_trace,
+                combat_state_trace=combat_state_trace,
+                capture_debug=None,
+                start_time=0.0,
+                trace_limit=50,
+            )
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["action"], "retry")
+        self.assertEqual(result["claim_value"], 2)
+        self.assertEqual(result["completed_runs"], 2)
+        self.assertEqual(result["remaining"], 1)
+        self.assertIn(("move_to", 844, 467, 0.1), app.calls)
+        self.assertIn(("move_to", 796, 622, 0.1), app.calls)
+        self.assertGreaterEqual(app.calls.count(("click", "left", None, None, 1)), 2)
+        actions = [entry["action"] for entry in action_trace]
+        self.assertIn("reward_confirm_modal_found", actions)
+        self.assertIn("reward_claim_click", actions)
+        self.assertIn("reward_result_screen_found", actions)
+        self.assertIn("retry_challenge_click", actions)
+
+    def test_handle_post_reward_claim_flow_uses_single_claim_for_last_remaining_run(self):
+        clock = _FakeClock()
+        service = _FakeCombatService(
+            [
+                _state(
+                    enemy=False,
+                    stage_active=False,
+                    reward_claim_single_button=True,
+                    reward_claim_double_button=True,
+                ),
+                _state(
+                    enemy=False,
+                    stage_active=False,
+                    reward_result_exit_button=True,
+                    reward_result_retry_button=True,
+                ),
+            ],
+            clock=clock,
+            profile_overrides={"post_combat_reward": {"enabled": True}},
+        )
+        app = _FakeApp()
+        action_trace: list[dict] = []
+
+        with patch("plans.yihuan.src.actions.combat_actions.time.monotonic", side_effect=clock.monotonic), patch(
+            "plans.yihuan.src.actions.combat_actions.time.sleep",
+            side_effect=clock.sleep,
+        ):
+            result = combat_actions._handle_post_reward_claim_flow(
+                app,
+                service,
+                service.profile,
+                profile_name="default_1280x720_cn",
+                combat_targets_yolo=None,
+                claim_mode="single",
+                completed_runs=2,
+                total_runs=3,
+                dry_run=False,
+                action_trace=action_trace,
+                combat_state_trace=[],
+                capture_debug=None,
+                start_time=0.0,
+                trace_limit=50,
+            )
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["action"], "exit")
+        self.assertEqual(result["claim_value"], 1)
+        self.assertEqual(result["completed_runs"], 3)
+        self.assertEqual(result["remaining"], 0)
+        self.assertIn(("move_to", 522, 467, 0.1), app.calls)
+        self.assertIn(("move_to", 488, 622, 0.1), app.calls)
+        self.assertNotIn(("move_to", 796, 622, 0.1), app.calls)
+        actions = [entry["action"] for entry in action_trace]
+        self.assertIn("reward_claim_click", actions)
+        self.assertIn("exit_after_final_reward_click", actions)
+        self.assertIn("battle_loop_finished", actions)
+
+    def test_handle_post_reward_claim_flow_fails_when_double_claim_unavailable(self):
+        clock = _FakeClock()
+        service = _FakeCombatService(
+            [_state(enemy=False, stage_active=False, reward_claim_single_button=True)],
+            clock=clock,
+            profile_overrides={"post_combat_reward": {"enabled": True}},
+        )
+        app = _FakeApp()
+        action_trace: list[dict] = []
+
+        with patch("plans.yihuan.src.actions.combat_actions.time.monotonic", side_effect=clock.monotonic), patch(
+            "plans.yihuan.src.actions.combat_actions.time.sleep",
+            side_effect=clock.sleep,
+        ):
+            result = combat_actions._handle_post_reward_claim_flow(
+                app,
+                service,
+                service.profile,
+                profile_name="default_1280x720_cn",
+                combat_targets_yolo=None,
+                claim_mode="double",
+                completed_runs=0,
+                total_runs=3,
+                dry_run=False,
+                action_trace=action_trace,
+                combat_state_trace=[],
+                capture_debug=None,
+                start_time=0.0,
+                trace_limit=50,
+            )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["reason"], "double_claim_button_not_found")
+        self.assertNotIn(("move_to", 844, 467, 0.1), app.calls)
+        self.assertIn("reward_claim_failed", [entry["action"] for entry in action_trace])
+
+    def test_run_session_battle_count_one_claims_single_and_exits(self):
+        clock = _FakeClock()
+        service = _FakeCombatService(
+            [
+                _state(enemy=True, target=True),
+                _state(enemy=False, target=False),
+                _state(enemy=False, target=False),
+                _state(enemy=False, target=False),
+                _state(enemy=False, target=False),
+                _state(enemy=False, stage_active=False, reward_marker=True, reward_marker_center_x=640),
+                _state(
+                    enemy=False,
+                    stage_active=False,
+                    reward_marker=True,
+                    reward_marker_center_x=640,
+                    claim_prompt=True,
+                ),
+                _state(
+                    enemy=False,
+                    stage_active=False,
+                    reward_claim_single_button=True,
+                    reward_claim_double_button=True,
+                ),
+                _state(
+                    enemy=False,
+                    stage_active=False,
+                    reward_result_exit_button=True,
+                    reward_result_retry_button=True,
+                ),
+            ],
+            clock=clock,
+            profile_overrides={"post_combat_reward": {"enabled": True}},
+        )
+        app = _FakeApp()
+
+        result, _clock = self._run_with_clock(app, service, battle_count=1, auto_dodge=False)
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["stopped_reason"], "battle_count")
+        self.assertEqual(result["encounters_completed"], 1)
+        self.assertIn(("press_key", "f", 1), app.calls)
+        self.assertIn(("move_to", 522, 467, 0.1), app.calls)
+        self.assertIn(("move_to", 488, 622, 0.1), app.calls)
+        self.assertGreaterEqual(app.calls.count(("click", "left", None, None, 1)), 2)
+
+    def test_wait_for_stage_started_requires_continuous_remaining_marker_confirmation(self):
+        clock = _FakeClock()
+        marker_state = _state(enemy=False, stage_active=True)
+        service = _FakeCombatService(
+            [
+                _state(enemy=False, stage_active=True),
+                _state(enemy=False, stage_active=False),
+                marker_state,
+                marker_state,
+                marker_state,
+                marker_state,
+                marker_state,
+                marker_state,
+            ],
+            clock=clock,
+            profile_overrides={
+                "stage_entry": {
+                    "enabled": True,
+                    "scan_interval_sec": 0.5,
+                    "stage_confirm_sec": 3.0,
+                    "stage_start_timeout_sec": 8.0,
+                }
+            },
+        )
+        app = _FakeApp()
+        action_trace: list[dict] = []
+        combat_state_trace: list[dict] = []
+
+        with patch("plans.yihuan.src.actions.combat_actions.time.monotonic", side_effect=clock.monotonic), patch(
+            "plans.yihuan.src.actions.combat_actions.time.sleep",
+            side_effect=clock.sleep,
+        ):
+            result = combat_actions._wait_for_stage_started(
+                app,
+                service,
+                service.profile,
+                profile_name="default_1280x720_cn",
+                combat_targets_yolo=None,
+                dry_run=False,
+                action_trace=action_trace,
+                combat_state_trace=combat_state_trace,
+                capture_debug=None,
+                start_time=0.0,
+                trace_limit=100,
+            )
+
+        self.assertEqual(result["status"], "success")
+        confirming = [entry for entry in action_trace if entry["action"] == "stage_enter_marker_confirming"]
+        self.assertTrue(confirming)
+        confirmed = [entry for entry in action_trace if entry["action"] == "stage_enter_confirmed"]
+        self.assertTrue(confirmed)
+        self.assertGreaterEqual(confirmed[-1]["marker_seen_elapsed_sec"], 3.0)
+
+    def test_combat_targets_yolo_overrides_reward_marker_and_direction_marker(self):
+        profile = YihuanCombatService().load_profile()
+        profile["enemy_health_yolo"] = {
+            "enabled": True,
+            "model_name": "yihuan_combat_targets",
+            "labels": ["enemy_hp_bar"],
+            "direction_labels": ["enemy_direction_marker"],
+            "reward_labels": ["reward_marker"],
+            "conf": 0.35,
+            "direction_conf": 0.4,
+            "reward_conf": 0.55,
+            "min_width": 14,
+            "min_height": 8,
+            "direction_min_width": 6,
+            "direction_min_height": 6,
+            "reward_min_width": 6,
+            "reward_min_height": 6,
+        }
+        yolo = _FakeYoloService(
+            [
+                {
+                    "label": "reward_marker",
+                    "score": 0.82,
+                    "bbox_xywh": [690, 330, 22, 22],
+                },
+                {
+                    "label": "enemy_direction_marker",
+                    "score": 0.73,
+                    "bbox_xywh": [1100, 400, 24, 24],
+                },
+                {
+                    "label": "enemy_hp_bar",
+                    "score": 0.91,
+                    "bbox_xywh": [440, 180, 80, 10],
+                },
+            ]
+        )
+        runtime = combat_actions._CombatTargetsYoloRuntime(yolo, profile)
+        state = _state(
+            enemy=False,
+            stage_active=False,
+            enemy_direction_found=False,
+            reward_marker=True,
+            reward_marker_center_x=200,
+        )
+
+        resolved = runtime.apply(state, np.zeros((720, 1280, 3), dtype=np.uint8))
+
+        self.assertEqual(yolo.preloaded, ["yihuan_combat_targets"])
+        self.assertTrue(resolved["front_enemy_found"])
+        self.assertEqual(resolved["enemy_health_count"], 1)
+        self.assertTrue(resolved["enemy_direction_found"])
+        self.assertEqual(resolved["enemy_direction_primary_side"], "right")
+        self.assertEqual(resolved["enemy_direction_markers"][0]["region"], "yolo_right")
+        self.assertTrue(resolved["reward_marker_found"])
+        self.assertEqual(resolved["reward_marker_center_x"], 701)
+        self.assertEqual(resolved["reward_marker_box"], [690, 330, 22, 22])
+        self.assertEqual(resolved["debug"]["combat_targets_yolo"]["reward_count"], 1)
+
+    def test_combat_targets_yolo_ignores_template_reward_while_combat_marker_exists(self):
+        profile = YihuanCombatService().load_profile()
+        profile["enemy_health_yolo"] = {
+            "enabled": True,
+            "model_name": "yihuan_combat_targets",
+            "labels": ["enemy_hp_bar"],
+            "direction_labels": ["enemy_direction_marker"],
+            "reward_labels": ["reward_marker"],
+            "conf": 0.35,
+            "reward_conf": 0.55,
+        }
+        yolo = _FakeYoloService(
+            [
+                {
+                    "label": "reward_marker",
+                    "score": 0.9,
+                    "bbox_xywh": [700, 330, 22, 22],
+                }
+            ]
+        )
+        runtime = combat_actions._CombatTargetsYoloRuntime(yolo, profile)
+        state = _state(enemy=True, stage_active=True, reward_marker=False)
+
+        resolved = runtime.apply(state, np.zeros((720, 1280, 3), dtype=np.uint8))
+
+        self.assertFalse(resolved["reward_marker_found"])
+        self.assertIsNone(resolved["reward_marker_center_x"])
+
+    def test_combat_targets_yolo_can_leave_reward_marker_to_template_matching(self):
+        profile = YihuanCombatService().load_profile()
+        profile["enemy_health_yolo"] = {
+            "enabled": True,
+            "reward_enabled": False,
+            "model_name": "yihuan_combat_targets",
+            "labels": ["enemy_hp_bar"],
+            "direction_labels": ["enemy_direction_marker"],
+            "reward_labels": ["reward_marker"],
+            "conf": 0.35,
+            "reward_conf": 0.55,
+        }
+        yolo = _FakeYoloService(
+            [
+                {
+                    "label": "reward_marker",
+                    "score": 0.99,
+                    "bbox_xywh": [900, 330, 22, 22],
+                }
+            ]
+        )
+        runtime = combat_actions._CombatTargetsYoloRuntime(yolo, profile)
+        state = _state(enemy=False, stage_active=False, reward_marker=True, reward_marker_center_x=520)
+
+        resolved = runtime.apply(state, np.zeros((720, 1280, 3), dtype=np.uint8))
+
+        self.assertTrue(resolved["reward_marker_found"])
+        self.assertEqual(resolved["reward_marker_center_x"], 520)
+        self.assertEqual(resolved["debug"]["combat_targets_yolo"]["reward_enabled"], False)
+        self.assertEqual(resolved["debug"]["combat_targets_yolo"]["reward_count"], 0)
+
+    def test_combat_targets_yolo_filters_reward_marker_outside_reward_region(self):
+        profile = YihuanCombatService().load_profile()
+        profile["enemy_health_yolo"] = {
+            "enabled": True,
+            "model_name": "yihuan_combat_targets",
+            "labels": ["enemy_hp_bar"],
+            "direction_labels": ["enemy_direction_marker"],
+            "reward_labels": ["reward_marker"],
+            "conf": 0.35,
+            "reward_conf": 0.55,
+            "reward_search_region": [80, 30, 1100, 640],
+            "reward_exclude_regions": [[1040, 400, 240, 220]],
+        }
+        yolo = _FakeYoloService(
+            [
+                {
+                    "label": "reward_marker",
+                    "score": 0.93,
+                    "bbox_xywh": [1220, 320, 24, 24],
+                },
+                {
+                    "label": "reward_marker",
+                    "score": 0.91,
+                    "bbox_xywh": [1070, 474, 24, 24],
+                },
+                {
+                    "label": "reward_marker",
+                    "score": 0.86,
+                    "bbox_xywh": [145, 225, 24, 24],
+                },
+            ]
+        )
+        runtime = combat_actions._CombatTargetsYoloRuntime(yolo, profile)
+        state = _state(enemy=False, stage_active=False)
+
+        resolved = runtime.apply(state, np.zeros((720, 1280, 3), dtype=np.uint8))
+
+        self.assertTrue(resolved["reward_marker_found"])
+        self.assertEqual(resolved["reward_marker_center_x"], 157)
+        self.assertEqual(resolved["reward_marker_box"], [145, 225, 24, 24])
+
     def test_reward_turn_pixels_preserves_direction_and_deadzone(self):
         self.assertEqual(
             combat_actions._reward_turn_pixels_for_error(
@@ -723,7 +1291,7 @@ class TestYihuanCombatActions(unittest.TestCase):
         service = _FakeCombatService([combat_state, _state(enemy=False)], clock=clock)
         app = _FakeApp()
 
-        result, _clock = self._run_with_clock(app, service, max_encounters=1, auto_dodge=False, dry_run=True, max_seconds=6)
+        result, _clock = self._run_with_clock(app, service, max_encounters=1, auto_dodge=False, dry_run=True, max_seconds=9)
 
         self.assertEqual(result["status"], "success")
         self.assertEqual(result["stopped_reason"], "max_encounters")
@@ -901,6 +1469,11 @@ def _state(
     reward_marker: bool = False,
     reward_marker_center_x: int | None = None,
     claim_prompt: bool = False,
+    stage_enter_button: bool = False,
+    reward_claim_single_button: bool = False,
+    reward_claim_double_button: bool = False,
+    reward_result_exit_button: bool = False,
+    reward_result_retry_button: bool = False,
 ) -> dict:
     resolved_skill_state = skill_state or ("ready" if skill else "disabled_or_unready")
     resolved_ultimate_state = ultimate_state or ("ready" if ultimate else "disabled_or_unready")
@@ -937,12 +1510,37 @@ def _state(
         "ultimate_state": resolved_ultimate_state,
         "arc_available": False,
         "challenge_success_found": bool(challenge_success),
+        "stage_enter_button_found": bool(stage_enter_button),
+        "stage_enter_button_confidence": 0.91 if stage_enter_button else 0.0,
+        "stage_enter_button_box": [990, 630, 145, 45] if stage_enter_button else [],
+        "stage_enter_button_center_x": 1062 if stage_enter_button else None,
+        "stage_enter_button_center_y": 652 if stage_enter_button else None,
         "reward_marker_found": bool(reward_marker),
         "reward_marker_center_x": reward_marker_center_x if reward_marker else None,
         "reward_marker_center_y": 360 if reward_marker else None,
         "reward_marker_box": [630, 350, 20, 20] if reward_marker else [],
         "claim_memento_prompt_found": bool(claim_prompt),
         "claim_memento_prompt_box": [777, 384, 20, 18] if claim_prompt else [],
+        "reward_claim_single_button_found": bool(reward_claim_single_button),
+        "reward_claim_single_button_confidence": 0.96 if reward_claim_single_button else 0.0,
+        "reward_claim_single_button_box": [425, 445, 195, 44] if reward_claim_single_button else [],
+        "reward_claim_single_button_center_x": 522 if reward_claim_single_button else None,
+        "reward_claim_single_button_center_y": 467 if reward_claim_single_button else None,
+        "reward_claim_double_button_found": bool(reward_claim_double_button),
+        "reward_claim_double_button_confidence": 0.96 if reward_claim_double_button else 0.0,
+        "reward_claim_double_button_box": [746, 445, 195, 44] if reward_claim_double_button else [],
+        "reward_claim_double_button_center_x": 844 if reward_claim_double_button else None,
+        "reward_claim_double_button_center_y": 467 if reward_claim_double_button else None,
+        "reward_result_exit_button_found": bool(reward_result_exit_button),
+        "reward_result_exit_button_confidence": 0.96 if reward_result_exit_button else 0.0,
+        "reward_result_exit_button_box": [390, 599, 195, 45] if reward_result_exit_button else [],
+        "reward_result_exit_button_center_x": 488 if reward_result_exit_button else None,
+        "reward_result_exit_button_center_y": 622 if reward_result_exit_button else None,
+        "reward_result_retry_button_found": bool(reward_result_retry_button),
+        "reward_result_retry_button_confidence": 0.96 if reward_result_retry_button else 0.0,
+        "reward_result_retry_button_box": [698, 599, 195, 45] if reward_result_retry_button else [],
+        "reward_result_retry_button_center_x": 796 if reward_result_retry_button else None,
+        "reward_result_retry_button_center_y": 622 if reward_result_retry_button else None,
         "confidence": 0.8 if enemy else 0.1,
         "debug": {},
     }

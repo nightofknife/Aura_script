@@ -70,6 +70,9 @@ class YihuanCombatService:
         combat_exit_payload = dict(payload.get("combat_exit") or {})
         enemy_direction_reacquire_payload = dict(payload.get("enemy_direction_reacquire") or {})
         post_combat_reward_payload = dict(payload.get("post_combat_reward") or {})
+        stage_entry_payload = dict(payload.get("stage_entry") or {})
+        pre_combat_approach_payload = dict(payload.get("pre_combat_approach") or {})
+        enemy_health_yolo_payload = dict(payload.get("enemy_health_yolo") or {})
 
         ability_regions = {
             "skill": self._coerce_region(
@@ -183,6 +186,22 @@ class YihuanCombatService:
                     regions_payload.get("claim_memento_prompt_region"),
                     default=(760, 372, 50, 50),
                 ),
+                "reward_claim_single_button_region": self._coerce_region(
+                    regions_payload.get("reward_claim_single_button_region"),
+                    default=(380, 420, 300, 95),
+                ),
+                "reward_claim_double_button_region": self._coerce_region(
+                    regions_payload.get("reward_claim_double_button_region"),
+                    default=(700, 420, 300, 95),
+                ),
+                "reward_result_exit_button_region": self._coerce_region(
+                    regions_payload.get("reward_result_exit_button_region"),
+                    default=(340, 570, 300, 100),
+                ),
+                "reward_result_retry_button_region": self._coerce_region(
+                    regions_payload.get("reward_result_retry_button_region"),
+                    default=(650, 570, 300, 100),
+                ),
             },
             "ability_regions": ability_regions,
             "current_slot_regions": [
@@ -232,6 +251,10 @@ class YihuanCombatService:
                 "confirm_interval_sec": max(
                     self._coerce_float(combat_exit_payload.get("confirm_interval_sec"), 1.0),
                     0.1,
+                ),
+                "confirm_missing_sec": max(
+                    self._coerce_float(combat_exit_payload.get("confirm_missing_sec"), 3.0),
+                    0.0,
                 ),
                 "post_exit_cooldown_ms": max(
                     self._coerce_int(
@@ -304,6 +327,150 @@ class YihuanCombatService:
                 "post_interact_delay_ms": max(
                     self._coerce_int(post_combat_reward_payload.get("post_interact_delay_ms"), 120),
                     0,
+                ),
+                "claim_modal_timeout_sec": max(
+                    self._coerce_float(post_combat_reward_payload.get("claim_modal_timeout_sec"), 6.0),
+                    0.1,
+                ),
+                "claim_result_timeout_sec": max(
+                    self._coerce_float(post_combat_reward_payload.get("claim_result_timeout_sec"), 8.0),
+                    0.1,
+                ),
+                "post_claim_click_delay_ms": max(
+                    self._coerce_int(post_combat_reward_payload.get("post_claim_click_delay_ms"), 350),
+                    0,
+                ),
+                "post_result_click_delay_ms": max(
+                    self._coerce_int(post_combat_reward_payload.get("post_result_click_delay_ms"), 800),
+                    0,
+                ),
+                "click_move_duration_sec": max(
+                    self._coerce_float(post_combat_reward_payload.get("click_move_duration_sec"), 0.10),
+                    0.0,
+                ),
+                "single_claim_button_center": self._coerce_point(
+                    post_combat_reward_payload.get("single_claim_button_center"),
+                    default=(522, 467),
+                ),
+                "double_claim_button_center": self._coerce_point(
+                    post_combat_reward_payload.get("double_claim_button_center"),
+                    default=(844, 467),
+                ),
+                "retry_challenge_button_center": self._coerce_point(
+                    post_combat_reward_payload.get("retry_challenge_button_center"),
+                    default=(796, 622),
+                ),
+                "exit_button_center": self._coerce_point(
+                    post_combat_reward_payload.get("exit_button_center"),
+                    default=(488, 622),
+                ),
+            },
+            "stage_entry": {
+                "enabled": self._coerce_bool(stage_entry_payload.get("enabled"), False),
+                "wait_after_click_ms": max(
+                    self._coerce_int(stage_entry_payload.get("wait_after_click_ms"), 800),
+                    0,
+                ),
+                "stage_confirm_sec": max(
+                    self._coerce_float(stage_entry_payload.get("stage_confirm_sec"), 3.0),
+                    0.0,
+                ),
+                "stage_start_timeout_sec": max(
+                    self._coerce_float(stage_entry_payload.get("stage_start_timeout_sec"), 30.0),
+                    0.1,
+                ),
+                "scan_interval_sec": max(
+                    self._coerce_float(stage_entry_payload.get("scan_interval_sec"), 0.5),
+                    0.05,
+                ),
+                "click_move_duration_sec": max(
+                    self._coerce_float(stage_entry_payload.get("click_move_duration_sec"), 0.10),
+                    0.0,
+                ),
+            },
+            "pre_combat_approach": {
+                "enabled": self._coerce_bool(pre_combat_approach_payload.get("enabled"), False),
+                "hold_key": str(pre_combat_approach_payload.get("hold_key") or "w"),
+                "scan_interval_sec": max(
+                    self._coerce_float(pre_combat_approach_payload.get("scan_interval_sec"), 0.18),
+                    0.05,
+                ),
+                "max_duration_sec": max(
+                    self._coerce_float(pre_combat_approach_payload.get("max_duration_sec"), 18.0),
+                    0.1,
+                ),
+                "min_hold_sec": max(
+                    self._coerce_float(pre_combat_approach_payload.get("min_hold_sec"), 0.0),
+                    0.0,
+                ),
+                "release_delay_ms": max(
+                    self._coerce_int(pre_combat_approach_payload.get("release_delay_ms"), 80),
+                    0,
+                ),
+            },
+            "enemy_health_yolo": {
+                "enabled": self._coerce_bool(enemy_health_yolo_payload.get("enabled"), False),
+                "reward_enabled": self._coerce_bool(enemy_health_yolo_payload.get("reward_enabled"), True),
+                "model_name": str(enemy_health_yolo_payload.get("model_name") or "yihuan_enemy_hp_bar"),
+                "labels": [
+                    str(item).strip()
+                    for item in (enemy_health_yolo_payload.get("labels") or ["enemy_hp_bar"])
+                    if str(item).strip()
+                ],
+                "direction_labels": [
+                    str(item).strip()
+                    for item in (enemy_health_yolo_payload.get("direction_labels") or ["enemy_direction_marker"])
+                    if str(item).strip()
+                ],
+                "reward_labels": [
+                    str(item).strip()
+                    for item in (enemy_health_yolo_payload.get("reward_labels") or ["reward_marker"])
+                    if str(item).strip()
+                ],
+                "conf": min(max(self._coerce_float(enemy_health_yolo_payload.get("conf"), 0.35), 0.0), 1.0),
+                "direction_conf": min(
+                    max(self._coerce_float(enemy_health_yolo_payload.get("direction_conf"), 0.35), 0.0),
+                    1.0,
+                ),
+                "reward_conf": min(
+                    max(self._coerce_float(enemy_health_yolo_payload.get("reward_conf"), 0.35), 0.0),
+                    1.0,
+                ),
+                "iou": min(max(self._coerce_float(enemy_health_yolo_payload.get("iou"), 0.45), 0.0), 1.0),
+                "max_det": max(self._coerce_int(enemy_health_yolo_payload.get("max_det"), 20), 1),
+                "min_width": max(self._coerce_int(enemy_health_yolo_payload.get("min_width"), 14), 1),
+                "min_height": max(self._coerce_int(enemy_health_yolo_payload.get("min_height"), 8), 1),
+                "direction_min_width": max(
+                    self._coerce_int(enemy_health_yolo_payload.get("direction_min_width"), 6),
+                    1,
+                ),
+                "direction_min_height": max(
+                    self._coerce_int(enemy_health_yolo_payload.get("direction_min_height"), 6),
+                    1,
+                ),
+                "reward_min_width": max(
+                    self._coerce_int(enemy_health_yolo_payload.get("reward_min_width"), 6),
+                    1,
+                ),
+                "reward_min_height": max(
+                    self._coerce_int(enemy_health_yolo_payload.get("reward_min_height"), 6),
+                    1,
+                ),
+                "reward_search_region": self._coerce_region(
+                    enemy_health_yolo_payload.get("reward_search_region"),
+                    default=(0, 140, 960, 500),
+                ),
+                "reward_exclude_regions": [
+                    self._coerce_region(item, default=(0, 0, 1, 1))
+                    for item in (enemy_health_yolo_payload.get("reward_exclude_regions") or [(430, 250, 360, 470)])
+                ],
+                "last_seen_ttl_sec": max(
+                    self._coerce_float(enemy_health_yolo_payload.get("last_seen_ttl_sec"), 0.8),
+                    0.0,
+                ),
+                "fallback_to_hsv_on_error": self._coerce_bool(
+                    enemy_health_yolo_payload.get("fallback_to_hsv_on_error"),
+                    True,
                 ),
             },
             "ability_schedule": {
@@ -475,6 +642,13 @@ class YihuanCombatService:
                 ),
             },
             "templates": {
+                "stage_enter_button": self._coerce_template_spec(
+                    templates_payload.get("stage_enter_button"),
+                    default_path=f"{resolved_name}/stage_enter_button.png",
+                    default_region=(850, 610, 400, 90),
+                    default_threshold=0.82,
+                    default_scales=(0.9, 1.0, 1.1),
+                ),
                 "target_lock": self._coerce_template_spec(
                     templates_payload.get("target_lock"),
                     default_path=f"{resolved_name}/target_lock_diamond.png",
@@ -509,6 +683,34 @@ class YihuanCombatService:
                     default_region=regions_payload.get("claim_memento_prompt_region") or (760, 372, 50, 50),
                     default_threshold=0.94,
                     default_scales=(0.9, 1.0, 1.08),
+                ),
+                "reward_claim_single_button": self._coerce_template_spec(
+                    templates_payload.get("reward_claim_single_button"),
+                    default_path=f"{resolved_name}/reward_claim_single_button.png",
+                    default_region=regions_payload.get("reward_claim_single_button_region") or (380, 420, 300, 95),
+                    default_threshold=0.88,
+                    default_scales=(0.95, 1.0, 1.05),
+                ),
+                "reward_claim_double_button": self._coerce_template_spec(
+                    templates_payload.get("reward_claim_double_button"),
+                    default_path=f"{resolved_name}/reward_claim_double_button.png",
+                    default_region=regions_payload.get("reward_claim_double_button_region") or (700, 420, 300, 95),
+                    default_threshold=0.88,
+                    default_scales=(0.95, 1.0, 1.05),
+                ),
+                "reward_result_exit_button": self._coerce_template_spec(
+                    templates_payload.get("reward_result_exit_button"),
+                    default_path=f"{resolved_name}/reward_result_exit_button.png",
+                    default_region=regions_payload.get("reward_result_exit_button_region") or (340, 570, 300, 100),
+                    default_threshold=0.88,
+                    default_scales=(0.95, 1.0, 1.05),
+                ),
+                "reward_result_retry_button": self._coerce_template_spec(
+                    templates_payload.get("reward_result_retry_button"),
+                    default_path=f"{resolved_name}/reward_result_retry_button.png",
+                    default_region=regions_payload.get("reward_result_retry_button_region") or (650, 570, 300, 100),
+                    default_threshold=0.88,
+                    default_scales=(0.95, 1.0, 1.05),
                 ),
             },
             "audio_dodge": {
@@ -617,8 +819,17 @@ class YihuanCombatService:
             dict(profile["templates"])["challenge_success"],
             profile=profile,
         )
+        stage_enter_match = self._match_template_in_region(
+            source_image,
+            dict(profile["templates"])["stage_enter_button"],
+            profile=profile,
+        )
         reward_marker_match = {"found": False, "score": 0.0, "box": None}
         claim_prompt_match = {"found": False, "score": 0.0, "box": None}
+        reward_claim_single_match = {"found": False, "score": 0.0, "box": None}
+        reward_claim_double_match = {"found": False, "score": 0.0, "box": None}
+        reward_result_exit_match = {"found": False, "score": 0.0, "box": None}
+        reward_result_retry_match = {"found": False, "score": 0.0, "box": None}
 
         enemy_health_found = bool(enemy_health_boxes)
         enemy_direction_found = bool(enemy_direction_markers)
@@ -661,14 +872,47 @@ class YihuanCombatService:
                 dict(profile["templates"])["claim_memento_prompt"],
                 profile=profile,
             )
+            reward_claim_single_match = self._match_template_in_region(
+                source_image,
+                dict(profile["templates"])["reward_claim_single_button"],
+                profile=profile,
+            )
+            reward_claim_double_match = self._match_template_in_region(
+                source_image,
+                dict(profile["templates"])["reward_claim_double_button"],
+                profile=profile,
+            )
+            reward_result_exit_match = self._match_template_in_region(
+                source_image,
+                dict(profile["templates"])["reward_result_exit_button"],
+                profile=profile,
+            )
+            reward_result_retry_match = self._match_template_in_region(
+                source_image,
+                dict(profile["templates"])["reward_result_retry_button"],
+                profile=profile,
+            )
         reward_marker_found = bool(reward_marker_match["found"])
+        stage_enter_button_found = bool(stage_enter_match["found"])
+
+        def _center_for_box(box: Any) -> tuple[int | None, int | None]:
+            if box is None:
+                return None, None
+            bx, by, bw, bh = [int(item) for item in box]
+            return int(round(bx + bw / 2.0)), int(round(by + bh / 2.0))
+
+        stage_enter_button_box = stage_enter_match.get("box")
+        stage_enter_button_center_x, stage_enter_button_center_y = _center_for_box(stage_enter_button_box)
         reward_marker_box = reward_marker_match.get("box")
-        reward_marker_center_x = None
-        reward_marker_center_y = None
-        if reward_marker_box is not None:
-            rx, ry, rw, rh = [int(item) for item in reward_marker_box]
-            reward_marker_center_x = int(round(rx + rw / 2.0))
-            reward_marker_center_y = int(round(ry + rh / 2.0))
+        reward_marker_center_x, reward_marker_center_y = _center_for_box(reward_marker_box)
+        reward_claim_single_box = reward_claim_single_match.get("box")
+        reward_claim_double_box = reward_claim_double_match.get("box")
+        reward_result_exit_box = reward_result_exit_match.get("box")
+        reward_result_retry_box = reward_result_retry_match.get("box")
+        reward_claim_single_center_x, reward_claim_single_center_y = _center_for_box(reward_claim_single_box)
+        reward_claim_double_center_x, reward_claim_double_center_y = _center_for_box(reward_claim_double_box)
+        reward_result_exit_center_x, reward_result_exit_center_y = _center_for_box(reward_result_exit_box)
+        reward_result_retry_center_x, reward_result_retry_center_y = _center_for_box(reward_result_retry_box)
         claim_memento_prompt_found = bool(claim_prompt_match["found"])
 
         supported_features = [
@@ -737,6 +981,14 @@ class YihuanCombatService:
             "ultimate_state": str(ability_analysis["ultimate"]["state"]),
             "arc_available": False,
             "challenge_success_found": bool(challenge_success_found),
+            "stage_enter_button_found": bool(stage_enter_button_found),
+            "stage_enter_button_confidence": round(float(stage_enter_match["score"]), 3),
+            "stage_enter_button_box": [
+                int(item)
+                for item in (list(stage_enter_button_box) if stage_enter_button_box is not None else [])
+            ],
+            "stage_enter_button_center_x": stage_enter_button_center_x,
+            "stage_enter_button_center_y": stage_enter_button_center_y,
             "reward_marker_found": bool(reward_marker_found),
             "reward_marker_confidence": round(float(reward_marker_match["score"]), 3),
             "reward_marker_box": [
@@ -753,6 +1005,46 @@ class YihuanCombatService:
                     list(claim_prompt_match["box"]) if claim_prompt_match.get("box") is not None else []
                 )
             ],
+            "reward_claim_single_button_found": bool(reward_claim_single_match["found"]),
+            "reward_claim_single_button_confidence": round(float(reward_claim_single_match["score"]), 3),
+            "reward_claim_single_button_box": [
+                int(item)
+                for item in (
+                    list(reward_claim_single_box) if reward_claim_single_box is not None else []
+                )
+            ],
+            "reward_claim_single_button_center_x": reward_claim_single_center_x,
+            "reward_claim_single_button_center_y": reward_claim_single_center_y,
+            "reward_claim_double_button_found": bool(reward_claim_double_match["found"]),
+            "reward_claim_double_button_confidence": round(float(reward_claim_double_match["score"]), 3),
+            "reward_claim_double_button_box": [
+                int(item)
+                for item in (
+                    list(reward_claim_double_box) if reward_claim_double_box is not None else []
+                )
+            ],
+            "reward_claim_double_button_center_x": reward_claim_double_center_x,
+            "reward_claim_double_button_center_y": reward_claim_double_center_y,
+            "reward_result_exit_button_found": bool(reward_result_exit_match["found"]),
+            "reward_result_exit_button_confidence": round(float(reward_result_exit_match["score"]), 3),
+            "reward_result_exit_button_box": [
+                int(item)
+                for item in (
+                    list(reward_result_exit_box) if reward_result_exit_box is not None else []
+                )
+            ],
+            "reward_result_exit_button_center_x": reward_result_exit_center_x,
+            "reward_result_exit_button_center_y": reward_result_exit_center_y,
+            "reward_result_retry_button_found": bool(reward_result_retry_match["found"]),
+            "reward_result_retry_button_confidence": round(float(reward_result_retry_match["score"]), 3),
+            "reward_result_retry_button_box": [
+                int(item)
+                for item in (
+                    list(reward_result_retry_box) if reward_result_retry_box is not None else []
+                )
+            ],
+            "reward_result_retry_button_center_x": reward_result_retry_center_x,
+            "reward_result_retry_button_center_y": reward_result_retry_center_y,
             "confidence": round(float(confidence), 3),
             "debug": {
                 "combat_gate_reason": combat_gate_reason,
@@ -783,12 +1075,36 @@ class YihuanCombatService:
                 "boss_health_search_region": list(
                     self.scale_region(source_image, regions["boss_health_bar"], profile=profile)
                 ),
+                "stage_enter_button_match": {
+                    "found": bool(stage_enter_button_found),
+                    "score": round(float(stage_enter_match["score"]), 4),
+                    "box": [
+                        int(item)
+                        for item in (list(stage_enter_button_box) if stage_enter_button_box is not None else [])
+                    ],
+                },
                 "reward_marker_search_region": list(
                     self.scale_region(source_image, regions["reward_marker_search_region"], profile=profile)
                 ),
                 "claim_memento_prompt_region": list(
                     self.scale_region(source_image, regions["claim_memento_prompt_region"], profile=profile)
                 ),
+                "reward_claim_button_regions": {
+                    "single": list(
+                        self.scale_region(source_image, regions["reward_claim_single_button_region"], profile=profile)
+                    ),
+                    "double": list(
+                        self.scale_region(source_image, regions["reward_claim_double_button_region"], profile=profile)
+                    ),
+                },
+                "reward_result_button_regions": {
+                    "exit": list(
+                        self.scale_region(source_image, regions["reward_result_exit_button_region"], profile=profile)
+                    ),
+                    "retry": list(
+                        self.scale_region(source_image, regions["reward_result_retry_button_region"], profile=profile)
+                    ),
+                },
                 "ratios": {
                     "boss_health": round(float(len(boss_health_boxes)), 4),
                     "team": round(float(team_ratio), 4),
@@ -814,6 +1130,10 @@ class YihuanCombatService:
                     "challenge_success": round(float(success_match["score"]), 4),
                     "reward_marker": round(float(reward_marker_match["score"]), 4),
                     "claim_memento_prompt": round(float(claim_prompt_match["score"]), 4),
+                    "reward_claim_single_button": round(float(reward_claim_single_match["score"]), 4),
+                    "reward_claim_double_button": round(float(reward_claim_double_match["score"]), 4),
+                    "reward_result_exit_button": round(float(reward_result_exit_match["score"]), 4),
+                    "reward_result_retry_button": round(float(reward_result_retry_match["score"]), 4),
                 },
                 "target_lock_box": [
                     int(item)
@@ -1251,6 +1571,8 @@ class YihuanCombatService:
                 return None
             if raw_mask.ndim == 3 and raw_mask.shape[2] == 4:
                 mask_source = raw_mask[:, :, 3]
+            elif raw_mask.ndim == 3 and raw_mask.shape[2] == 1:
+                mask_source = raw_mask[:, :, 0]
             elif raw_mask.ndim == 3:
                 mask_source = cv2.cvtColor(raw_mask, cv2.COLOR_BGR2GRAY)
             else:
@@ -1585,6 +1907,14 @@ class YihuanCombatService:
             )
         return default
 
+    def _coerce_point(self, value: Any, *, default: tuple[int, int]) -> tuple[int, int]:
+        if isinstance(value, (list, tuple)) and len(value) >= 2:
+            return (
+                self._coerce_int(value[0], default[0]),
+                self._coerce_int(value[1], default[1]),
+            )
+        return default
+
     def _coerce_strategies(self, value: Any) -> dict[str, Any]:
         if isinstance(value, Mapping) and value:
             return {str(name): dict(config or {}) for name, config in value.items()}
@@ -1615,3 +1945,17 @@ class YihuanCombatService:
             return float(value)
         except (TypeError, ValueError):
             return float(default)
+
+    def _coerce_bool(self, value: Any, default: bool = False) -> bool:
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return bool(default)
+        if isinstance(value, (int, float)):
+            return value != 0
+        normalized = str(value).strip().lower()
+        if normalized in {"", "0", "false", "no", "off", "none", "null"}:
+            return False
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        return bool(default)

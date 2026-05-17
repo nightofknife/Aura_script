@@ -54,6 +54,7 @@ switch_policy:
 combat_exit:
   confirm_required_scans: 2
   confirm_interval_sec: 1.0
+  confirm_missing_sec: 3.0
   post_exit_cooldown_ms: 700
   challenge_success_immediate: true
   reset_on_reacquire: true
@@ -73,9 +74,61 @@ post_combat_reward:
   walk_step_sec: 0.24
   interact_key: f
   post_interact_delay_ms: 120
+  claim_modal_timeout_sec: 6.0
+  claim_result_timeout_sec: 8.0
+  post_claim_click_delay_ms: 350
+  post_result_click_delay_ms: 800
+  click_move_duration_sec: 0.10
+  single_claim_button_center: [522, 467]
+  double_claim_button_center: [844, 467]
+  retry_challenge_button_center: [796, 622]
+  exit_button_center: [488, 622]
   search_turn_pixels: 520
   search_turn_interval_sec: 0.65
   prompt_required_scans: 1
+
+stage_entry:
+  enabled: true
+  wait_after_click_ms: 800
+  stage_confirm_sec: 3.0
+  stage_start_timeout_sec: 30.0
+  scan_interval_sec: 0.5
+  click_move_duration_sec: 0.10
+
+pre_combat_approach:
+  enabled: true
+  hold_key: w
+  scan_interval_sec: 0.18
+  max_duration_sec: 18.0
+  min_hold_sec: 4.0
+  release_delay_ms: 80
+
+enemy_health_yolo:
+  enabled: true
+  reward_enabled: false
+  model_name: yihuan_combat_targets
+  labels:
+    - enemy_hp_bar
+  direction_labels:
+    - enemy_direction_marker
+  reward_labels:
+    - reward_marker
+  conf: 0.35
+  direction_conf: 0.40
+  reward_conf: 0.55
+  iou: 0.45
+  max_det: 20
+  min_width: 14
+  min_height: 8
+  direction_min_width: 6
+  direction_min_height: 6
+  reward_min_width: 6
+  reward_min_height: 6
+  reward_search_region: [80, 30, 1100, 640]
+  reward_exclude_regions:
+    - [1040, 400, 240, 220]
+  last_seen_ttl_sec: 0.8
+  fallback_to_hsv_on_error: true
 
 ability_schedule:
   skill_interval_sec: 3.0
@@ -146,14 +199,34 @@ regions:
     - 150
   reward_marker_search_region:
     - 80
-    - 300
-    - 1040
-    - 330
+    - 30
+    - 1100
+    - 640
   claim_memento_prompt_region:
     - 760
     - 372
     - 50
     - 50
+  reward_claim_single_button_region:
+    - 380
+    - 420
+    - 300
+    - 95
+  reward_claim_double_button_region:
+    - 700
+    - 420
+    - 300
+    - 95
+  reward_result_exit_button_region:
+    - 340
+    - 570
+    - 300
+    - 100
+  reward_result_retry_button_region:
+    - 650
+    - 570
+    - 300
+    - 100
 
 ability_regions:
   skill:
@@ -286,6 +359,11 @@ thresholds:
   supported_scene_min_features: 1
 
 templates:
+  stage_enter_button:
+    path: default_1280x720_cn/stage_enter_button.png
+    search_region: [850, 610, 400, 90]
+    match_threshold: 0.82
+    scales: [0.9, 1.0, 1.1]
   target_lock:
     path: default_1280x720_cn/target_lock_diamond.png
     search_region: [200, 120, 880, 320]
@@ -304,7 +382,7 @@ templates:
   reward_marker:
     path: default_1280x720_cn/reward_marker.png
     mask_path: default_1280x720_cn/reward_marker_mask.png
-    search_region: [80, 300, 1040, 330]
+    search_region: [80, 30, 1100, 640]
     match_threshold: 0.72
     scales: [0.8, 0.9, 1.0, 1.12, 1.25]
   claim_memento_prompt:
@@ -312,6 +390,26 @@ templates:
     search_region: [760, 372, 50, 50]
     match_threshold: 0.94
     scales: [0.9, 1.0, 1.08]
+  reward_claim_single_button:
+    path: default_1280x720_cn/reward_claim_single_button.png
+    search_region: [380, 420, 300, 95]
+    match_threshold: 0.88
+    scales: [0.95, 1.0, 1.05]
+  reward_claim_double_button:
+    path: default_1280x720_cn/reward_claim_double_button.png
+    search_region: [700, 420, 300, 95]
+    match_threshold: 0.88
+    scales: [0.95, 1.0, 1.05]
+  reward_result_exit_button:
+    path: default_1280x720_cn/reward_result_exit_button.png
+    search_region: [340, 570, 300, 100]
+    match_threshold: 0.88
+    scales: [0.95, 1.0, 1.05]
+  reward_result_retry_button:
+    path: default_1280x720_cn/reward_result_retry_button.png
+    search_region: [650, 570, 300, 100]
+    match_threshold: 0.88
+    scales: [0.95, 1.0, 1.05]
 
 audio_dodge:
   enabled: true
