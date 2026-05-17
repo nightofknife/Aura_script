@@ -1,0 +1,54 @@
+collect_hpbar_dataset:
+  meta:
+    title: Combat target dataset collector
+    description: Capture the current screen once per interval, run the configured combat-target YOLO model, and save auto-labeled positive frames.
+    inputs:
+      - name: max_images
+        type: number
+        default: 0
+      - name: profile_name
+        type: string
+        default: default_1280x720_cn
+      - name: model_name
+        type: string
+        default: yihuan_combat_targets
+      - name: labels
+        type: string
+        default: enemy_hp_bar,enemy_direction_marker,reward_marker
+      - name: conf
+        type: number
+        default: 0.25
+      - name: iou
+        type: number
+        default: 0.45
+      - name: interval_sec
+        type: number
+        default: 1.0
+      - name: dataset_root
+        type: string
+        default: ""
+      - name: save_annotated
+        type: boolean
+        default: true
+      - name: dedupe
+        type: boolean
+        default: false
+      - name: max_seconds
+        type: number
+        default: 0
+  steps:
+    run:
+      action: yihuan_combat_collect_hpbar_dataset
+      params:
+        max_images: "{{ inputs.max_images }}"
+        profile_name: "{{ inputs.profile_name }}"
+        model_name: "{{ inputs.model_name }}"
+        labels: "{{ inputs.labels }}"
+        conf: "{{ inputs.conf }}"
+        iou: "{{ inputs.iou }}"
+        interval_sec: "{{ inputs.interval_sec }}"
+        dataset_root: "{{ inputs.dataset_root }}"
+        save_annotated: "{{ inputs.save_annotated }}"
+        dedupe: "{{ inputs.dedupe }}"
+        max_seconds: "{{ inputs.max_seconds }}"
+  returns: "{{ nodes.run.output }}"

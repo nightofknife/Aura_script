@@ -146,6 +146,59 @@ exports:
       type: Any
       required: false
       default: false
+  - name: yihuan_combat_collect_hpbar_dataset
+    module: plans.yihuan.src.actions.combat_actions
+    function: yihuan_combat_collect_hpbar_dataset
+    public: false
+    read_only: false
+    timeout: null
+    description: Collect auto-labeled Yihuan combat target screenshots with the current
+      YOLO model.
+    parameters:
+    - name: max_images
+      type: Any
+      required: false
+      default: 0
+    - name: profile_name
+      type: Any
+      required: false
+      default: default_1280x720_cn
+    - name: model_name
+      type: Any
+      required: false
+      default: null
+    - name: labels
+      type: Any
+      required: false
+      default: null
+    - name: conf
+      type: Any
+      required: false
+      default: null
+    - name: iou
+      type: Any
+      required: false
+      default: null
+    - name: interval_sec
+      type: Any
+      required: false
+      default: 1.0
+    - name: dataset_root
+      type: Any
+      required: false
+      default: null
+    - name: save_annotated
+      type: Any
+      required: false
+      default: true
+    - name: dedupe
+      type: Any
+      required: false
+      default: false
+    - name: max_seconds
+      type: Any
+      required: false
+      default: 0
   - name: yihuan_fishing_debug_monitor
     module: plans.yihuan.src.actions.fishing_actions
     function: yihuan_fishing_debug_monitor
@@ -421,6 +474,14 @@ exports:
     title: 自动战斗
     source: tasks/combat/auto_loop.yaml
     description: 使用异环专用战斗识别和默认策略执行自动战斗循环。
+  - id: combat/collect_hpbar_dataset/collect_hpbar_dataset
+    title: 血条数据集采集
+    source: tasks/combat/collect_hpbar_dataset.yaml
+    description: 每秒截屏并调用当前敌人血条 YOLO，识别到血条时保存图片和自动标注。
+  - id: combat/collect_hpbar_dataset
+    title: 血条数据集采集
+    source: tasks/combat/collect_hpbar_dataset.yaml
+    description: 每秒截屏并调用当前敌人血条 YOLO，识别到血条时保存图片和自动标注。
   - id: fishing/auto_loop/auto_loop
     title: 自动循环钓鱼
     source: tasks/fishing/auto_loop.yaml
