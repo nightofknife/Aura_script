@@ -247,6 +247,7 @@ class TestYihuanGuiLogic(unittest.TestCase):
                 "strategy_name": "burst",
                 "max_seconds": 300,
                 "max_encounters": 5,
+                "battle_count": 5,
                 "auto_target": True,
                 "auto_dodge": False,
                 "dry_run": False,
@@ -266,6 +267,7 @@ class TestYihuanGuiLogic(unittest.TestCase):
                     {"name": "strategy_name", "type": "string", "default": "burst"},
                     {"name": "max_seconds", "type": "number", "default": 180},
                     {"name": "max_encounters", "type": "number", "default": 3},
+                    {"name": "battle_count", "type": "number", "default": 4},
                     {"name": "auto_target", "type": "boolean", "default": False},
                     {"name": "auto_dodge", "type": "boolean", "default": True},
                     {"name": "debug_enabled", "type": "boolean", "default": True},
@@ -280,7 +282,7 @@ class TestYihuanGuiLogic(unittest.TestCase):
         self.assertEqual(defaults.profile_name, "custom_combat")
         self.assertEqual(defaults.strategy_name, "burst")
         self.assertEqual(defaults.max_seconds, 180)
-        self.assertEqual(defaults.max_encounters, 3)
+        self.assertEqual(defaults.max_encounters, 4)
         self.assertFalse(defaults.auto_target)
         self.assertTrue(defaults.auto_dodge)
         self.assertTrue(defaults.debug_enabled)

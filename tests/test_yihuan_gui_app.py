@@ -279,6 +279,7 @@ class TestYihuanMainWindowWorkbench(unittest.TestCase):
                 "strategy_name": "burst",
                 "max_seconds": 240,
                 "max_encounters": 6,
+                "battle_count": 6,
                 "auto_target": True,
                 "auto_dodge": False,
                 "dry_run": False,

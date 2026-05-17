@@ -130,6 +130,10 @@ exports:
       type: Any
       required: false
       default: 0
+    - name: battle_count
+      type: Any
+      required: false
+      default: 0
     - name: auto_target
       type: Any
       required: false

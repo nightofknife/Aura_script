@@ -15,6 +15,10 @@ auto_loop:
       - name: max_encounters
         type: number
         default: 0
+      - name: battle_count
+        type: number
+        default: 0
+        description: 作战次数；大于 0 时优先于 max_encounters
       - name: auto_target
         type: boolean
         default: true
@@ -47,6 +51,7 @@ auto_loop:
         strategy_name: "{{ inputs.strategy_name }}"
         max_seconds: "{{ inputs.max_seconds }}"
         max_encounters: "{{ inputs.max_encounters }}"
+        battle_count: "{{ inputs.battle_count }}"
         auto_target: "{{ inputs.auto_target }}"
         auto_dodge: "{{ inputs.auto_dodge }}"
         dry_run: "{{ inputs.dry_run }}"
