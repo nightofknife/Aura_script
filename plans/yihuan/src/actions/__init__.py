@@ -7,5 +7,6 @@ __all__ = [
     "mahjong_actions",
     "package_actions",
     "piano_actions",
+    "rhythm_actions",
     "tetrominoes_actions",
 ]

@@ -52,3 +52,15 @@ actions:
   tetrominoes_soft_drop:
     type: key
     key: s
+  rhythm_lane_d:
+    type: key
+    key: d
+  rhythm_lane_f:
+    type: key
+    key: f
+  rhythm_lane_j:
+    type: key
+    key: j
+  rhythm_lane_k:
+    type: key
+    key: k

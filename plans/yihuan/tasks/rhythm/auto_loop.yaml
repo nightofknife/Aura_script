@@ -1,0 +1,46 @@
+auto_loop:
+  meta:
+    title: 四键音游自动循环
+    description: 自动运行异环鼓组四键下落音游，识别判定线附近音符并按键。
+    inputs:
+      - name: profile_name
+        type: string
+        default: default_1280x720_cn
+      - name: loop_count
+        type: number
+        default: 1
+      - name: max_seconds
+        type: number
+        default: 240
+      - name: start_game
+        type: boolean
+        default: true
+      - name: close_result
+        type: boolean
+        default: true
+      - name: lane_keys
+        type: string
+        default: d,f,j,k
+      - name: lane_y_offset_px
+        type: number
+        default: 0
+      - name: dry_run
+        type: boolean
+        default: false
+      - name: debug_enabled
+        type: boolean
+        default: false
+  steps:
+    run:
+      action: yihuan_rhythm_run_session
+      params:
+        profile_name: "{{ inputs.profile_name }}"
+        loop_count: "{{ inputs.loop_count }}"
+        max_seconds: "{{ inputs.max_seconds }}"
+        start_game: "{{ inputs.start_game }}"
+        close_result: "{{ inputs.close_result }}"
+        lane_keys: "{{ inputs.lane_keys }}"
+        lane_y_offset_px: "{{ inputs.lane_y_offset_px }}"
+        dry_run: "{{ inputs.dry_run }}"
+        debug_enabled: "{{ inputs.debug_enabled }}"
+  returns: "{{ nodes.run.output }}"

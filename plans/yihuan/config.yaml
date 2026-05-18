@@ -3,11 +3,11 @@ runtime:
   provider: windows
   target:
     mode: title
-    title_regex: "(异环|Neverness to Everness)"
+    title_regex: (异环|Neverness to Everness)
     exclude_titles:
-      - AURA控制台
-      - Crash Reporter
-      - Unreal Engine
+    - AURA控制台
+    - Crash Reporter
+    - Unreal Engine
     allow_borderless: true
   capture:
     backend: gdi
@@ -21,9 +21,9 @@ runtime:
     max_attempts: 2
     retry_delay_ms: 200
     error_codes:
-      - window_target_lost
+    - window_target_lost
   window_spec:
-    mode: off
+    mode: false
 input:
   profile: default_pc
   actions: {}
@@ -34,4 +34,6 @@ cafe:
 mahjong:
   profile_name: default_1280x720_cn
 tetrominoes:
+  profile_name: default_1280x720_cn
+rhythm:
   profile_name: default_1280x720_cn

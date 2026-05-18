@@ -6,6 +6,7 @@ __all__ = [
     "fishing_service",
     "mahjong_service",
     "piano_service",
+    "rhythm_service",
     "tetrominoes_service",
     "yihuan_plan_service",
 ]

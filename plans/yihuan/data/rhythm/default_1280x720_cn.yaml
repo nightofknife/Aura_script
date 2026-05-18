@@ -1,0 +1,82 @@
+profile_name: default_1280x720_cn
+client_size:
+  - 1280
+  - 720
+
+lane_order:
+  - d
+  - f
+  - j
+  - k
+lanes:
+  d:
+    key: d
+    point: [295, 531]
+  f:
+    key: f
+    point: [519, 531]
+  j:
+    key: j
+    point: [760, 531]
+  k:
+    key: k
+    point: [985, 531]
+
+detect_radius:
+  - 5
+  - 10
+brightness_threshold: 100
+dark_ratio_threshold: 0.06
+retrigger_interval_ms: 85
+key_down_ms: 20
+frame_interval_ms: 8
+finish_check_interval_ms: 250
+
+start_song_point:
+  - 1070
+  - 672
+start_button_region:
+  - 930
+  - 640
+  - 270
+  - 65
+song_select_pink_region:
+  - 0
+  - 390
+  - 1280
+  - 255
+song_select_min_pink_ratio: 0.12
+song_select_min_start_white_ratio: 0.04
+start_timeout_sec: 15
+post_start_delay_ms: 1000
+
+result_low_s_region:
+  - 0
+  - 0
+  - 1280
+  - 720
+result_top_low_s_region:
+  - 0
+  - 0
+  - 1280
+  - 430
+result_grade_region:
+  - 540
+  - 60
+  - 220
+  - 210
+result_min_low_s_ratio: 0.90
+result_min_top_low_s_ratio: 0.75
+result_min_grade_white_ratio: 0.08
+result_min_grade_vivid_ratio: 0.12
+result_close_point:
+  - 1219
+  - 58
+result_exit_delay_ms: 1000
+result_return_timeout_sec: 10
+
+song_timeout_sec: 240
+song_select_completion_min_sec: 8
+debug_snapshot_dir: tmp/rhythm_debug
+debug_snapshot_interval_sec: 1.0
+debug_snapshot_max_count: 40
