@@ -65,7 +65,8 @@ post_combat_reward:
   walk_timeout_sec: 26.0
   scan_interval_sec: 0.18
   align_target_x: 640
-  align_tolerance_px: 50
+  align_tolerance_px: 80
+  near_center_tolerance_px: 90
   look_pixels_per_px: 0.55
   min_turn_pixels: 8
   max_turn_pixels: 160
@@ -83,8 +84,10 @@ post_combat_reward:
   double_claim_button_center: [844, 467]
   retry_challenge_button_center: [796, 622]
   exit_button_center: [488, 622]
-  search_turn_pixels: 520
-  search_turn_interval_sec: 0.65
+  search_turn_pixels: 120
+  search_turn_interval_sec: 0.45
+  recent_lock_ttl_sec: 1.2
+  max_marker_jump_px: 240
   prompt_required_scans: 1
 
 stage_entry:
@@ -105,7 +108,7 @@ pre_combat_approach:
 
 enemy_health_yolo:
   enabled: true
-  reward_enabled: false
+  reward_enabled: true
   model_name: yihuan_combat_targets
   labels:
     - enemy_hp_bar

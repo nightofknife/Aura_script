@@ -290,6 +290,10 @@ class YihuanCombatService:
                     self._coerce_int(post_combat_reward_payload.get("align_tolerance_px"), 50),
                     1,
                 ),
+                "near_center_tolerance_px": max(
+                    self._coerce_int(post_combat_reward_payload.get("near_center_tolerance_px"), 80),
+                    1,
+                ),
                 "look_pixels_per_px": max(
                     self._coerce_float(post_combat_reward_payload.get("look_pixels_per_px"), 0.55),
                     0.01,
@@ -318,6 +322,14 @@ class YihuanCombatService:
                 "search_turn_interval_sec": max(
                     self._coerce_float(post_combat_reward_payload.get("search_turn_interval_sec"), 0.65),
                     0.1,
+                ),
+                "recent_lock_ttl_sec": max(
+                    self._coerce_float(post_combat_reward_payload.get("recent_lock_ttl_sec"), 1.2),
+                    0.0,
+                ),
+                "max_marker_jump_px": max(
+                    self._coerce_int(post_combat_reward_payload.get("max_marker_jump_px"), 240),
+                    1,
                 ),
                 "prompt_required_scans": max(
                     self._coerce_int(post_combat_reward_payload.get("prompt_required_scans"), 1),

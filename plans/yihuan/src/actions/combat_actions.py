@@ -254,6 +254,11 @@ class _CombatTargetsYoloRuntime:
         direction_boxes = [_with_yolo_direction_region(box, image_width=image_width, image_height=image_height) for box in direction_boxes]
         direction_boxes.sort(key=lambda item: float(item.get("score") or 0.0), reverse=True)
         reward_boxes.sort(key=lambda item: float(item.get("score") or 0.0), reverse=True)
+        template_reward_found = bool(resolved_state.get("reward_marker_found"))
+        template_reward_confidence = _coerce_float(resolved_state.get("reward_marker_confidence"), 0.0)
+        template_reward_box = list(resolved_state.get("reward_marker_box") or [])
+        template_reward_center_x = resolved_state.get("reward_marker_center_x")
+        template_reward_center_y = resolved_state.get("reward_marker_center_y")
 
         resolved_state["enemy_health_found"] = bool(health_boxes)
         resolved_state["enemy_health_count"] = int(len(health_boxes))
@@ -275,20 +280,33 @@ class _CombatTargetsYoloRuntime:
         resolved_state["enemy_direction_primary_side"] = _primary_yolo_direction_side(direction_boxes)
         if self.reward_enabled and not bool(resolved_state.get("remaining_enemy_marker_found")):
             reward_box = reward_boxes[0] if reward_boxes else None
-            resolved_state["reward_marker_found"] = reward_box is not None
-            resolved_state["reward_marker_confidence"] = round(float((reward_box or {}).get("score") or 0.0), 3)
             if reward_box is not None:
                 rx = int(reward_box["x"])
                 ry = int(reward_box["y"])
                 rw = int(reward_box["width"])
                 rh = int(reward_box["height"])
+                resolved_state["reward_marker_found"] = True
+                resolved_state["reward_marker_confidence"] = round(float(reward_box.get("score") or 0.0), 3)
                 resolved_state["reward_marker_box"] = [rx, ry, rw, rh]
                 resolved_state["reward_marker_center_x"] = int(round(rx + rw / 2.0))
                 resolved_state["reward_marker_center_y"] = int(round(ry + rh / 2.0))
+                resolved_state["reward_marker_source"] = "yolo"
+            elif template_reward_found:
+                resolved_state["reward_marker_found"] = True
+                resolved_state["reward_marker_confidence"] = round(float(template_reward_confidence), 3)
+                resolved_state["reward_marker_box"] = list(template_reward_box)
+                resolved_state["reward_marker_center_x"] = template_reward_center_x
+                resolved_state["reward_marker_center_y"] = template_reward_center_y
+                resolved_state["reward_marker_source"] = "template"
             else:
+                resolved_state["reward_marker_found"] = False
+                resolved_state["reward_marker_confidence"] = 0.0
                 resolved_state["reward_marker_box"] = []
                 resolved_state["reward_marker_center_x"] = None
                 resolved_state["reward_marker_center_y"] = None
+                resolved_state["reward_marker_source"] = None
+        elif template_reward_found:
+            resolved_state["reward_marker_source"] = str(resolved_state.get("reward_marker_source") or "template")
 
         debug = dict(resolved_state.get("debug") or {})
         debug["enemy_signal_count"] = int(len(health_boxes))
@@ -300,6 +318,10 @@ class _CombatTargetsYoloRuntime:
         debug["enemy_direction_markers"] = [dict(box) for box in direction_boxes[:10]]
         debug["enemy_direction_primary_side"] = resolved_state.get("enemy_direction_primary_side")
         debug["reward_marker_box"] = list(resolved_state.get("reward_marker_box") or [])
+        debug["reward_marker_source"] = resolved_state.get("reward_marker_source")
+        debug["reward_marker_template_box"] = list(template_reward_box)
+        debug["reward_marker_template_confidence"] = round(float(template_reward_confidence), 3)
+        debug["reward_marker_yolo_boxes"] = [dict(box) for box in reward_boxes[:10]]
         debug["combat_targets_yolo"] = {
             "enabled": True,
             "source": "yolo_ttl" if stale else "yolo",
@@ -2852,6 +2874,7 @@ def _collect_post_combat_reward(
     walk_timeout_sec = max(float(config.get("walk_timeout_sec") or 26.0), 0.1)
     configured_align_target_x = config.get("align_target_x")
     align_tolerance_px = max(int(config.get("align_tolerance_px") or 50), 1)
+    near_center_tolerance_px = max(int(config.get("near_center_tolerance_px") or max(align_tolerance_px, 80)), 1)
     look_pixels_per_px = max(float(config.get("look_pixels_per_px") or 0.55), 0.01)
     min_turn_pixels = max(int(config.get("min_turn_pixels") or 8), 1)
     max_turn_pixels = max(int(config.get("max_turn_pixels") or 160), 1)
@@ -2862,16 +2885,71 @@ def _collect_post_combat_reward(
     search_turn_pixels = max(int(config.get("search_turn_pixels") or 520), 1)
     search_turn_interval_sec = max(float(config.get("search_turn_interval_sec") or 0.65), 0.1)
     prompt_required_scans = max(int(config.get("prompt_required_scans") or 1), 1)
+    recent_lock_ttl_sec = max(float(config.get("recent_lock_ttl_sec") or 1.2), 0.0)
+    max_marker_jump_px = max(int(config.get("max_marker_jump_px") or 240), 1)
 
     started_at = time.monotonic()
     deadline = started_at + search_timeout_sec + walk_timeout_sec
     last_search_turn_at = 0.0
     search_direction = 1
+    last_turn_dx = 0
+    locked_marker_center_x: float | None = None
+    locked_marker_error_x: float | None = None
+    locked_marker_source: str | None = None
+    locked_marker_at: float | None = None
     walk_started_at: float | None = None
     walking = False
     prompt_scans = 0
     last_state: dict[str, Any] | None = None
     last_capture_image: Any = None
+
+    def _start_reward_walk(
+        *,
+        action_name: str,
+        label: str,
+        marker_center_x: float | None,
+        target_x: float,
+        error_x: float | None,
+        source: str | None,
+    ) -> None:
+        nonlocal walking, walk_started_at
+        if walking:
+            return
+        details = {
+            "binding": walk_key,
+            "target_x": round(target_x, 1),
+            "source": source,
+        }
+        if marker_center_x is not None:
+            details["marker_center_x"] = int(round(marker_center_x))
+        if error_x is not None:
+            details["error_x"] = round(float(error_x), 1)
+        _record_action(
+            action_trace,
+            start_time=start_time,
+            action=action_name,
+            dry_run=dry_run,
+            details=details,
+        )
+        _capture_event_image(
+            capture_debug,
+            label=label,
+            phase=phase,
+            source_image=last_capture_image,
+            state=last_state,
+            start_time=start_time,
+            combat_active=False,
+        )
+        _perform_key_down_with_retry(
+            app,
+            walk_key,
+            dry_run=dry_run,
+            action_trace=action_trace,
+            start_time=start_time,
+            retry_reason=action_name,
+        )
+        walking = True
+        walk_started_at = time.monotonic()
 
     _record_action(
         action_trace,
@@ -2883,6 +2961,10 @@ def _collect_post_combat_reward(
             "walk_timeout_sec": round(walk_timeout_sec, 3),
             "align_target_x": _coerce_int(configured_align_target_x, 640) if configured_align_target_x is not None else None,
             "align_tolerance_px": align_tolerance_px,
+            "near_center_tolerance_px": near_center_tolerance_px,
+            "recent_lock_ttl_sec": round(recent_lock_ttl_sec, 3),
+            "max_marker_jump_px": max_marker_jump_px,
+            "search_turn_pixels": search_turn_pixels,
         },
     )
 
@@ -2970,8 +3052,58 @@ def _collect_post_combat_reward(
 
             marker_found = bool(state.get("reward_marker_found"))
             marker_center_x = state.get("reward_marker_center_x")
+            marker_source = str(state.get("reward_marker_source") or "template") if marker_found else None
+            marker_confidence = _coerce_float(state.get("reward_marker_confidence"), 0.0)
             capture_width = int((state.get("capture_size") or [1280, 720])[0] or 1280)
             target_x = _reward_align_target_x(config, capture_width=capture_width)
+            if marker_found and marker_center_x is not None:
+                error_x = float(marker_center_x) - target_x
+                jump_px = (
+                    abs(float(marker_center_x) - locked_marker_center_x)
+                    if locked_marker_center_x is not None
+                    else 0.0
+                )
+                if (
+                    locked_marker_center_x is not None
+                    and marker_source != "yolo"
+                    and jump_px > float(max_marker_jump_px)
+                ):
+                    _record_action(
+                        action_trace,
+                        start_time=start_time,
+                        action="reward_marker_rejected_jump",
+                        dry_run=dry_run,
+                        details={
+                            "marker_center_x": int(marker_center_x),
+                            "locked_marker_center_x": int(round(locked_marker_center_x)),
+                            "jump_px": round(jump_px, 1),
+                            "max_marker_jump_px": max_marker_jump_px,
+                            "source": marker_source,
+                            "confidence": round(marker_confidence, 3),
+                        },
+                    )
+                    marker_found = False
+                    marker_center_x = None
+                else:
+                    locked_marker_center_x = float(marker_center_x)
+                    locked_marker_error_x = float(error_x)
+                    locked_marker_source = marker_source
+                    locked_marker_at = time.monotonic()
+                    _record_action(
+                        action_trace,
+                        start_time=start_time,
+                        action="reward_marker_locked",
+                        dry_run=dry_run,
+                        details={
+                            "marker_center_x": int(marker_center_x),
+                            "target_x": round(target_x, 1),
+                            "error_x": round(error_x, 1),
+                            "source": marker_source,
+                            "confidence": round(marker_confidence, 3),
+                            "jump_px": round(jump_px, 1),
+                        },
+                    )
+
             if marker_found and marker_center_x is not None:
                 error_x = float(marker_center_x) - target_x
                 if abs(error_x) > align_tolerance_px:
@@ -2992,6 +3124,7 @@ def _collect_post_combat_reward(
                         min_turn_pixels=min_turn_pixels,
                         max_turn_pixels=max_turn_pixels,
                     )
+                    last_turn_dx = int(turn_dx)
                     _record_action(
                         action_trace,
                         start_time=start_time,
@@ -3002,6 +3135,8 @@ def _collect_post_combat_reward(
                             "target_x": round(target_x, 1),
                             "error_x": round(error_x, 1),
                             "turn_dx": int(turn_dx),
+                            "source": marker_source,
+                            "confidence": round(marker_confidence, 3),
                         },
                     )
                     _capture_event_image(
@@ -3025,40 +3160,102 @@ def _collect_post_combat_reward(
                     _sleep_ms(post_turn_delay_ms, dry_run=dry_run)
                     continue
 
-                if not walking:
-                    _record_action(
-                        action_trace,
-                        start_time=start_time,
-                        action="reward_move_forward_start",
-                        dry_run=dry_run,
-                        details={
-                            "binding": walk_key,
-                            "marker_center_x": int(marker_center_x),
-                            "target_x": round(target_x, 1),
-                            "error_x": round(error_x, 1),
-                        },
-                    )
-                    _capture_event_image(
-                        capture_debug,
-                        label="reward_move_forward_start",
-                        phase=phase,
-                        source_image=last_capture_image,
-                        state=state,
-                        start_time=start_time,
-                        combat_active=False,
-                    )
-                    _perform_key_down_with_retry(
-                        app,
-                        walk_key,
-                        dry_run=dry_run,
-                        action_trace=action_trace,
-                        start_time=start_time,
-                        retry_reason="reward_move_forward_start",
-                    )
-                    walking = True
-                    walk_started_at = time.monotonic()
+                _start_reward_walk(
+                    action_name="reward_move_forward_start",
+                    label="reward_move_forward_start",
+                    marker_center_x=float(marker_center_x),
+                    target_x=target_x,
+                    error_x=error_x,
+                    source=marker_source,
+                )
                 _sleep_interruptibly(walk_step_sec)
                 continue
+
+            recent_lock_age = (
+                time.monotonic() - locked_marker_at
+                if locked_marker_at is not None
+                else None
+            )
+            if (
+                recent_lock_age is not None
+                and recent_lock_age <= recent_lock_ttl_sec
+                and locked_marker_error_x is not None
+            ):
+                if abs(float(locked_marker_error_x)) <= float(near_center_tolerance_px):
+                    _start_reward_walk(
+                        action_name="reward_move_forward_start_recent_lock",
+                        label="reward_move_forward_start_recent_lock",
+                        marker_center_x=locked_marker_center_x,
+                        target_x=target_x,
+                        error_x=locked_marker_error_x,
+                        source=locked_marker_source,
+                    )
+                    _sleep_interruptibly(walk_step_sec)
+                    continue
+                if time.monotonic() - last_search_turn_at >= search_turn_interval_sec:
+                    reacquire_dx = _reward_turn_pixels_for_error(
+                        float(locked_marker_error_x),
+                        align_tolerance_px=align_tolerance_px,
+                        look_pixels_per_px=look_pixels_per_px,
+                        min_turn_pixels=min_turn_pixels,
+                        max_turn_pixels=min(max_turn_pixels, max(search_turn_pixels, min_turn_pixels)),
+                    )
+                    if reacquire_dx == 0 and last_turn_dx:
+                        reacquire_dx = _clamp_signed(
+                            last_turn_dx,
+                            minimum_abs=min_turn_pixels,
+                            maximum_abs=min(max_turn_pixels, max(search_turn_pixels, min_turn_pixels)),
+                        )
+                    if reacquire_dx:
+                        if walking:
+                            _perform_key_up_with_retry(
+                                app,
+                                walk_key,
+                                dry_run=dry_run,
+                                action_trace=action_trace,
+                                start_time=start_time,
+                                retry_reason="reward_recent_lock_reacquire",
+                            )
+                            walking = False
+                        last_turn_dx = int(reacquire_dx)
+                        last_search_turn_at = time.monotonic()
+                        _record_action(
+                            action_trace,
+                            start_time=start_time,
+                            action="reward_recent_lock_reacquire",
+                            dry_run=dry_run,
+                            details={
+                                "turn_dx": int(reacquire_dx),
+                                "locked_marker_center_x": (
+                                    int(round(locked_marker_center_x))
+                                    if locked_marker_center_x is not None
+                                    else None
+                                ),
+                                "locked_error_x": round(float(locked_marker_error_x), 1),
+                                "lock_age_sec": round(float(recent_lock_age), 3),
+                                "source": locked_marker_source,
+                            },
+                        )
+                        _capture_event_image(
+                            capture_debug,
+                            label="reward_recent_lock_reacquire",
+                            phase=phase,
+                            source_image=last_capture_image,
+                            state=last_state,
+                            start_time=start_time,
+                            combat_active=False,
+                        )
+                        _perform_look_delta_with_retry(
+                            app,
+                            int(reacquire_dx),
+                            0,
+                            dry_run=dry_run,
+                            action_trace=action_trace,
+                            start_time=start_time,
+                            retry_reason="reward_recent_lock_reacquire",
+                        )
+                        _sleep_ms(post_turn_delay_ms, dry_run=dry_run)
+                        continue
 
             if walking:
                 _perform_key_up_with_retry(
@@ -3072,14 +3269,27 @@ def _collect_post_combat_reward(
                 walking = False
             if time.monotonic() - last_search_turn_at >= search_turn_interval_sec:
                 turn_dx = search_direction * search_turn_pixels
-                search_direction *= -1
+                last_turn_dx = int(turn_dx)
                 last_search_turn_at = time.monotonic()
                 _record_action(
                     action_trace,
                     start_time=start_time,
                     action="reward_search_turn",
                     dry_run=dry_run,
-                    details={"turn_dx": int(turn_dx)},
+                    details={
+                        "turn_dx": int(turn_dx),
+                        "search_direction": int(search_direction),
+                        "locked_marker_center_x": (
+                            int(round(locked_marker_center_x))
+                            if locked_marker_center_x is not None
+                            else None
+                        ),
+                        "lock_age_sec": (
+                            round(float(time.monotonic() - locked_marker_at), 3)
+                            if locked_marker_at is not None
+                            else None
+                        ),
+                    },
                 )
                 _capture_event_image(
                     capture_debug,
