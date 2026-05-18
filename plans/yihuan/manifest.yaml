@@ -50,6 +50,13 @@ exports:
     replace: null
     description: Parse MIDI files and build playable keyboard plans for Yihuan's piano
       mini-game.
+  - name: yihuan_rhythm
+    module: plans.yihuan.src.services.rhythm_service
+    class: YihuanRhythmService
+    public: true
+    singleton: true
+    replace: null
+    description: Detect Yihuan four-lane rhythm notes and screen phases.
   - name: yihuan_tetrominoes
     module: plans.yihuan.src.services.tetrominoes_service
     class: YihuanTetrominoesService
@@ -106,50 +113,6 @@ exports:
       type: Any
       required: false
       default: null
-  - name: yihuan_combat_run_session
-    module: plans.yihuan.src.actions.combat_actions
-    function: yihuan_combat_run_session
-    public: false
-    read_only: false
-    timeout: null
-    description: Run the Yihuan-specific automatic combat loop.
-    parameters:
-    - name: profile_name
-      type: Any
-      required: false
-      default: default_1280x720_cn
-    - name: strategy_name
-      type: Any
-      required: false
-      default: default
-    - name: max_seconds
-      type: Any
-      required: false
-      default: 0
-    - name: max_encounters
-      type: Any
-      required: false
-      default: 0
-    - name: battle_count
-      type: Any
-      required: false
-      default: 0
-    - name: auto_target
-      type: Any
-      required: false
-      default: true
-    - name: auto_dodge
-      type: Any
-      required: false
-      default: true
-    - name: dry_run
-      type: Any
-      required: false
-      default: false
-    - name: debug_enabled
-      type: Any
-      required: false
-      default: false
   - name: yihuan_combat_collect_hpbar_dataset
     module: plans.yihuan.src.actions.combat_actions
     function: yihuan_combat_collect_hpbar_dataset
@@ -203,6 +166,66 @@ exports:
       type: Any
       required: false
       default: 0
+  - name: yihuan_combat_run_session
+    module: plans.yihuan.src.actions.combat_actions
+    function: yihuan_combat_run_session
+    public: false
+    read_only: false
+    timeout: null
+    description: Run the Yihuan-specific automatic combat loop.
+    parameters:
+    - name: profile_name
+      type: Any
+      required: false
+      default: default_1280x720_cn
+    - name: strategy_name
+      type: Any
+      required: false
+      default: default
+    - name: max_seconds
+      type: Any
+      required: false
+      default: 0
+    - name: max_encounters
+      type: Any
+      required: false
+      default: 0
+    - name: battle_count
+      type: Any
+      required: false
+      default: 0
+    - name: auto_target
+      type: Any
+      required: false
+      default: true
+    - name: auto_dodge
+      type: Any
+      required: false
+      default: true
+    - name: dry_run
+      type: Any
+      required: false
+      default: false
+    - name: debug_enabled
+      type: Any
+      required: false
+      default: false
+    - name: capture_debug_enabled
+      type: Any
+      required: false
+      default: false
+    - name: capture_interval_sec
+      type: Any
+      required: false
+      default: 2.0
+    - name: capture_max_images
+      type: Any
+      required: false
+      default: 120
+    - name: capture_raw_enabled
+      type: Any
+      required: false
+      default: false
   - name: yihuan_fishing_debug_monitor
     module: plans.yihuan.src.actions.fishing_actions
     function: yihuan_fishing_debug_monitor
@@ -393,6 +416,50 @@ exports:
       type: Any
       required: false
       default: false
+  - name: yihuan_rhythm_run_session
+    module: plans.yihuan.src.actions.rhythm_actions
+    function: yihuan_rhythm_run_session
+    public: false
+    read_only: false
+    timeout: null
+    description: 自动运行异环鼓组四键下落音游，识别判定线附近音符并按键。
+    parameters:
+    - name: profile_name
+      type: Any
+      required: false
+      default: default_1280x720_cn
+    - name: loop_count
+      type: Any
+      required: false
+      default: 1
+    - name: max_seconds
+      type: Any
+      required: false
+      default: 240
+    - name: start_game
+      type: Any
+      required: false
+      default: true
+    - name: close_result
+      type: Any
+      required: false
+      default: true
+    - name: lane_keys
+      type: Any
+      required: false
+      default: d,f,j,k
+    - name: lane_y_offset_px
+      type: Any
+      required: false
+      default: 0
+    - name: dry_run
+      type: Any
+      required: false
+      default: false
+    - name: debug_enabled
+      type: Any
+      required: false
+      default: false
   - name: yihuan_tetrominoes_analyze_screen
     module: plans.yihuan.src.actions.tetrominoes_actions
     function: yihuan_tetrominoes_analyze_screen
@@ -479,13 +546,15 @@ exports:
     source: tasks/combat/auto_loop.yaml
     description: 使用异环专用战斗识别和默认策略执行自动战斗循环。
   - id: combat/collect_hpbar_dataset/collect_hpbar_dataset
-    title: 血条数据集采集
+    title: Combat target dataset collector
     source: tasks/combat/collect_hpbar_dataset.yaml
-    description: 每秒截屏并调用当前敌人血条 YOLO，识别到血条时保存图片和自动标注。
+    description: Capture the current screen once per interval, run the configured
+      combat-target YOLO model, and save auto-labeled positive frames.
   - id: combat/collect_hpbar_dataset
-    title: 血条数据集采集
+    title: Combat target dataset collector
     source: tasks/combat/collect_hpbar_dataset.yaml
-    description: 每秒截屏并调用当前敌人血条 YOLO，识别到血条时保存图片和自动标注。
+    description: Capture the current screen once per interval, run the configured
+      combat-target YOLO model, and save auto-labeled positive frames.
   - id: fishing/auto_loop/auto_loop
     title: 自动循环钓鱼
     source: tasks/fishing/auto_loop.yaml
@@ -526,6 +595,14 @@ exports:
     title: 自动弹钢琴
     source: tasks/piano/play_midi.yaml
     description: 解析 MIDI 文件并在异环钢琴小游戏中自动演奏。
+  - id: rhythm/auto_loop/auto_loop
+    title: 四键音游自动循环
+    source: tasks/rhythm/auto_loop.yaml
+    description: 自动运行异环鼓组四键下落音游，识别判定线附近音符并按键。
+  - id: rhythm/auto_loop
+    title: 四键音游自动循环
+    source: tasks/rhythm/auto_loop.yaml
+    description: 自动运行异环鼓组四键下落音游，识别判定线附近音符并按键。
   - id: tetrominoes/analyze_screen/analyze_screen
     title: Tetrominoes screen analysis
     source: tasks/tetrominoes/analyze_screen.yaml
@@ -544,4 +621,4 @@ exports:
     description: Run the Yihuan Tetrominoes mini-game with survival-first planning.
 metadata:
   generated_by: ManifestGenerator
-  generated_at: '2026-05-03T18:20:35Z'
+  generated_at: '2026-05-18T17:49:01Z'
