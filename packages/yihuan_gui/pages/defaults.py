@@ -57,6 +57,16 @@ class DefaultsSyncMixin:
         self._tetrominoes_max_pieces_spin.setValue(int(self._tetrominoes_defaults.max_pieces))
         self._tetrominoes_start_game_check.setChecked(bool(self._tetrominoes_defaults.start_game))
 
+    def _sync_rhythm_widgets_from_defaults(self) -> None:
+        self._rhythm_profile_label.setText(self._rhythm_defaults.profile_name)
+        self._rhythm_loop_count_spin.setValue(int(self._rhythm_defaults.loop_count))
+        self._rhythm_max_seconds_spin.setValue(int(self._rhythm_defaults.max_seconds))
+        self._rhythm_lane_keys_edit.setText(str(self._rhythm_defaults.lane_keys))
+        self._rhythm_lane_y_offset_spin.setValue(int(self._rhythm_defaults.lane_y_offset_px))
+        self._rhythm_start_game_check.setChecked(bool(self._rhythm_defaults.start_game))
+        self._rhythm_close_result_check.setChecked(bool(self._rhythm_defaults.close_result))
+        self._rhythm_debug_enabled_check.setChecked(bool(self._rhythm_defaults.debug_enabled))
+
     def _sync_piano_widgets_from_defaults(self) -> None:
         widgets = (
             self._piano_file_edit,

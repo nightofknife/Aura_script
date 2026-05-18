@@ -16,6 +16,7 @@ from ..logic import (
     TASK_ONE_CAFE_REVENUE_RESTOCK,
     TASK_PIANO_PLAY_MIDI,
     TASK_PLAN_READY,
+    TASK_RHYTHM_AUTO_LOOP,
     TASK_RUNTIME_PROBE,
     TASK_TETROMINOES_AUTO_LOOP,
     VISIBLE_HISTORY_TASK_REFS,
@@ -34,7 +35,9 @@ from ..logic import (
     render_mahjong_loop_brief_text,
     render_one_cafe_brief_text,
     render_piano_play_midi_brief_text,
+    render_rhythm_loop_brief_text,
     render_tetrominoes_loop_brief_text,
+    rhythm_loop_business_status,
     status_display_name,
     task_display_name,
     tetrominoes_loop_business_status,
@@ -101,6 +104,7 @@ class BridgeHandlersMixin:
         self._mahjong_defaults = self._repo.get_mahjong_defaults(self._task_rows.get(TASK_MAHJONG_AUTO_LOOP))
         self._combat_defaults = self._repo.get_combat_defaults(self._task_rows.get(TASK_COMBAT_AUTO_LOOP))
         self._tetrominoes_defaults = self._repo.get_tetrominoes_defaults(self._task_rows.get(TASK_TETROMINOES_AUTO_LOOP))
+        self._rhythm_defaults = self._repo.get_rhythm_defaults(self._task_rows.get(TASK_RHYTHM_AUTO_LOOP))
         self._piano_defaults = self._repo.get_piano_defaults(self._task_rows.get(TASK_PIANO_PLAY_MIDI))
         self._fishing_profile_label.setText(self._fishing_defaults.profile_name)
         self._cafe_profile_label.setText(self._cafe_defaults.profile_name)
@@ -114,6 +118,7 @@ class BridgeHandlersMixin:
         self._sync_mahjong_widgets_from_defaults()
         self._sync_combat_widgets_from_defaults()
         self._sync_tetrominoes_widgets_from_defaults()
+        self._sync_rhythm_widgets_from_defaults()
         self._sync_piano_widgets_from_defaults()
         self._append_log(f"任务列表已加载：{len(self._task_rows)} 个异环任务。")
         self._apply_task_guard()
@@ -206,6 +211,8 @@ class BridgeHandlersMixin:
             self._append_log(f"自动战斗结果：{render_combat_loop_brief_text(payload)}")
         elif task_ref == TASK_TETROMINOES_AUTO_LOOP:
             self._append_log(f"俄罗斯方块结果：{render_tetrominoes_loop_brief_text(payload)}")
+        elif task_ref == TASK_RHYTHM_AUTO_LOOP:
+            self._append_log(f"四键音游结果：{render_rhythm_loop_brief_text(payload)}")
         elif task_ref == TASK_PIANO_PLAY_MIDI:
             self._append_log(f"自动弹钢琴结果：{render_piano_play_midi_brief_text(payload)}")
 
@@ -216,6 +223,7 @@ class BridgeHandlersMixin:
             or mahjong_loop_business_status(payload)
             or combat_loop_business_status(payload)
             or tetrominoes_loop_business_status(payload)
+            or rhythm_loop_business_status(payload)
             or piano_play_midi_business_status(payload)
             or payload.get("status")
             or ""

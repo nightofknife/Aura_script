@@ -27,6 +27,7 @@ from ..logic import (
     GuiPreferences,
     MahjongRunDefaults,
     OneCafeRunDefaults,
+    RhythmRunDefaults,
     TetrominoesRunDefaults,
     RuntimeSettings,
     TASK_AUTO_LOOP,
@@ -35,6 +36,7 @@ from ..logic import (
     TASK_MAHJONG_AUTO_LOOP,
     TASK_ONE_CAFE_REVENUE_RESTOCK,
     TASK_PIANO_PLAY_MIDI,
+    TASK_RHYTHM_AUTO_LOOP,
     TASK_TETROMINOES_AUTO_LOOP,
     build_settings_sections,
 )
@@ -75,12 +77,14 @@ class SettingsPageMixin:
         self._mahjong_profile_combo = QComboBox(defaults_group)
         self._combat_profile_combo = QComboBox(defaults_group)
         self._tetrominoes_profile_combo = QComboBox(defaults_group)
+        self._rhythm_profile_combo = QComboBox(defaults_group)
         defaults_form.addRow("钓鱼识别档案", self._fishing_profile_combo)
         defaults_form.addRow("沙威玛识别档案", self._cafe_profile_combo)
         defaults_form.addRow("一咖舍识别档案", self._one_cafe_profile_combo)
         defaults_form.addRow("麻将识别档案", self._mahjong_profile_combo)
         defaults_form.addRow("自动战斗识别档案", self._combat_profile_combo)
         defaults_form.addRow("俄罗斯方块识别档案", self._tetrominoes_profile_combo)
+        defaults_form.addRow("四键音游识别档案", self._rhythm_profile_combo)
         body_layout.addWidget(defaults_group)
 
         ui_group = QGroupBox("界面偏好", body)
@@ -201,6 +205,14 @@ class SettingsPageMixin:
         )
         self._sync_tetrominoes_widgets_from_defaults()
 
+        self._rhythm_defaults = self._repo.get_rhythm_defaults(self._task_rows.get(TASK_RHYTHM_AUTO_LOOP))
+        self._set_combo_items(
+            self._rhythm_profile_combo,
+            self._rhythm_defaults.profile_name,
+            self._repo.list_rhythm_profiles(),
+        )
+        self._sync_rhythm_widgets_from_defaults()
+
         self._piano_defaults = self._repo.get_piano_defaults(self._task_rows.get(TASK_PIANO_PLAY_MIDI))
         self._sync_piano_widgets_from_defaults()
 
@@ -296,6 +308,16 @@ class SettingsPageMixin:
             max_pieces=self._tetrominoes_defaults.max_pieces,
             start_game=self._tetrominoes_defaults.start_game,
         )
+        rhythm_defaults = RhythmRunDefaults(
+            profile_name=str(self._rhythm_profile_combo.currentData() or self._rhythm_profile_combo.currentText()),
+            loop_count=self._rhythm_defaults.loop_count,
+            max_seconds=self._rhythm_defaults.max_seconds,
+            start_game=self._rhythm_defaults.start_game,
+            close_result=self._rhythm_defaults.close_result,
+            lane_keys=self._rhythm_defaults.lane_keys,
+            lane_y_offset_px=self._rhythm_defaults.lane_y_offset_px,
+            debug_enabled=self._rhythm_defaults.debug_enabled,
+        )
 
         try:
             self._repo.update_runtime_settings(runtime_settings)
@@ -305,6 +327,7 @@ class SettingsPageMixin:
             self._repo.update_mahjong_defaults(mahjong_defaults)
             self._repo.update_combat_defaults(combat_defaults)
             self._repo.update_tetrominoes_defaults(tetrominoes_defaults)
+            self._repo.update_rhythm_defaults(rhythm_defaults)
             self._repo.save_ui_preferences(ui_preferences)
         except Exception as exc:  # noqa: BLE001
             QMessageBox.warning(self, "保存设置失败", str(exc))
@@ -320,12 +343,14 @@ class SettingsPageMixin:
         self._mahjong_defaults = self._repo.get_mahjong_defaults(self._task_rows.get(TASK_MAHJONG_AUTO_LOOP))
         self._combat_defaults = self._repo.get_combat_defaults(self._task_rows.get(TASK_COMBAT_AUTO_LOOP))
         self._tetrominoes_defaults = self._repo.get_tetrominoes_defaults(self._task_rows.get(TASK_TETROMINOES_AUTO_LOOP))
+        self._rhythm_defaults = self._repo.get_rhythm_defaults(self._task_rows.get(TASK_RHYTHM_AUTO_LOOP))
         self._sync_fishing_widgets_from_defaults()
         self._cafe_profile_label.setText(self._cafe_defaults.profile_name)
         self._sync_one_cafe_widgets_from_defaults()
         self._sync_mahjong_widgets_from_defaults()
         self._sync_combat_widgets_from_defaults()
         self._sync_tetrominoes_widgets_from_defaults()
+        self._sync_rhythm_widgets_from_defaults()
         self._refresh_cafe_limit_hint()
         self._install_quick_stop_hotkey(ui_preferences.quick_stop_hotkey, show_warning=True)
         self.request_apply_preferences.emit(ui_preferences)

@@ -22,6 +22,7 @@ try:
         TASK_MAHJONG_AUTO_LOOP,
         TASK_ONE_CAFE_REVENUE_RESTOCK,
         TASK_PIANO_PLAY_MIDI,
+        TASK_RHYTHM_AUTO_LOOP,
         TASK_TETROMINOES_AUTO_LOOP,
     )
 except ModuleNotFoundError as exc:
@@ -39,6 +40,7 @@ except ModuleNotFoundError as exc:
         TASK_MAHJONG_AUTO_LOOP = ""
         TASK_ONE_CAFE_REVENUE_RESTOCK = ""
         TASK_PIANO_PLAY_MIDI = ""
+        TASK_RHYTHM_AUTO_LOOP = ""
         TASK_TETROMINOES_AUTO_LOOP = ""
     else:
         raise
@@ -82,15 +84,18 @@ class TestYihuanMainWindowWorkbench(unittest.TestCase):
         ]
 
         self.assertEqual(group_titles, ["日常领取", "战斗", "小游戏"])
-        self.assertEqual(task_ids, ["one_cafe", "combat", "fishing", "cafe", "mahjong", "tetrominoes", "piano"])
+        self.assertEqual(
+            task_ids,
+            ["one_cafe", "combat", "fishing", "cafe", "mahjong", "tetrominoes", "rhythm", "piano"],
+        )
         self.assertEqual(tuple((title, tuple(ids)) for title, ids in WORKBENCH_TASK_GROUPS), (
             ("日常领取", ("one_cafe",)),
             ("战斗", ("combat",)),
-            ("小游戏", ("fishing", "cafe", "mahjong", "tetrominoes", "piano")),
+            ("小游戏", ("fishing", "cafe", "mahjong", "tetrominoes", "rhythm", "piano")),
         ))
         self.assertEqual(
             [WORKBENCH_TASKS[task_id]["label"] for task_id in task_ids],
-            ["一咖舍", "战斗", "钓鱼", "沙威玛", "麻将", "俄罗斯方块", "自动弹钢琴"],
+            ["一咖舍", "战斗", "钓鱼", "沙威玛", "麻将", "俄罗斯方块", "四键音游", "自动弹钢琴"],
         )
         self.assertIn("收益处理", window._task_list.item(1).text())
 
@@ -342,6 +347,37 @@ class TestYihuanMainWindowWorkbench(unittest.TestCase):
             },
         )
         self.assertEqual(WORKBENCH_TASKS["tetrominoes"]["task_ref"], TASK_TETROMINOES_AUTO_LOOP)
+
+    def test_rhythm_inputs_are_collected_from_page_and_settings_defaults(self):
+        window = self._make_window()
+        window._select_task_id("rhythm")
+        window._rhythm_defaults = window._rhythm_defaults.__class__(profile_name="custom_rhythm")
+        window._sync_rhythm_widgets_from_defaults()
+        window._rhythm_loop_count_spin.setValue(4)
+        window._rhythm_max_seconds_spin.setValue(360)
+        window._rhythm_start_game_check.setChecked(False)
+        window._rhythm_close_result_check.setChecked(False)
+        window._rhythm_lane_keys_edit.setText("a,s,k,l")
+        window._rhythm_lane_y_offset_spin.setValue(-18)
+        window._rhythm_debug_enabled_check.setChecked(True)
+
+        payload = window._collect_selected_task_inputs()
+
+        self.assertEqual(
+            payload,
+            {
+                "profile_name": "custom_rhythm",
+                "loop_count": 4,
+                "max_seconds": 360,
+                "start_game": False,
+                "close_result": False,
+                "lane_keys": "a,s,k,l",
+                "lane_y_offset_px": -18,
+                "dry_run": False,
+                "debug_enabled": True,
+            },
+        )
+        self.assertEqual(WORKBENCH_TASKS["rhythm"]["task_ref"], TASK_RHYTHM_AUTO_LOOP)
 
     def test_piano_inputs_are_collected_from_page_and_settings_defaults(self):
         window = self._make_window()

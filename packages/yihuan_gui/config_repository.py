@@ -15,6 +15,7 @@ from .logic import (
     MahjongRunDefaults,
     OneCafeRunDefaults,
     PianoRunDefaults,
+    RhythmRunDefaults,
     RuntimeSettings,
     TetrominoesRunDefaults,
     extract_auto_loop_defaults,
@@ -23,6 +24,7 @@ from .logic import (
     extract_mahjong_loop_defaults,
     extract_one_cafe_defaults,
     extract_piano_play_midi_defaults,
+    extract_rhythm_loop_defaults,
     extract_tetrominoes_loop_defaults,
 )
 
@@ -49,6 +51,7 @@ class YihuanConfigRepository:
         self.mahjong_profiles_dir = self.plan_root / "data" / "mahjong"
         self.combat_profiles_dir = self.plan_root / "data" / "combat"
         self.tetrominoes_profiles_dir = self.plan_root / "data" / "tetrominoes"
+        self.rhythm_profiles_dir = self.plan_root / "data" / "rhythm"
         self._settings_store = settings_store
 
     def load_config(self) -> dict[str, Any]:
@@ -105,6 +108,11 @@ class YihuanConfigRepository:
         if not self.tetrominoes_profiles_dir.exists():
             return []
         return sorted(path.stem for path in self.tetrominoes_profiles_dir.glob("*.yaml"))
+
+    def list_rhythm_profiles(self) -> list[str]:
+        if not self.rhythm_profiles_dir.exists():
+            return []
+        return sorted(path.stem for path in self.rhythm_profiles_dir.glob("*.yaml"))
 
     def list_combat_strategy_names(self, profile_name: str) -> list[str]:
         profile_name = str(profile_name or "").strip()
@@ -317,6 +325,27 @@ class YihuanConfigRepository:
         payload["tetrominoes"] = tetrominoes
         self.save_config(payload)
 
+    def get_rhythm_defaults(self, rhythm_task: Mapping[str, Any] | None = None) -> RhythmRunDefaults:
+        defaults = extract_rhythm_loop_defaults(rhythm_task)
+        return RhythmRunDefaults(
+            profile_name=self._resolve_rhythm_profile_name(defaults.profile_name),
+            loop_count=defaults.loop_count,
+            max_seconds=defaults.max_seconds,
+            start_game=defaults.start_game,
+            close_result=defaults.close_result,
+            lane_keys=defaults.lane_keys,
+            lane_y_offset_px=defaults.lane_y_offset_px,
+            debug_enabled=defaults.debug_enabled,
+        )
+
+    def update_rhythm_defaults(self, defaults: RhythmRunDefaults) -> None:
+        self.validate_rhythm_defaults(defaults)
+        payload = self.load_config()
+        rhythm = dict(payload.get("rhythm") or {})
+        rhythm["profile_name"] = defaults.profile_name
+        payload["rhythm"] = rhythm
+        self.save_config(payload)
+
     def get_piano_defaults(self, piano_task: Mapping[str, Any] | None = None) -> PianoRunDefaults:
         defaults = extract_piano_play_midi_defaults(piano_task)
         recent_files = self._coerce_string_list(self._settings_value("piano/recent_files", list(defaults.recent_files)))
@@ -484,6 +513,24 @@ class YihuanConfigRepository:
         if available_profiles and profile_name not in available_profiles:
             raise ValueError(f"俄罗斯方块识别档案不存在：{profile_name}")
 
+    def validate_rhythm_defaults(self, defaults: RhythmRunDefaults) -> None:
+        profile_name = str(defaults.profile_name).strip()
+        if not profile_name:
+            raise ValueError("四键音游识别档案不能为空。")
+        available_profiles = self.list_rhythm_profiles()
+        if available_profiles and profile_name not in available_profiles:
+            raise ValueError(f"四键音游识别档案不存在：{profile_name}")
+        if int(defaults.loop_count) < 0:
+            raise ValueError("四键音游循环次数不能小于 0。")
+        if int(defaults.max_seconds) < 0:
+            raise ValueError("四键音游最大运行秒数不能小于 0。")
+        keys = [item.strip() for item in str(defaults.lane_keys).split(",") if item.strip()]
+        if len(keys) != 4:
+            raise ValueError("四键音游轨道按键必须包含 4 个逗号分隔的按键。")
+
+        if not -240 <= int(defaults.lane_y_offset_px) <= 240:
+            raise ValueError("四键音游判定线偏移需要在 -240 到 240 px 之间。")
+
     def validate_piano_defaults(self, defaults: PianoRunDefaults) -> None:
         conflict_policy = str(defaults.conflict_policy or "").strip().lower()
         if conflict_policy not in {"strict", "roll"}:
@@ -552,6 +599,12 @@ class YihuanConfigRepository:
         tetrominoes = dict(payload.get("tetrominoes") or {})
         configured_profile = str(tetrominoes.get("profile_name") or tetrominoes.get("profile") or "").strip()
         return configured_profile or str(fallback_profile or TetrominoesRunDefaults().profile_name)
+
+    def _resolve_rhythm_profile_name(self, fallback_profile: str) -> str:
+        payload = self.load_config()
+        rhythm = dict(payload.get("rhythm") or {})
+        configured_profile = str(rhythm.get("profile_name") or rhythm.get("profile") or "").strip()
+        return configured_profile or str(fallback_profile or RhythmRunDefaults().profile_name)
 
     def _settings_value(self, key: str, default_value: Any) -> Any:
         if self._settings_store is None:

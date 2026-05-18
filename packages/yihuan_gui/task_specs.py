@@ -9,6 +9,7 @@ from .logic import (
     TASK_MAHJONG_AUTO_LOOP,
     TASK_ONE_CAFE_REVENUE_RESTOCK,
     TASK_PIANO_PLAY_MIDI,
+    TASK_RHYTHM_AUTO_LOOP,
     TASK_TETROMINOES_AUTO_LOOP,
 )
 
@@ -62,6 +63,14 @@ WORKBENCH_TASKS: dict[str, dict[str, str]] = {
         "task_ref": TASK_TETROMINOES_AUTO_LOOP,
         "description": "自动运行异环俄罗斯方块小游戏，按当前识别档案持续识别棋盘并规划落点。",
     },
+    "rhythm": {
+        "label": "四键音游",
+        "category": "小游戏",
+        "kind": "节奏辅助",
+        "summary": "四轨识别 / 自动按键",
+        "task_ref": TASK_RHYTHM_AUTO_LOOP,
+        "description": "自动运行异环鼓组四键下落音游，识别 D/F/J/K 判定线附近音符并按键。",
+    },
     "piano": {
         "label": "自动弹钢琴",
         "category": "小游戏",
@@ -76,7 +85,7 @@ WORKBENCH_TASK_REFS = tuple(item["task_ref"] for item in WORKBENCH_TASKS.values(
 WORKBENCH_TASK_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("日常领取", ("one_cafe",)),
     ("战斗", ("combat",)),
-    ("小游戏", ("fishing", "cafe", "mahjong", "tetrominoes", "piano")),
+    ("小游戏", ("fishing", "cafe", "mahjong", "tetrominoes", "rhythm", "piano")),
 )
 
 

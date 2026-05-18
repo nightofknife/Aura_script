@@ -35,6 +35,7 @@ from ..logic import (
     TASK_MAHJONG_AUTO_LOOP,
     TASK_ONE_CAFE_REVENUE_RESTOCK,
     TASK_PIANO_PLAY_MIDI,
+    TASK_RHYTHM_AUTO_LOOP,
     TASK_TETROMINOES_AUTO_LOOP,
     build_auto_loop_inputs,
     build_cafe_loop_inputs,
@@ -42,6 +43,7 @@ from ..logic import (
     build_mahjong_loop_inputs,
     build_one_cafe_inputs,
     build_piano_play_midi_inputs,
+    build_rhythm_loop_inputs,
     build_tetrominoes_loop_inputs,
     is_runtime_interacting_task,
     task_display_name,
@@ -186,6 +188,7 @@ class WorkbenchPageMixin:
         self._parameter_pages["mahjong"] = self._build_mahjong_parameters(self._parameter_stack)
         self._parameter_pages["combat"] = self._build_combat_parameters(self._parameter_stack)
         self._parameter_pages["tetrominoes"] = self._build_tetrominoes_parameters(self._parameter_stack)
+        self._parameter_pages["rhythm"] = self._build_rhythm_parameters(self._parameter_stack)
         self._parameter_pages["piano"] = self._build_piano_parameters(self._parameter_stack)
         for task_id in WORKBENCH_TASKS:
             self._parameter_stack.addWidget(self._parameter_pages[task_id])
@@ -418,6 +421,50 @@ class WorkbenchPageMixin:
         hint = QLabel(
             "任务页只保留高频参数；dry_run、debug_enabled 继续固定关闭。"
             " 棋盘采样、落点求解和结果页识别参数仍在俄罗斯方块识别档案中维护。",
+            page,
+        )
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        layout.addStretch(1)
+        return page
+
+    def _build_rhythm_parameters(self, parent: QWidget) -> QWidget:
+        page = QWidget(parent)
+        layout = QVBoxLayout(page)
+
+        group = QGroupBox("四键音游参数", page)
+        form = QFormLayout(group)
+        self._rhythm_profile_label = QLabel("-", group)
+        self._rhythm_loop_count_spin = QSpinBox(group)
+        self._rhythm_loop_count_spin.setMinimum(0)
+        self._rhythm_loop_count_spin.setMaximum(99999)
+        self._rhythm_loop_count_spin.setToolTip("0 表示持续循环，直到达到最大运行秒数或手动停止。")
+        self._rhythm_max_seconds_spin = QSpinBox(group)
+        self._rhythm_max_seconds_spin.setMinimum(0)
+        self._rhythm_max_seconds_spin.setMaximum(99999)
+        self._rhythm_max_seconds_spin.setToolTip("0 表示不按总时长停止。")
+        self._rhythm_lane_keys_edit = QLineEdit(group)
+        self._rhythm_lane_keys_edit.setPlaceholderText("d,f,j,k")
+        self._rhythm_lane_y_offset_spin = QSpinBox(group)
+        self._rhythm_lane_y_offset_spin.setMinimum(-240)
+        self._rhythm_lane_y_offset_spin.setMaximum(240)
+        self._rhythm_lane_y_offset_spin.setToolTip("当前判定线坐标为 0；正数向下，负数向上。")
+        self._rhythm_start_game_check = QCheckBox("自动点击开始演奏", group)
+        self._rhythm_close_result_check = QCheckBox("结束后自动关闭结算页", group)
+        self._rhythm_debug_enabled_check = QCheckBox("保存调试截图", group)
+        form.addRow("识别档案", self._rhythm_profile_label)
+        form.addRow("循环次数（0 = 无限）", self._rhythm_loop_count_spin)
+        form.addRow("最大运行秒数（0 = 不限制）", self._rhythm_max_seconds_spin)
+        form.addRow("四轨按键", self._rhythm_lane_keys_edit)
+        form.addRow("判定线偏移(px)", self._rhythm_lane_y_offset_spin)
+        form.addRow("", self._rhythm_start_game_check)
+        form.addRow("", self._rhythm_close_result_check)
+        form.addRow("", self._rhythm_debug_enabled_check)
+        layout.addWidget(group)
+
+        hint = QLabel(
+            "运行前确认已在鼓组选歌页并选好曲目。第一版使用固定判定线小区域亮度检测，"
+            "如果命中偏早或偏晚，优先调整 rhythm 识别档案里的判定点和阈值。",
             page,
         )
         hint.setWordWrap(True)
@@ -762,6 +809,17 @@ class WorkbenchPageMixin:
                 self._tetrominoes_start_game_check.isChecked(),
                 self._tetrominoes_defaults,
             )
+        if self._selected_task_id == "rhythm":
+            return build_rhythm_loop_inputs(
+                self._rhythm_loop_count_spin.value(),
+                self._rhythm_max_seconds_spin.value(),
+                self._rhythm_start_game_check.isChecked(),
+                self._rhythm_close_result_check.isChecked(),
+                self._rhythm_lane_keys_edit.text(),
+                self._rhythm_lane_y_offset_spin.value(),
+                self._rhythm_debug_enabled_check.isChecked(),
+                self._rhythm_defaults,
+            )
         if self._selected_task_id == "piano":
             resolved_file_path = str(self._resolve_piano_file_path(self._piano_file_edit.text(), require_exists=True))
             payload = build_piano_play_midi_inputs(
@@ -807,6 +865,7 @@ class WorkbenchPageMixin:
             "mahjong": self._mahjong_defaults.profile_name,
             "combat": self._combat_defaults.profile_name,
             "tetrominoes": self._tetrominoes_defaults.profile_name,
+            "rhythm": self._rhythm_defaults.profile_name,
             "piano": "MIDI 演奏配置",
         }
         hints = {
@@ -816,6 +875,7 @@ class WorkbenchPageMixin:
             "mahjong": "运行前确认：已进入麻将桌或可开始对局页面，游戏内自动开关可用。",
             "combat": "运行前确认：角色在大世界待命，技能键位保持默认，自动锁定和闪避按当前配置执行。",
             "tetrominoes": "运行前确认：已进入俄罗斯方块小游戏入口或游戏页，棋盘区域无遮挡。",
+            "rhythm": "运行前确认：已进入鼓组选歌页并选好曲目，四键按键与页面配置一致。",
             "piano": "运行前确认：已选择 MIDI 文件，并进入异环钢琴演奏界面。",
         }
         profile_name = profile_names.get(self._selected_task_id, "-")

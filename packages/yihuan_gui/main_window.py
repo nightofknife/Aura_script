@@ -19,6 +19,7 @@ from .logic import (
     MahjongRunDefaults,
     OneCafeRunDefaults,
     PianoRunDefaults,
+    RhythmRunDefaults,
     RuntimeSettings,
     TetrominoesRunDefaults,
 )
@@ -69,6 +70,7 @@ class YihuanMainWindow(
         self._mahjong_defaults = self._repo.get_mahjong_defaults()
         self._combat_defaults = self._repo.get_combat_defaults()
         self._tetrominoes_defaults = self._repo.get_tetrominoes_defaults()
+        self._rhythm_defaults = self._repo.get_rhythm_defaults()
         self._piano_defaults = self._repo.get_piano_defaults()
 
         self._task_rows: dict[str, dict[str, Any]] = {}

@@ -18,6 +18,7 @@ TASK_ONE_CAFE_REVENUE_RESTOCK = "tasks:one_cafe:revenue_restock.yaml"
 TASK_MAHJONG_AUTO_LOOP = "tasks:mahjong:auto_loop.yaml"
 TASK_COMBAT_AUTO_LOOP = "tasks:combat:auto_loop.yaml"
 TASK_TETROMINOES_AUTO_LOOP = "tasks:tetrominoes:auto_loop.yaml"
+TASK_RHYTHM_AUTO_LOOP = "tasks:rhythm:auto_loop.yaml"
 TASK_PIANO_PLAY_MIDI = "tasks:piano:play_midi.yaml"
 
 VISIBLE_HISTORY_TASK_REFS = (
@@ -30,6 +31,7 @@ VISIBLE_HISTORY_TASK_REFS = (
     TASK_MAHJONG_AUTO_LOOP,
     TASK_COMBAT_AUTO_LOOP,
     TASK_TETROMINOES_AUTO_LOOP,
+    TASK_RHYTHM_AUTO_LOOP,
     TASK_PIANO_PLAY_MIDI,
 )
 DEVELOPER_TASK_REFS = (TASK_PLAN_READY, TASK_PLAN_LOADED, TASK_RUNTIME_PROBE)
@@ -46,6 +48,7 @@ TASK_DISPLAY_NAMES = {
     TASK_MAHJONG_AUTO_LOOP: "自动麻将",
     TASK_COMBAT_AUTO_LOOP: "自动战斗",
     TASK_TETROMINOES_AUTO_LOOP: "俄罗斯方块",
+    TASK_RHYTHM_AUTO_LOOP: "四键音游",
     TASK_PIANO_PLAY_MIDI: "自动弹钢琴",
 }
 
@@ -88,6 +91,10 @@ STOP_REASON_LABELS = {
     "focus_failed": "聚焦窗口失败",
     "playback_failed": "演奏执行失败",
     "completed": "执行完成",
+    "loop_count": "达到循环次数",
+    "song_timeout": "单曲超时",
+    "not_playing": "未进入演奏界面",
+    "song_select_return_timeout": "等待返回选歌页超时",
     "world_return_failed": "返回世界场景失败",
     "unknown_withdraw_state": "收益领取状态未知",
     "unknown_restock_state": "补货状态未知",
@@ -398,6 +405,18 @@ class TetrominoesRunDefaults:
 
 
 @dataclass(frozen=True)
+class RhythmRunDefaults:
+    profile_name: str = "default_1280x720_cn"
+    loop_count: int = 1
+    max_seconds: int = 240
+    start_game: bool = True
+    close_result: bool = True
+    lane_keys: str = "d,f,j,k"
+    lane_y_offset_px: int = 0
+    debug_enabled: bool = False
+
+
+@dataclass(frozen=True)
 class PianoRunDefaults:
     file_path: str = ""
     recent_files: tuple[str, ...] = ()
@@ -551,6 +570,29 @@ def build_tetrominoes_loop_inputs(
         "start_game": bool(start_game),
         "dry_run": False,
         "debug_enabled": False,
+    }
+
+
+def build_rhythm_loop_inputs(
+    loop_count: Any,
+    max_seconds: Any,
+    start_game: Any,
+    close_result: Any,
+    lane_keys: Any,
+    lane_y_offset_px: Any,
+    debug_enabled: Any,
+    defaults: RhythmRunDefaults,
+) -> dict[str, Any]:
+    return {
+        "profile_name": str(defaults.profile_name),
+        "loop_count": int(loop_count),
+        "max_seconds": int(max_seconds),
+        "start_game": bool(start_game),
+        "close_result": bool(close_result),
+        "lane_keys": str(lane_keys or defaults.lane_keys).strip() or defaults.lane_keys,
+        "lane_y_offset_px": int(lane_y_offset_px if lane_y_offset_px not in (None, "") else defaults.lane_y_offset_px),
+        "dry_run": False,
+        "debug_enabled": bool(debug_enabled),
     }
 
 
@@ -737,6 +779,36 @@ def extract_tetrominoes_loop_defaults(task_row: Mapping[str, Any] | None) -> Tet
     )
 
 
+def extract_rhythm_loop_defaults(task_row: Mapping[str, Any] | None) -> RhythmRunDefaults:
+    values = {
+        "profile_name": RhythmRunDefaults().profile_name,
+        "loop_count": RhythmRunDefaults().loop_count,
+        "max_seconds": RhythmRunDefaults().max_seconds,
+        "start_game": RhythmRunDefaults().start_game,
+        "close_result": RhythmRunDefaults().close_result,
+        "lane_keys": RhythmRunDefaults().lane_keys,
+        "lane_y_offset_px": RhythmRunDefaults().lane_y_offset_px,
+        "debug_enabled": RhythmRunDefaults().debug_enabled,
+    }
+    for field in (task_row or {}).get("inputs") or []:
+        if not isinstance(field, Mapping):
+            continue
+        name = str(field.get("name") or "").strip()
+        if name not in values:
+            continue
+        values[name] = field.get("default", values[name])
+    return RhythmRunDefaults(
+        profile_name=str(values["profile_name"] or RhythmRunDefaults().profile_name),
+        loop_count=int(float(values["loop_count"] or RhythmRunDefaults().loop_count)),
+        max_seconds=int(float(values["max_seconds"] or 0)),
+        start_game=_coerce_bool(values["start_game"]),
+        close_result=_coerce_bool(values["close_result"]),
+        lane_keys=str(values["lane_keys"] or RhythmRunDefaults().lane_keys).strip() or RhythmRunDefaults().lane_keys,
+        lane_y_offset_px=int(float(values["lane_y_offset_px"] or 0)),
+        debug_enabled=_coerce_bool(values["debug_enabled"]),
+    )
+
+
 def extract_piano_play_midi_defaults(task_row: Mapping[str, Any] | None) -> PianoRunDefaults:
     values = {
         "conflict_policy": PianoRunDefaults().conflict_policy,
@@ -869,6 +941,7 @@ def is_runtime_interacting_task(task_ref: str | None) -> bool:
             "tasks:mahjong:",
             "tasks:combat:",
             "tasks:tetrominoes:",
+            "tasks:rhythm:",
             "tasks:piano:",
         )
     )
@@ -1114,6 +1187,9 @@ def render_task_result_html(task_ref: str | None, detail: Mapping[str, Any] | No
     if task_name == TASK_TETROMINOES_AUTO_LOOP and isinstance(user_data, Mapping):
         return render_tetrominoes_loop_result_html(user_data)
 
+    if task_name == TASK_RHYTHM_AUTO_LOOP and isinstance(user_data, Mapping):
+        return render_rhythm_loop_result_html(user_data)
+
     if task_name == TASK_PIANO_PLAY_MIDI and isinstance(user_data, Mapping):
         return render_piano_play_midi_result_html(user_data)
 
@@ -1212,6 +1288,21 @@ def tetrominoes_loop_business_status(detail: Mapping[str, Any] | None) -> str | 
     return status or None
 
 
+def rhythm_loop_user_data(detail: Mapping[str, Any] | None) -> Mapping[str, Any] | None:
+    payload = dict(detail or {})
+    final_result = dict(payload.get("final_result") or {})
+    user_data = final_result.get("user_data")
+    return user_data if isinstance(user_data, Mapping) else None
+
+
+def rhythm_loop_business_status(detail: Mapping[str, Any] | None) -> str | None:
+    user_data = rhythm_loop_user_data(detail)
+    if not user_data:
+        return None
+    status = str(user_data.get("status") or "").strip().lower()
+    return status or None
+
+
 def piano_play_midi_user_data(detail: Mapping[str, Any] | None) -> Mapping[str, Any] | None:
     payload = dict(detail or {})
     final_result = dict(payload.get("final_result") or {})
@@ -1275,6 +1366,23 @@ def render_tetrominoes_loop_brief_text(detail: Mapping[str, Any] | None) -> str:
     text = (
         f"{status_display_name(user_data.get('status'))} / "
         f"已放置 {user_data.get('pieces_played', 0)} 块 / "
+        f"停止原因 {stop_reason_display_name(user_data.get('stopped_reason'))} / "
+        f"耗时 {_format_seconds(user_data.get('elapsed_sec'))}"
+    )
+    failure_reason = str(user_data.get("failure_reason") or "").strip()
+    if failure_reason and failure_reason.lower() != "none":
+        text += f" / 失败原因 {failure_reason_display_name(failure_reason)}"
+    return text
+
+
+def render_rhythm_loop_brief_text(detail: Mapping[str, Any] | None) -> str:
+    user_data = rhythm_loop_user_data(detail)
+    if not user_data:
+        return "暂无四键音游结果。"
+    text = (
+        f"{status_display_name(user_data.get('status'))} / "
+        f"完成 {user_data.get('loops_completed', 0)} 轮 / "
+        f"按键 {user_data.get('press_count', 0)} 次 / "
         f"停止原因 {stop_reason_display_name(user_data.get('stopped_reason'))} / "
         f"耗时 {_format_seconds(user_data.get('elapsed_sec'))}"
     )
@@ -1377,6 +1485,32 @@ def render_tetrominoes_loop_result_html(user_data: Mapping[str, Any]) -> str:
         _kv_html("结算页识别", user_data.get("result_screen")),
         _kv_html("最近决策", list(user_data.get("decisions_tail") or [])[-5:]),
         _kv_html("最近操作", list(user_data.get("operation_log") or [])[-5:]),
+    ]
+    if user_data.get("failure_message"):
+        lines.insert(3, _kv_html("失败信息", user_data.get("failure_message")))
+    debug_snapshots = list(user_data.get("debug_snapshots") or [])
+    if debug_snapshots:
+        lines.append(_kv_html("调试快照", debug_snapshots[-5:]))
+    return "".join(lines)
+
+
+def render_rhythm_loop_result_html(user_data: Mapping[str, Any]) -> str:
+    lines = [
+        _kv_html("业务结果", status_display_name(user_data.get("status"))),
+        _kv_html("停止原因", stop_reason_display_name(user_data.get("stopped_reason"))),
+        _kv_html("失败原因", failure_reason_display_name(user_data.get("failure_reason"))),
+        _kv_html("识别档案", user_data.get("profile_name")),
+        _kv_html("完成轮数", user_data.get("loops_completed")),
+        _kv_html("总按键次数", user_data.get("press_count")),
+        _kv_html("各轨触发", user_data.get("hits_by_lane")),
+        _kv_html("轨道按键", user_data.get("lane_keys")),
+        _kv_html("判定线偏移(px)", user_data.get("lane_y_offset_px")),
+        _kv_html("自动点击开始", "是" if _coerce_bool(user_data.get("start_game")) else "否"),
+        _kv_html("自动关闭结算", "是" if _coerce_bool(user_data.get("close_result")) else "否"),
+        _kv_html("结算关闭次数", user_data.get("result_closed_count")),
+        _kv_html("总耗时", _format_seconds(user_data.get("elapsed_sec"))),
+        _kv_html("最近轮次", list(user_data.get("loops") or [])[-3:]),
+        _kv_html("计划动作", list(user_data.get("planned_actions") or [])[-5:]),
     ]
     if user_data.get("failure_message"):
         lines.insert(3, _kv_html("失败信息", user_data.get("failure_message")))

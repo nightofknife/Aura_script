@@ -11,6 +11,7 @@ from packages.yihuan_gui.logic import (
     MahjongRunDefaults,
     OneCafeRunDefaults,
     RuntimeSettings,
+    RhythmRunDefaults,
     TASK_AUTO_LOOP,
     TASK_CAFE_AUTO_LOOP,
     TASK_COMBAT_AUTO_LOOP,
@@ -18,6 +19,7 @@ from packages.yihuan_gui.logic import (
     TASK_MAHJONG_AUTO_LOOP,
     TASK_ONE_CAFE_REVENUE_RESTOCK,
     TASK_PIANO_PLAY_MIDI,
+    TASK_RHYTHM_AUTO_LOOP,
     TASK_TETROMINOES_AUTO_LOOP,
     PianoRunDefaults,
     TetrominoesRunDefaults,
@@ -29,6 +31,7 @@ from packages.yihuan_gui.logic import (
     build_mahjong_loop_inputs,
     build_one_cafe_inputs,
     build_piano_play_midi_inputs,
+    build_rhythm_loop_inputs,
     build_tetrominoes_loop_inputs,
     build_settings_sections,
     cafe_loop_business_status,
@@ -36,6 +39,7 @@ from packages.yihuan_gui.logic import (
     mahjong_loop_business_status,
     one_cafe_business_status,
     piano_play_midi_business_status,
+    rhythm_loop_business_status,
     tetrominoes_loop_business_status,
     extract_auto_loop_defaults,
     extract_cafe_loop_defaults,
@@ -43,6 +47,7 @@ from packages.yihuan_gui.logic import (
     extract_mahjong_loop_defaults,
     extract_one_cafe_defaults,
     extract_piano_play_midi_defaults,
+    extract_rhythm_loop_defaults,
     extract_tetrominoes_loop_defaults,
     render_auto_loop_brief_text,
     render_cafe_loop_brief_text,
@@ -50,6 +55,7 @@ from packages.yihuan_gui.logic import (
     render_mahjong_loop_brief_text,
     render_one_cafe_brief_text,
     render_piano_play_midi_brief_text,
+    render_rhythm_loop_brief_text,
     render_tetrominoes_loop_brief_text,
     reduce_live_events,
     render_task_result_html,
@@ -327,6 +333,58 @@ class TestYihuanGuiLogic(unittest.TestCase):
         self.assertEqual(defaults.max_seconds, 90)
         self.assertEqual(defaults.max_pieces, 32)
         self.assertFalse(defaults.start_game)
+
+    def test_build_rhythm_loop_inputs_uses_page_values_and_defaults(self):
+        payload = build_rhythm_loop_inputs(
+            3,
+            240,
+            True,
+            False,
+            "a,s,k,l",
+            -16,
+            True,
+            RhythmRunDefaults(profile_name="default_1280x720_cn"),
+        )
+
+        self.assertEqual(
+            payload,
+            {
+                "profile_name": "default_1280x720_cn",
+                "loop_count": 3,
+                "max_seconds": 240,
+                "start_game": True,
+                "close_result": False,
+                "lane_keys": "a,s,k,l",
+                "lane_y_offset_px": -16,
+                "dry_run": False,
+                "debug_enabled": True,
+            },
+        )
+
+    def test_extract_rhythm_loop_defaults_uses_task_defaults(self):
+        defaults = extract_rhythm_loop_defaults(
+            {
+                "inputs": [
+                    {"name": "profile_name", "type": "string", "default": "custom_rhythm"},
+                    {"name": "loop_count", "type": "number", "default": 2},
+                    {"name": "max_seconds", "type": "number", "default": 90},
+                    {"name": "start_game", "type": "boolean", "default": False},
+                    {"name": "close_result", "type": "boolean", "default": False},
+                    {"name": "lane_keys", "type": "string", "default": "a,s,k,l"},
+                    {"name": "lane_y_offset_px", "type": "number", "default": -12},
+                    {"name": "debug_enabled", "type": "boolean", "default": True},
+                ]
+            }
+        )
+
+        self.assertEqual(defaults.profile_name, "custom_rhythm")
+        self.assertEqual(defaults.loop_count, 2)
+        self.assertEqual(defaults.max_seconds, 90)
+        self.assertFalse(defaults.start_game)
+        self.assertFalse(defaults.close_result)
+        self.assertEqual(defaults.lane_keys, "a,s,k,l")
+        self.assertEqual(defaults.lane_y_offset_px, -12)
+        self.assertTrue(defaults.debug_enabled)
 
     def test_build_piano_play_midi_inputs_uses_page_values(self):
         payload = build_piano_play_midi_inputs(
@@ -699,6 +757,39 @@ class TestYihuanGuiLogic(unittest.TestCase):
         self.assertIn("最终指标", html)
         self.assertIn("最近操作", html)
 
+    def test_task_result_renderer_handles_rhythm_loop(self):
+        detail = {
+            "task_name": TASK_RHYTHM_AUTO_LOOP,
+            "final_result": {
+                "user_data": {
+                    "status": "success",
+                    "stopped_reason": "loop_count",
+                    "failure_reason": None,
+                    "profile_name": "default_1280x720_cn",
+                    "loops_completed": 2,
+                    "press_count": 18,
+                    "hits_by_lane": {"d": 4, "f": 5, "j": 6, "k": 3},
+                    "lane_keys": {"d": "d", "f": "f", "j": "j", "k": "k"},
+                    "lane_y_offset_px": -16,
+                    "start_game": True,
+                    "close_result": True,
+                    "result_closed_count": 2,
+                    "elapsed_sec": 35.25,
+                    "loops": [{"loop_index": 2, "press_count": 8}],
+                    "planned_actions": [{"action": "start_song"}],
+                }
+            },
+        }
+
+        html = render_task_result_html(TASK_RHYTHM_AUTO_LOOP, detail)
+
+        self.assertEqual(rhythm_loop_business_status(detail), "success")
+        self.assertIn("完成 2 轮", render_rhythm_loop_brief_text(detail))
+        self.assertIn("总按键次数", html)
+        self.assertIn("各轨触发", html)
+        self.assertIn("判定线偏移", html)
+        self.assertIn("最近轮次", html)
+
     def test_task_result_renderer_handles_piano_play_midi(self):
         detail = {
             "task_name": TASK_PIANO_PLAY_MIDI,
@@ -751,6 +842,7 @@ class TestYihuanGuiLogic(unittest.TestCase):
         self.assertFalse(task_is_enabled(TASK_MAHJONG_AUTO_LOOP, active_runs))
         self.assertFalse(task_is_enabled(TASK_COMBAT_AUTO_LOOP, active_runs))
         self.assertFalse(task_is_enabled(TASK_TETROMINOES_AUTO_LOOP, active_runs))
+        self.assertFalse(task_is_enabled(TASK_RHYTHM_AUTO_LOOP, active_runs))
         self.assertFalse(task_is_enabled(TASK_PIANO_PLAY_MIDI, active_runs))
         self.assertTrue(task_is_enabled(TASK_PLAN_READY, active_runs))
 
@@ -769,6 +861,7 @@ class TestYihuanGuiLogic(unittest.TestCase):
         self.assertFalse(task_is_enabled(TASK_MAHJONG_AUTO_LOOP, active_runs))
         self.assertFalse(task_is_enabled(TASK_COMBAT_AUTO_LOOP, active_runs))
         self.assertFalse(task_is_enabled(TASK_TETROMINOES_AUTO_LOOP, active_runs))
+        self.assertFalse(task_is_enabled(TASK_RHYTHM_AUTO_LOOP, active_runs))
         self.assertFalse(task_is_enabled(TASK_PIANO_PLAY_MIDI, active_runs))
         self.assertTrue(task_is_enabled(TASK_PLAN_READY, active_runs))
 
@@ -787,6 +880,7 @@ class TestYihuanGuiLogic(unittest.TestCase):
         self.assertFalse(task_is_enabled(TASK_MAHJONG_AUTO_LOOP, active_runs))
         self.assertFalse(task_is_enabled(TASK_COMBAT_AUTO_LOOP, active_runs))
         self.assertFalse(task_is_enabled(TASK_TETROMINOES_AUTO_LOOP, active_runs))
+        self.assertFalse(task_is_enabled(TASK_RHYTHM_AUTO_LOOP, active_runs))
         self.assertFalse(task_is_enabled(TASK_PIANO_PLAY_MIDI, active_runs))
         self.assertTrue(task_is_enabled(TASK_PLAN_READY, active_runs))
 
@@ -805,6 +899,7 @@ class TestYihuanGuiLogic(unittest.TestCase):
         self.assertFalse(task_is_enabled(TASK_MAHJONG_AUTO_LOOP, active_runs))
         self.assertFalse(task_is_enabled(TASK_COMBAT_AUTO_LOOP, active_runs))
         self.assertFalse(task_is_enabled(TASK_TETROMINOES_AUTO_LOOP, active_runs))
+        self.assertFalse(task_is_enabled(TASK_RHYTHM_AUTO_LOOP, active_runs))
         self.assertFalse(task_is_enabled(TASK_PIANO_PLAY_MIDI, active_runs))
         self.assertTrue(task_is_enabled(TASK_PLAN_READY, active_runs))
 
@@ -823,6 +918,7 @@ class TestYihuanGuiLogic(unittest.TestCase):
         self.assertFalse(task_is_enabled(TASK_MAHJONG_AUTO_LOOP, active_runs))
         self.assertFalse(task_is_enabled(TASK_COMBAT_AUTO_LOOP, active_runs))
         self.assertFalse(task_is_enabled(TASK_TETROMINOES_AUTO_LOOP, active_runs))
+        self.assertFalse(task_is_enabled(TASK_RHYTHM_AUTO_LOOP, active_runs))
         self.assertFalse(task_is_enabled(TASK_PIANO_PLAY_MIDI, active_runs))
         self.assertTrue(task_is_enabled(TASK_PLAN_READY, active_runs))
 
@@ -841,6 +937,26 @@ class TestYihuanGuiLogic(unittest.TestCase):
         self.assertFalse(task_is_enabled(TASK_MAHJONG_AUTO_LOOP, active_runs))
         self.assertFalse(task_is_enabled(TASK_COMBAT_AUTO_LOOP, active_runs))
         self.assertFalse(task_is_enabled(TASK_TETROMINOES_AUTO_LOOP, active_runs))
+        self.assertFalse(task_is_enabled(TASK_RHYTHM_AUTO_LOOP, active_runs))
+        self.assertFalse(task_is_enabled(TASK_PIANO_PLAY_MIDI, active_runs))
+        self.assertTrue(task_is_enabled(TASK_PLAN_READY, active_runs))
+
+    def test_runtime_task_guard_disables_other_runtime_tasks_when_rhythm_active(self):
+        active_runs = {
+            "cid-1": {
+                "cid": "cid-1",
+                "task_name": TASK_RHYTHM_AUTO_LOOP,
+                "status": "running",
+            }
+        }
+
+        self.assertFalse(task_is_enabled(TASK_AUTO_LOOP, active_runs))
+        self.assertFalse(task_is_enabled(TASK_CAFE_AUTO_LOOP, active_runs))
+        self.assertFalse(task_is_enabled(TASK_ONE_CAFE_REVENUE_RESTOCK, active_runs))
+        self.assertFalse(task_is_enabled(TASK_MAHJONG_AUTO_LOOP, active_runs))
+        self.assertFalse(task_is_enabled(TASK_COMBAT_AUTO_LOOP, active_runs))
+        self.assertFalse(task_is_enabled(TASK_TETROMINOES_AUTO_LOOP, active_runs))
+        self.assertFalse(task_is_enabled(TASK_RHYTHM_AUTO_LOOP, active_runs))
         self.assertFalse(task_is_enabled(TASK_PIANO_PLAY_MIDI, active_runs))
         self.assertTrue(task_is_enabled(TASK_PLAN_READY, active_runs))
 
@@ -859,6 +975,7 @@ class TestYihuanGuiLogic(unittest.TestCase):
         self.assertFalse(task_is_enabled(TASK_MAHJONG_AUTO_LOOP, active_runs))
         self.assertFalse(task_is_enabled(TASK_COMBAT_AUTO_LOOP, active_runs))
         self.assertFalse(task_is_enabled(TASK_TETROMINOES_AUTO_LOOP, active_runs))
+        self.assertFalse(task_is_enabled(TASK_RHYTHM_AUTO_LOOP, active_runs))
         self.assertFalse(task_is_enabled(TASK_PIANO_PLAY_MIDI, active_runs))
         self.assertTrue(task_is_enabled(TASK_PLAN_READY, active_runs))
 
@@ -889,6 +1006,7 @@ class TestYihuanGuiLogic(unittest.TestCase):
         self.assertIn(TASK_MAHJONG_AUTO_LOOP, VISIBLE_HISTORY_TASK_REFS)
         self.assertIn(TASK_COMBAT_AUTO_LOOP, VISIBLE_HISTORY_TASK_REFS)
         self.assertIn(TASK_TETROMINOES_AUTO_LOOP, VISIBLE_HISTORY_TASK_REFS)
+        self.assertIn(TASK_RHYTHM_AUTO_LOOP, VISIBLE_HISTORY_TASK_REFS)
         self.assertIn(TASK_PIANO_PLAY_MIDI, VISIBLE_HISTORY_TASK_REFS)
         self.assertNotIn(TASK_LIVE_MONITOR, VISIBLE_HISTORY_TASK_REFS)
 
