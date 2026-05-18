@@ -14,8 +14,7 @@ import cv2
 from packages.aura_core.api import action_info, requires_services
 from packages.aura_core.observability.logging.core_logger import current_cid, logger
 from packages.aura_core.scheduler.cancellation import is_current_task_cancel_requested
-from plans.aura_base.src.platform.contracts import TargetRuntimeError
-
+from ....aura_base.src.platform.contracts import TargetRuntimeError
 from ..audio_dodge import AudioDodgeRuntime
 from ..services.combat_service import YihuanCombatService
 

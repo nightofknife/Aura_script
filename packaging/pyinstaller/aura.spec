@@ -71,6 +71,7 @@ hiddenimports += collect_submodules("packages.aura_core")
 hiddenimports += collect_submodules("packages.aura_game")
 hiddenimports += [
     "PIL.ImageGrab",
+    "wave",
     "win32api",
     "win32con",
     "win32gui",

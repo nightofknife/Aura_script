@@ -29,7 +29,7 @@ def _prepare_release_environment() -> Path:
 
 def _load_gui_launcher():
     try:
-        from .app import launch_yihuan_gui
+        from packages.yihuan_gui.app import launch_yihuan_gui
     except ModuleNotFoundError as exc:
         missing_name = str(getattr(exc, "name", "") or "")
         if missing_name.startswith("PySide6"):

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -114,6 +115,9 @@ class YihuanMainWindow(
 
     @staticmethod
     def _resolve_plan_root() -> Path:
+        base_path = os.environ.get("AURA_BASE_PATH")
+        if base_path:
+            return Path(base_path).resolve() / "plans" / "yihuan"
         return Path(__file__).resolve().parents[2] / "plans" / "yihuan"
 
     def _build_menu(self) -> None:
