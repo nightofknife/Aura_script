@@ -31,6 +31,8 @@ permissions:
 
 env:
   PYINSTALLER_VERSION: "6.14.2"
+  PYTHONUTF8: "1"
+  PYTHONIOENCODING: utf-8
   CPU_RELEASE_NAME: aura-release-cpu-onnx
   GPU_RELEASE_NAME: aura-release-gpu-onnx
   AURA_PYTHON_VERSION: ${{ vars.AURA_PYTHON_VERSION || '3.12' }}
@@ -238,9 +240,14 @@ jobs:
           $release = Join-Path ".runtime-cpu\release" $env:CPU_RELEASE_NAME
           $env:AURA_BASE_PATH = (Resolve-Path $release).Path
           $env:PYTHONNOUSERSITE = "1"
-          & (Join-Path $release "runtime\AuraYihuanRuntime.exe") --self-check
-          if ($LASTEXITCODE -ne 0) {
-            throw "CPU GUI runtime self-check failed."
+          $process = Start-Process `
+            -FilePath (Join-Path $release "runtime\AuraYihuanRuntime.exe") `
+            -ArgumentList "--self-check" `
+            -Wait `
+            -PassThru `
+            -NoNewWindow
+          if ($process.ExitCode -ne 0) {
+            throw "CPU GUI runtime self-check failed with exit code $($process.ExitCode)."
           }
 
       - name: Upload CPU package artifact
@@ -451,9 +458,14 @@ jobs:
           $release = Join-Path ".runtime-gpu\release" $env:GPU_RELEASE_NAME
           $env:AURA_BASE_PATH = (Resolve-Path $release).Path
           $env:PYTHONNOUSERSITE = "1"
-          & (Join-Path $release "runtime\AuraYihuanRuntime.exe") --self-check
-          if ($LASTEXITCODE -ne 0) {
-            throw "GPU GUI runtime self-check failed."
+          $process = Start-Process `
+            -FilePath (Join-Path $release "runtime\AuraYihuanRuntime.exe") `
+            -ArgumentList "--self-check" `
+            -Wait `
+            -PassThru `
+            -NoNewWindow
+          if ($process.ExitCode -ne 0) {
+            throw "GPU GUI runtime self-check failed with exit code $($process.ExitCode)."
           }
 
       - name: Upload GPU+CPU package artifact
