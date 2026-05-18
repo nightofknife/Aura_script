@@ -8,7 +8,12 @@ try:
     from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QApplication
 
-    from packages.yihuan_gui.app import AUXILIARY_TOOLS, WORKBENCH_TASKS, YihuanMainWindow
+    from packages.yihuan_gui.app import (
+        AUXILIARY_TOOLS,
+        WORKBENCH_TASK_GROUPS,
+        WORKBENCH_TASKS,
+        YihuanMainWindow,
+    )
     from packages.yihuan_gui.logic import (
         GuiPreferences,
         TASK_AUTO_LOOP,
@@ -24,6 +29,7 @@ except ModuleNotFoundError as exc:
         QApplication = None
         Qt = None
         AUXILIARY_TOOLS = None
+        WORKBENCH_TASK_GROUPS = None
         WORKBENCH_TASKS = None
         YihuanMainWindow = None
         GuiPreferences = None
@@ -67,13 +73,35 @@ class TestYihuanMainWindowWorkbench(unittest.TestCase):
         task_ids = [
             str(window._task_list.item(index).data(Qt.UserRole))
             for index in range(window._task_list.count())
+            if window._task_list.item(index).data(Qt.UserRole)
+        ]
+        group_titles = [
+            window._task_list.item(index).text()
+            for index in range(window._task_list.count())
+            if not window._task_list.item(index).data(Qt.UserRole)
         ]
 
-        self.assertEqual(task_ids, list(WORKBENCH_TASKS.keys()))
+        self.assertEqual(group_titles, ["日常领取", "战斗", "小游戏"])
+        self.assertEqual(task_ids, ["one_cafe", "combat", "fishing", "cafe", "mahjong", "tetrominoes", "piano"])
+        self.assertEqual(tuple((title, tuple(ids)) for title, ids in WORKBENCH_TASK_GROUPS), (
+            ("日常领取", ("one_cafe",)),
+            ("战斗", ("combat",)),
+            ("小游戏", ("fishing", "cafe", "mahjong", "tetrominoes", "piano")),
+        ))
         self.assertEqual(
             [WORKBENCH_TASKS[task_id]["label"] for task_id in task_ids],
-            ["钓鱼", "沙威玛", "一咖舍", "麻将", "战斗", "俄罗斯方块", "自动弹钢琴"],
+            ["一咖舍", "战斗", "钓鱼", "沙威玛", "麻将", "俄罗斯方块", "自动弹钢琴"],
         )
+        self.assertIn("收益处理", window._task_list.item(1).text())
+
+    def test_selected_task_header_shows_category_and_kind(self):
+        window = self._make_window()
+
+        window._select_task_id("one_cafe")
+
+        self.assertEqual(window._task_title_label.text(), "一咖舍")
+        self.assertEqual(window._task_category_label.text(), "日常领取")
+        self.assertEqual(window._task_kind_label.text(), "收益处理")
 
     def test_top_menu_contains_task_auxiliary_and_settings_pages(self):
         window = self._make_window()
